@@ -7757,6 +7757,158 @@ Total: ~9 months to production-ready
 
 ---
 
+## 108. Data Scrubbing (At-Rest Integrity)
+
+Silent data corruption ("bit rot") is an invisible killer for long-running storage systems. While NVMe has ECC, filesystem-level periodic verification is mandatory.
+
+### 108.1 The Scrubber Daemon
+
+```rust
+struct Scrubber {
+    cas_root: PathBuf,
+    rate_limiter: RateLimiter,  // Max 10 MB/s to prevent disk contention
+}
+
+impl Scrubber {
+    fn run(&mut self) {
+        loop {
+            let blob_path = self.pick_random_blob();
+            self.rate_limiter.acquire(blob_size);
+            
+            let content = fs::read(&blob_path)?;
+            let computed = blake3::hash(&content);
+            let expected = self.hash_from_filename(&blob_path);
+            
+            if computed.as_bytes() != expected {
+                // 1. Alert
+                metrics::corruption_detected.inc();
+                error!("CORRUPTION: {:?}", blob_path);
+                
+                // 2. Delete corrupted
+                fs::remove_file(blob_path)?;
+                
+                // 3. Heal from remote
+                self.fetch_from_l2(&expected)?;
+            }
+        }
+    }
+}
+```
+
+### 108.2 Scrub Scheduling
+
+| Mode | Rate | Full Scan/TB | Use Case |
+|------|------|--------------|----------|
+| Idle | 50 MB/s | ~6 hours | Low traffic |
+| Background | 10 MB/s | ~28 hours | Normal |
+| Aggressive | 100 MB/s | ~3 hours | Post-incident |
+
+---
+
+## 109. Daemon Hot-Upgrade (FD Handoff)
+
+Zero-downtime upgrades via FD transfer.
+
+### 109.1 Mechanism
+
+```text
+1. Old velod receives SIGUSR1
+2. Spawns new velod
+3. Sends FDs via Unix Socket (SCM_RIGHTS):
+   - Listening sockets
+   - io_uring rings
+   - Critical CAS FDs
+4. Serializes state to temp file
+5. New process absorbs FDs, loads state
+6. New process takes over recv()
+7. Old process drains and exits
+```
+
+### 109.2 Implementation
+
+```rust
+fn handoff_fds(new_pid: Pid, fds: &[RawFd]) -> io::Result<()> {
+    let stream = UnixStream::connect(format!("/run/velo/upgrade-{}.sock", new_pid))?;
+    stream.send_with_fd(&[], fds)?;  // SCM_RIGHTS
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+struct HandoffState {
+    active_sessions: Vec<SessionState>,
+    lru_hints: Vec<(u64, u32)>,
+}
+```
+
+**Tenant impact**: Zero. Kernel holds FDs; userspace swap invisible.
+
+---
+
+## 110. Tenant Disk Quotas
+
+Prevent upperdir overflow affecting other tenants.
+
+### 110.1 Project Quota (XFS/ext4)
+
+```bash
+# Mount with quota
+mount -o prjquota /dev/sda1 /velo
+
+# Assign project ID per tenant
+chattr +P -p ${TENANT_ID} /velo/tenants/${TENANT_ID}/upper
+
+# Set limits
+xfs_quota -x -c "limit -p bsoft=10g bhard=12g ${TENANT_ID}" /velo
+```
+
+### 110.2 Enforcement
+
+```rust
+fn create_tenant_upperdir(tenant_id: u32) -> io::Result<PathBuf> {
+    let upper = format!("/velo/tenants/{}/upper", tenant_id);
+    fs::create_dir_all(&upper)?;
+    set_project_quota(tenant_id, 10*GB, 12*GB)?;
+    Ok(upper.into())
+}
+// Kernel returns EDQUOT when exceeded
+```
+
+---
+
+## 111. Cross-Platform Support Strategy
+
+### 111.1 Feature Matrix
+
+| Feature | Linux (Prod) | macOS (Dev) | Windows (Dev) |
+|---------|-------------|-------------|---------------|
+| Isolation | Namespaces | FUSE+PID | Process only |
+| Filesystem | OverlayFS | FUSE | WinFSP |
+| Async I/O | io_uring | kqueue | IOCP |
+| Hardlinks | Native | Symlinks | NTFS links |
+
+### 111.2 Platform Tiers
+
+```text
+Tier 1: Linux — Full features, production-grade
+Tier 2: macOS/Windows ("Velo Lite") — Dev mode only, no isolation
+```
+
+### 111.3 Feature Gates
+
+```rust
+#[cfg(target_os = "linux")]
+mod isolation { /* Full implementation */ }
+
+#[cfg(not(target_os = "linux"))]
+mod isolation {
+    pub fn create_namespace() -> ! {
+        panic!("Use Velo Lite mode on non-Linux");
+    }
+}
+```
+
+---
+
 # FAQ & Troubleshooting
 
 ## Q: Why does `df -h` show wrong disk space?
@@ -7781,8 +7933,8 @@ sysctl -w vm.max_map_count=262144
 
 ---
 
-*Document Version: 20.0*
+*Document Version: 21.0*
 *Last Updated: 2026-01-29*
-*Total Sections: 107 + FAQ*
-*New in v20: §0 Design Philosophy, §22.3-22.4 io_uring/Monoio, §106 Pre-Flight Checks, §107 Implementation Roadmap*
+*Total Sections: 111 + FAQ*
+*New in v21: §108 Data Scrubbing, §109 Hot-Upgrade, §110 Disk Quotas, §111 Platform Matrix*
 *Status: Production-Ready Specification*
