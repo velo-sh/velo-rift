@@ -65,8 +65,8 @@ velo run npm start
 
 | Document | Description |
 |----------|-------------|
-| [Technical Positioning](docs/architecture/velo-technical-positioning.md) | How we compare to other tools |
-| [Technical Deep Dive](docs/architecture/velo-technical-deep-dive.md) | Implementation specification |
+| [Comparison](docs/COMPARISON.md) | How we compare to other tools |
+| [Architecture](docs/ARCHITECTURE.md) | Implementation specification |
 
 ---
 
