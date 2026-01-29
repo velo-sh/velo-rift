@@ -9,6 +9,7 @@ members = [
     "crates/velo-fuse",
     "crates/velo-lock",
     "crates/velo-cli",
+    "crates/velo-daemon",
 ]
 
 [workspace.package]
@@ -31,6 +32,8 @@ anyhow = "1.0"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.36", features = ["full"] }
+nix = { version = "0.28", features = ["fs", "mount", "sched", "signal"] }
 
 # File operations
 walkdir = "2.5"

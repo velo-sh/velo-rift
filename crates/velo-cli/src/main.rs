@@ -17,6 +17,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use walkdir::WalkDir;
 
+mod isolation;
+
 use velo_cas::CasStore;
 use velo_manifest::{Manifest, VnodeEntry};
 
@@ -59,6 +61,10 @@ enum Commands {
         /// Command to execute
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
+
+        /// Enable Linux namespace isolation
+        #[arg(long)]
+        isolate: bool,
     },
 
     /// Display CAS statistics
@@ -111,7 +117,11 @@ fn main() -> Result<()> {
             output,
             prefix,
         } => cmd_ingest(&cli.cas_root, &directory, &output, prefix.as_deref()),
-        Commands::Run { manifest, command } => cmd_run(&cli.cas_root, &manifest, &command),
+        Commands::Run {
+            manifest,
+            command,
+            isolate,
+        } => cmd_run(&cli.cas_root, &manifest, &command, isolate),
         Commands::Status { manifest } => cmd_status(&cli.cas_root, manifest.as_deref()),
         Commands::Mount {
             manifest,
@@ -416,7 +426,7 @@ fn cmd_ingest(
 }
 
 /// Execute a command with Velo VFS shim
-fn cmd_run(cas_root: &Path, manifest: &Path, command: &[String]) -> Result<()> {
+fn cmd_run(cas_root: &Path, manifest: &Path, command: &[String], isolate: bool) -> Result<()> {
     if command.is_empty() {
         anyhow::bail!("No command specified");
     }
@@ -425,6 +435,12 @@ fn cmd_run(cas_root: &Path, manifest: &Path, command: &[String]) -> Result<()> {
         anyhow::bail!("Manifest not found: {}", manifest.display());
     }
 
+    // Handle isolation if requested
+    if isolate {
+        return isolation::run_isolated(command, manifest, cas_root);
+    }
+
+    // Standard LD_PRELOAD execution
     // Find the shim library
     let shim_path = find_shim_library()?;
 
