@@ -18,6 +18,7 @@ velo-manifest.workspace = true
 velo-shim.workspace = true
 velo-fuse = { workspace = true, optional = true }
 velo-lock.workspace = true
+nix.workspace = true
 
 [features]
 default = []

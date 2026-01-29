@@ -1,0 +1,7 @@
+FROM velo-ci-base
+
+# Set working directory
+WORKDIR /workspace
+
+# Default command
+CMD ["repo-cli", "ci"]
