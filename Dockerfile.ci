@@ -4,4 +4,8 @@ FROM velo-ci-base
 WORKDIR /workspace
 
 # Default command
-CMD ["repo-cli", "ci"]
+# Copy source code
+COPY . .
+
+# Run tests
+CMD ["./test.sh"]
