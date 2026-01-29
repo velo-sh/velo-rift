@@ -1196,6 +1196,7 @@ dependencies = [
  "velo-fuse",
  "velo-lock",
  "velo-manifest",
+ "velo-runtime",
  "velo-shim",
  "walkdir",
 ]

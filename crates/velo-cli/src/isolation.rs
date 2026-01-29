@@ -100,16 +100,75 @@ fn run_isolated_linux(command: &[String], manifest: &Path, cas_root: &Path) -> R
 }
 
 #[cfg(target_os = "linux")]
-fn setup_mounts(_manifest: &Path, _cas_root: &Path) -> Result<()> {
-    // 1. Mark strictly private to avoid propagation
-    // mount(None::<&str>, "/", None::<&str>, MsFlags::MS_PRIVATE | MsFlags::MS_REC, None::<&str>)?;
+fn setup_mounts(manifest_path: &Path, cas_root: &Path) -> Result<()> {
+    use std::fs;
 
-    // 2. Prepare mount list based on manifest...
-    // In a real implementation, we would construct the OverlayFS here.
-    // For this task, we will just log that we are doing it.
+    use velo_cas::CasStore;
+    use velo_manifest::Manifest;
+    use velo_runtime::{LinkFarm, NamespaceManager, OverlayManager};
 
-    println!("   [Isolation] Mount namespace created.");
-    println!("   [Isolation] (Prototype) Skipping actual OverlayFS mount in MVP step.");
+    // We need a persistent temp directory that survives this function
+    // but implies we are leaking it until the process dies (namespace destruction).
+    // For MVP, we'll let the OS clean up /tmp or rely on container ephemeral nature.
+    // In a real system, we'd manage this lifecycle better.
+    let run_dir = tempfile::Builder::new().prefix("velo-run-").tempdir()?;
+    // let run_path = run_dir.path().to_path_buf(); // unused
+
+    // Keep the tempdir content alive by forgetting the RAII guard?
+    // If we drop `run_dir` here, it removes the directory.
+    // But we need it for the lifespan of the isolated process.
+    // We should probably `into_path()` specifically for this reason,
+    // effectively "leaking" the directory on disk to be cleaned up later.
+    let run_path_persistent = run_dir.keep();
+
+    println!(
+        "   [Isolation] Runtime State: {}",
+        run_path_persistent.display()
+    );
+
+    let lower_dir = run_path_persistent.join("lower");
+    let upper_dir = run_path_persistent.join("upper");
+    let work_dir = run_path_persistent.join("work");
+    let merged_dir = run_path_persistent.join("merged");
+
+    // 1. Load Manifest & CAS
+    let manifest = Manifest::load(manifest_path)
+        .with_context(|| format!("Failed to load manifest: {}", manifest_path.display()))?;
+    let cas = CasStore::new(cas_root)
+        .with_context(|| format!("Failed to open CAS: {}", cas_root.display()))?;
+
+    // 2. Populate LowerDir (Link Farm)
+    println!("   [Isolation] Populating LowerDir...");
+    let link_farm = LinkFarm::new(cas);
+    link_farm
+        .populate(&manifest, &lower_dir)
+        .context("Failed to populate Link Farm")?;
+
+    // 3. Mount OverlayFS
+    println!("   [Isolation] Mounting OverlayFS...");
+    let overlay = OverlayManager::new(lower_dir, upper_dir, work_dir, merged_dir.clone());
+    overlay.mount().context("Failed to mount OverlayFS")?;
+
+    // 4. Pivot Root (into merged_dir)
+    // We need to ensure the old root has a place to live momentarily if we want to unmount it cleanly.
+    // pivot_root requirements: new_root and put_old must be on the same filesystem? No.
+    // "new_root and put_old must not be on the same filesystem as the current root."
+    // OverlayFS is a new FS.
+
+    let old_root_path = merged_dir.join(".old_root");
+    fs::create_dir_all(&old_root_path).context("Failed to create .old_root")?;
+
+    std::env::set_current_dir(&merged_dir).context("Failed to chdir to merged_dir")?;
+
+    println!("   [Isolation] Pivot Root -> . (old=.old_root)");
+    NamespaceManager::pivot_root(Path::new("."), Path::new(".old_root"))
+        .context("Failed to pivot_root")?;
+
+    // 5. Mount Pseudo-FS (/proc, /sys, /dev) in the new root
+    // Now that we are pivoted, "/" is the merged dir.
+    println!("   [Isolation] Mounting /proc, /sys, /dev...");
+    let new_root = Path::new("/");
+    NamespaceManager::mount_pseudo_fs(new_root).context("Failed to mount pseudo-filesystems")?;
 
     Ok(())
 }

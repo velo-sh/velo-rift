@@ -28,7 +28,7 @@ use velo_manifest::{Manifest, VnodeEntry};
 #[command(version, about, long_about = None)]
 struct Cli {
     /// CAS storage root directory
-    #[arg(long, default_value = "/var/velo/the_source")]
+    #[arg(long, env = "VELO_CAS_ROOT", default_value = "/var/velo/the_source")]
     cas_root: PathBuf,
 
     #[command(subcommand)]
@@ -306,11 +306,10 @@ fn cmd_mount(cas_root: &Path, manifest: &Path, mountpoint: &Path) -> Result<()> 
     println!("  CAS:        {}", cas_root.display());
     println!("  Mountpoint: {}", mountpoint.display());
 
-    let cas = CasStore::new(cas_root)?;
-    let manifest = Manifest::load(manifest)?;
-
     #[cfg(feature = "fuse")]
     {
+        let cas = CasStore::new(cas_root)?;
+        let manifest = Manifest::load(manifest)?;
         let _fs = velo_fuse::VeloFs::new(&manifest, cas);
         // fuser::mount2(_fs, mountpoint, &[])?;
         println!("FUSE mount implemented but requires 'fuse' feature enabled in velo-cli");

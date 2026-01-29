@@ -31,13 +31,14 @@ thiserror = "1.0"
 anyhow = "1.0"
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1.36", features = ["full"] }
 nix = { version = "0.28", features = ["fs", "mount", "sched", "signal"] }
 
 # File operations
 walkdir = "2.5"
 memmap2 = "0.9"
+tempfile = "3.14"
 
 # Internal crates
 velo-cas = { path = "crates/velo-cas" }

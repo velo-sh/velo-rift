@@ -37,6 +37,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::unix::io::RawFd;
+#[allow(unused_imports)]
+use std::path::PathBuf;
 
 use std::ptr;
 use std::sync::OnceLock;
