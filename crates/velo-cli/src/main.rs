@@ -66,6 +66,10 @@ enum Commands {
         /// Enable Linux namespace isolation
         #[arg(long)]
         isolate: bool,
+
+        /// Run via daemon (delegated execution)
+        #[arg(long)]
+        daemon: bool,
     },
 
     /// Display CAS statistics
@@ -135,7 +139,8 @@ async fn main() -> Result<()> {
             manifest,
             command,
             isolate,
-        } => cmd_run(&cli.cas_root, &manifest, &command, isolate),
+            daemon,
+        } => cmd_run(&cli.cas_root, &manifest, &command, isolate, daemon),
         Commands::Status { manifest } => cmd_status(&cli.cas_root, manifest.as_deref()),
         Commands::Mount {
             manifest,
@@ -442,9 +447,23 @@ fn cmd_ingest(
 }
 
 /// Execute a command with Velo VFS shim
-fn cmd_run(cas_root: &Path, manifest: &Path, command: &[String], isolate: bool) -> Result<()> {
+fn cmd_run(
+    cas_root: &Path,
+    manifest: &Path,
+    command: &[String],
+    isolate: bool,
+    daemon_mode: bool,
+) -> Result<()> {
     if command.is_empty() {
         anyhow::bail!("No command specified");
+    }
+
+    // Delegation to daemon
+    if daemon_mode {
+       return tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            rt.block_on(daemon::spawn_command(command, std::env::current_dir()?))
+       });
     }
 
     if !manifest.exists() {

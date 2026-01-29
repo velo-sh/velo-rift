@@ -1,18 +1,15 @@
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use velo_ipc::{VeloRequest, VeloResponse};
 
-pub async fn check_status() -> Result<()> {
-    let socket_path = "/tmp/velo.sock";
-    
-    // 1. Connect
-    let mut stream = UnixStream::connect(socket_path)
-        .await
-        .with_context(|| format!("Failed to connect to daemon at {}", socket_path))?;
+const SOCKET_PATH: &str = "/tmp/velo.sock";
 
-    // 2. Handshake
+pub async fn check_status() -> Result<()> {
+    let mut stream = connect().await?;
+
+    // Handshake
     let req = VeloRequest::Handshake {
         client_version: env!("CARGO_PKG_VERSION").to_string(),
     };
@@ -26,7 +23,7 @@ pub async fn check_status() -> Result<()> {
         _ => anyhow::bail!("Unexpected handshake response: {:?}", resp),
     }
 
-    // 3. Status
+    // Status
     let req = VeloRequest::Status;
     send_request(&mut stream, req).await?;
     let resp = read_response(&mut stream).await?;
@@ -37,6 +34,86 @@ pub async fn check_status() -> Result<()> {
         }
         _ => anyhow::bail!("Unexpected status response: {:?}", resp),
     }
+
+    Ok(())
+}
+
+pub async fn spawn_command(command: &[String], cwd: PathBuf) -> Result<()> {
+    let mut stream = connect().await?;
+    
+    // Construct environment with explicit Strings
+    let env: Vec<(String, String)> = std::env::vars().collect();
+    
+    let req = VeloRequest::Spawn {
+        command: command.to_vec(),
+        env,
+        cwd: cwd.to_string_lossy().to_string(),
+    };
+
+    println!("Requesting daemon to spawn: {:?}", command);
+    send_request(&mut stream, req).await?;
+    
+    let resp = read_response(&mut stream).await?;
+    match resp {
+        VeloResponse::SpawnAck { pid } => {
+            println!("Daemon successfully spawned process. PID: {}", pid);
+            println!("(Output will be in daemon logs for now)");
+        }
+        VeloResponse::Error(msg) => {
+            anyhow::bail!("Daemon refused to spawn: {}", msg);
+        }
+        _ => anyhow::bail!("Unexpected response from daemon: {:?}", resp),
+    }
+
+    Ok(())
+}
+
+async fn connect() -> Result<UnixStream> {
+    match UnixStream::connect(SOCKET_PATH).await {
+        Ok(stream) => Ok(stream),
+        Err(_) => {
+            // Attempt to start daemon
+            println!("Daemon not running. Attempting to start...");
+            spawn_daemon()?;
+            
+            // Retry connection loop
+            for _ in 0..10 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                if let Ok(stream) = UnixStream::connect(SOCKET_PATH).await {
+                     println!("Daemon started successfully.");
+                     return Ok(stream);
+                }
+            }
+            anyhow::bail!("Failed to connect to daemon after starting it.");
+        }
+    }
+}
+
+fn spawn_daemon() -> Result<()> {
+    let current_exe = std::env::current_exe()?;
+    let bin_dir = current_exe.parent().context("Failed into get bin dir")?;
+    
+    // Look for velod or velo-daemon
+    let candidate_names = if cfg!(target_os = "windows") {
+        vec!["velod.exe", "velo-daemon.exe"]
+    } else {
+        vec!["velod", "velo-daemon"]
+    };
+
+    let daemon_bin = candidate_names.iter()
+        .map(|name| bin_dir.join(name))
+        .find(|path| path.exists())
+        .context("Could not find velo-daemon binary")?;
+
+    println!("Spawning daemon: {:?}", daemon_bin);
+
+    std::process::Command::new(daemon_bin)
+        .arg("start")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("Failed to spawn daemon process")?;
 
     Ok(())
 }
