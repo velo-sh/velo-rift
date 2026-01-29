@@ -21,3 +21,6 @@ velo-fuse.workspace = true
 [features]
 default = []
 fuse = ["velo-fuse/fuse"]
+
+[dev-dependencies]
+tempfile = "3.14"
