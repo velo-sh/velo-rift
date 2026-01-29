@@ -78,6 +78,13 @@ enum Commands {
         #[arg(value_name = "MOUNTPOINT")]
         mountpoint: PathBuf,
     },
+
+    /// Resolve dependencies from a velo.lock file
+    Resolve {
+        /// Lockfile path
+        #[arg(short, long, default_value = "velo.lock")]
+        lockfile: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -92,7 +99,57 @@ fn main() -> Result<()> {
         Commands::Run { manifest, command } => cmd_run(&cli.cas_root, &manifest, &command),
         Commands::Status { manifest } => cmd_status(&cli.cas_root, manifest.as_deref()),
         Commands::Mount { manifest, mountpoint } => cmd_mount(&cli.cas_root, &manifest, &mountpoint),
+        Commands::Resolve { lockfile } => cmd_resolve(&cli.cas_root, &lockfile),
     }
+}
+
+/// Resolve dependencies from a lockfile
+fn cmd_resolve(cas_root: &Path, lockfile: &Path) -> Result<()> {
+    if !lockfile.exists() {
+        anyhow::bail!("Lockfile not found: {}", lockfile.display());
+    }
+
+    println!("Resolving lockfile: {}", lockfile.display());
+    let lock = velo_lock::VeloLock::load(lockfile)?;
+
+    println!("  Engine: {}", lock.meta.engine);
+    println!("  Target: {}", lock.meta.target_platform);
+    println!("  Packages: {}", lock.packages.len());
+
+    let cas = CasStore::new(cas_root)?;
+    let mut missing = 0;
+    let mut resolved = 0;
+
+    println!("\nVerifying CAS content...");
+
+    for (name, pkg) in &lock.packages {
+        // Parse "tree:hex_hash" format
+        if let Some(hash_str) = pkg.source_tree.strip_prefix("tree:") {
+            if let Some(hash) = CasStore::hex_to_hash(hash_str) {
+                if cas.exists(&hash) {
+                    resolved += 1;
+                } else {
+                    println!("  [MISSING] {} v{} (Tree: {})", name, pkg.version, hash_str);
+                    missing += 1;
+                }
+            } else {
+                println!("  [INVALID] {} v{} (Bad hash: {})", name, pkg.version, hash_str);
+                missing += 1;
+            }
+        } else {
+            println!("  [INVALID] {} v{} (Bad prefix: {})", name, pkg.version, pkg.source_tree);
+            missing += 1;
+        }
+    }
+
+    println!("\nResult: {} resolved, {} missing", resolved, missing);
+    
+    if missing > 0 {
+        println!("Note: In a full implementation, this command would fetch missing trees from L2 storage.");
+        // In MVP, we just report them.
+    }
+
+    Ok(())
 }
 
 /// Mount the Velo filesystem (requires FUSE)

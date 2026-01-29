@@ -603,6 +603,7 @@ dependencies = [
  "tempfile",
  "velo-cas",
  "velo-fuse",
+ "velo-lock",
  "velo-manifest",
  "velo-shim",
  "walkdir",

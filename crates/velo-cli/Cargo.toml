@@ -17,6 +17,7 @@ velo-cas.workspace = true
 velo-manifest.workspace = true
 velo-shim.workspace = true
 velo-fuse.workspace = true
+velo-lock.workspace = true
 
 [features]
 default = []

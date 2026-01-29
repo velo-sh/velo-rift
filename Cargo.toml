@@ -43,3 +43,4 @@ velo-pack = { path = "crates/velo-pack" }
 velo-runtime = { path = "crates/velo-runtime" }
 velo-shim = { path = "crates/velo-shim" }
 velo-fuse = { path = "crates/velo-fuse" }
+velo-lock = { path = "crates/velo-lock" }
