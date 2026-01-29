@@ -400,4 +400,25 @@ mod tests {
         let retrieved = cas.get(&hash).unwrap();
         assert!(retrieved.is_empty());
     }
+
+    #[test]
+    fn test_iter() {
+        let temp = TempDir::new().unwrap();
+        let cas = CasStore::new(temp.path()).unwrap();
+
+        let content1 = b"content1";
+        let content2 = b"content2";
+        let hash1 = cas.store(content1).unwrap();
+        let hash2 = cas.store(content2).unwrap();
+
+        // Use a set to verify unordered results
+        let mut hashes = std::collections::HashSet::new();
+        for h in cas.iter().unwrap() {
+            hashes.insert(h.unwrap());
+        }
+
+        assert_eq!(hashes.len(), 2);
+        assert!(hashes.contains(&hash1));
+        assert!(hashes.contains(&hash2));
+    }
 }
