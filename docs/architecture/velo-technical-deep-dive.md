@@ -56,6 +56,57 @@ VeloVFS understands that a hash represents a complete logical unit — enabling:
 
 ---
 
+## 0.5 Why VeloVFS Exists (The Paradigm Shift)
+
+### The Inode Model is Broken
+
+Traditional filesystems were designed for **human-edited documents** (1970s):
+- Files have names, live in directories
+- Mutability is primary (edit in place)
+- Identity = path (same path = same file)
+
+In 2026, **99% of filesystem I/O is machine-generated**:
+- Package managers download immutable artifacts
+- Build systems produce deterministic outputs
+- Containers layer read-only images
+- AI agents execute in hermetic environments
+
+**The mismatch**: We're using a mutable, path-centric filesystem for immutable, content-centric workloads.
+
+### Why AI Agents Need Immutable Worlds
+
+```text
+Traditional Agent:
+  Agent → mutate file → observe result → ??? (non-deterministic)
+
+Velo Agent:
+  Agent → create snapshot → execute in snapshot → 
+         → diff result → deterministic replay possible
+```
+
+**Guarantees**:
+- Every agent action can be **replayed** (same snapshot = same behavior)
+- Agent state can be **forked** (parallel exploration)
+- Execution can be **audited** (snapshot hash = proof of environment)
+
+### Why Builds, Tests, and Runtime Should Share One Substrate
+
+```text
+Current World:
+  Build: Bazel sandbox → artifacts
+  Test:  Docker container → disposable
+  Prod:  Kubernetes pod → yet another copy
+
+Velo World:
+  Build: Snapshot A → artifacts (hash: 0xDEAD)
+  Test:  Same Snapshot A → deterministic
+  Prod:  Same Snapshot A → guaranteed identical
+```
+
+**One hash, three environments, zero drift.**
+
+---
+
 ## 1. System Directory Layout (Physical View)
 
 To achieve the "Hard Link Farm" efficiency and "OverlayFS" illusion, Velo enforces a strict physical layout on the Host Machine.
@@ -7913,6 +7964,333 @@ mod isolation {
 
 ---
 
+## 112. Kernel Interaction Model
+
+### 112.1 mmap Lifecycle
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│                    mmap Lifecycle                        │
+├──────────────────────────────────────────────────────────┤
+│  1. open(CAS_path) → fd                                  │
+│  2. mmap(fd, PROT_READ) → vaddr                          │
+│  3. Process accesses vaddr → Page Fault                  │
+│  4. Kernel loads page from CAS → Page Cache              │
+│  5. Subsequent access → Zero-copy from Page Cache        │
+│  6. munmap() or process exit → VMA removed               │
+│  7. Page evicted when memory pressure (LRU)              │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 112.2 Page Cache Sharing Rules
+
+| Scenario | Page Cache Behavior |
+|----------|-------------------|
+| Same content_hash, different tenants | **Shared** (same inode) |
+| Same path, different snapshots | **Separate** (different content) |
+| CoW after modification | **Forked** (private copy) |
+
+**Key Insight**: Content-addressed storage means page cache is automatically deduplicated by content, not by path.
+
+### 112.3 Snapshot Switch Semantics
+
+```rust
+enum SnapshotSwitch {
+    // Lazy: Old mappings remain valid until re-access
+    Lazy {
+        old_snapshot: SnapshotId,
+        new_snapshot: SnapshotId,
+        // On next open(): resolve against new snapshot
+        // Existing mmaps: continue pointing to old content
+    },
+    
+    // Eager: Invalidate all mappings immediately
+    Eager {
+        // Send SIGBUS on access to stale mappings
+        // Requires process restart or re-mmap
+    },
+}
+```
+
+**Default Strategy**: Lazy switch. Processes see consistent snapshot during execution, switch on restart.
+
+### 112.4 Fault & Recovery Strategy
+
+| Fault | Detection | Recovery |
+|-------|-----------|----------|
+| **Hash Mismatch** | Scrubber or read-time verify | Fetch from L2/peer |
+| **Missing Blob** | ENOENT on CAS access | Trigger backfill, block or fail |
+| **mmap SIGBUS** | Kernel signal | Log, terminate tenant, alert |
+| **Page Cache Corruption** | Rare (ECC failure) | Kernel panic or page retire |
+
+---
+
+## 113. Content Address Space Management
+
+### 113.1 Snapshot Reachability Graph
+
+```text
+                    ┌─────────────────┐
+                    │   Root Refs     │
+                    │ (Active Snaps)  │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+        ┌──────────┐   ┌──────────┐   ┌──────────┐
+        │ Snap A   │   │ Snap B   │   │ Snap C   │
+        │ tree:abc │   │ tree:def │   │ tree:ghi │
+        └────┬─────┘   └────┬─────┘   └────┬─────┘
+             │              │              │
+             ▼              ▼              ▼
+        ┌─────────────────────────────────────────┐
+        │              CAS Blob Pool              │
+        │  (Reference counted by reachability)    │
+        └─────────────────────────────────────────┘
+```
+
+### 113.2 CAS Garbage Collection
+
+```rust
+fn gc_cycle() {
+    // 1. Mark: Walk from all active snapshot roots
+    let reachable = walk_reachability_graph(active_snapshots);
+    
+    // 2. Sweep: Delete unreachable blobs (with grace period)
+    for blob in cas_store.all_blobs() {
+        if !reachable.contains(blob.hash) && blob.age > GRACE_PERIOD {
+            cas_store.delete(blob.hash);
+        }
+    }
+}
+```
+
+**Grace Period**: 24 hours default. Prevents race between new snapshot creation and GC.
+
+### 113.3 Remote CAS & Trust Model
+
+| Source | Trust Level | Verification |
+|--------|-------------|--------------|
+| Local CAS | Full | None (trusted) |
+| L2 Regional | High | Verify hash on first use |
+| P2P Peer | Low | **Always verify** hash before store |
+| External (PyPI) | Untrusted | Verify hash + signature |
+
+```rust
+fn fetch_remote_blob(hash: Blake3Hash, source: Source) -> Result<Blob> {
+    let data = source.download(hash)?;
+    
+    // ALWAYS verify untrusted sources
+    if source.trust_level() < TrustLevel::Full {
+        let computed = blake3::hash(&data);
+        if computed != hash {
+            return Err(IntegrityViolation);
+        }
+    }
+    
+    Ok(data)
+}
+```
+
+---
+
+## 114. Developer Experience Layer
+
+### 114.1 Ephemeral Mutable Overlay
+
+Developers need "normal" mutable experience despite immutable substrate:
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                Developer Workspace                       │
+├─────────────────────────────────────────────────────────┤
+│  Edit Layer (tmpfs, mutable)     ← IDE writes here      │
+├─────────────────────────────────────────────────────────┤
+│  Snapshot Layer (immutable)      ← Dependencies, base   │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Workflow**:
+1. `velo dev start` → Creates mutable overlay
+2. Developer edits freely → Changes in tmpfs
+3. `velo snapshot` → Commit changes to new immutable snapshot
+4. Fast iteration: Edit → Snapshot → Test cycle in seconds
+
+### 114.2 Edit-Time Path Virtualization
+
+```python
+# IDE thinks it's editing /app/src/main.py
+# Actually:
+#   Read:  Comes from snapshot (immutable CAS)
+#   Write: Goes to overlay (tmpfs)
+#   Save:  Triggers incremental snapshot (optional)
+
+def velo_open(path, mode):
+    if 'w' in mode:
+        return overlay.open(path, mode)  # Mutable copy
+    else:
+        return snapshot.open(path, mode)  # Immutable original
+```
+
+### 114.3 IDE Integration Semantics
+
+| IDE Action | Velo Behavior |
+|------------|--------------|
+| Open file | Read from snapshot or overlay |
+| Save file | Write to overlay only |
+| File watcher | Monitor overlay, ignore snapshot |
+| Git status | Compare overlay to snapshot base |
+| "Commit" | `velo snapshot create` |
+
+---
+
+## 115. Security & Trust Model
+
+### 115.1 Snapshot Signing
+
+```rust
+struct SignedSnapshot {
+    snapshot_hash: Blake3Hash,
+    signature: Ed25519Signature,
+    signer_pubkey: [u8; 32],
+    timestamp: u64,
+    policy_id: String,  // e.g., "prod-approved"
+}
+
+fn verify_snapshot(signed: &SignedSnapshot, trusted_keys: &[PubKey]) -> bool {
+    trusted_keys.iter().any(|key| 
+        key.verify(&signed.snapshot_hash, &signed.signature)
+    )
+}
+```
+
+### 115.2 Path-Hash ACLs
+
+```yaml
+# /etc/velo/policies/production.yaml
+policies:
+  - name: "block-dev-dependencies"
+    deny:
+      - path_pattern: "/node_modules/*-dev/*"
+      - path_pattern: "/site-packages/pytest*"
+    
+  - name: "require-signed-binaries"
+    require_signature:
+      - path_pattern: "**/*.so"
+      - path_pattern: "**/*.dll"
+    signers:
+      - "vendor-A-pubkey"
+      - "internal-build-key"
+```
+
+### 115.3 Execution Attestation
+
+```rust
+struct ExecutionAttestation {
+    // What ran
+    snapshot_hash: Blake3Hash,
+    entrypoint: String,
+    
+    // Environment proof
+    kernel_version: String,
+    velo_version: String,
+    
+    // Cryptographic binding
+    tpm_quote: Option<TpmQuote>,  // Hardware attestation
+    
+    // Result
+    exit_code: i32,
+    output_snapshot: Option<Blake3Hash>,
+}
+```
+
+**Use Case**: Prove to auditor that production ran exactly snapshot `0xABC` with no modifications.
+
+---
+
+## 116. Agentic Execution Semantics
+
+### 116.1 Snapshot Fork / Merge
+
+```text
+                    ┌─────────────┐
+                    │  Base Snap  │
+                    │  (hash: A)  │
+                    └──────┬──────┘
+                           │ fork
+              ┌────────────┴────────────┐
+              ▼                         ▼
+        ┌───────────┐             ┌───────────┐
+        │ Agent 1   │             │ Agent 2   │
+        │ Snap A'   │             │ Snap A''  │
+        └─────┬─────┘             └─────┬─────┘
+              │                         │
+              └──────────┬──────────────┘
+                         ▼ merge (conflict resolution)
+                   ┌───────────┐
+                   │  Merged   │
+                   │  Snap B   │
+                   └───────────┘
+```
+
+### 116.2 Agent-Local Overlays
+
+```rust
+struct AgentSession {
+    // Immutable base (shared across all agents)
+    base_snapshot: SnapshotId,
+    
+    // Private scratch space (not visible to other agents)
+    private_overlay: OverlayId,
+    
+    // Execution trace for replay
+    action_log: Vec<AgentAction>,
+}
+
+impl AgentSession {
+    fn execute(&mut self, action: AgentAction) -> Result<Observation> {
+        self.action_log.push(action.clone());
+        
+        // Execute in isolated overlay
+        let result = self.sandbox.execute(action)?;
+        
+        Ok(result)
+    }
+    
+    fn checkpoint(&self) -> SnapshotId {
+        // Commit overlay to new snapshot
+        self.private_overlay.commit_to_snapshot()
+    }
+}
+```
+
+### 116.3 Replay & Determinism Guarantees
+
+| Guarantee | Mechanism |
+|-----------|-----------|
+| **Bit-exact replay** | Same snapshot + same action_log = same result |
+| **Parallel exploration** | Fork snapshot, run N agents, compare |
+| **Audit trail** | action_log is append-only, signed |
+| **Rollback** | Discard overlay, reset to base snapshot |
+
+```python
+def replay_agent_session(base_snapshot, action_log):
+    """
+    Given a base snapshot and action log, 
+    reproduce exact agent behavior.
+    """
+    session = AgentSession(base_snapshot)
+    
+    for action in action_log:
+        observation = session.execute(action)
+        # observation will be identical to original run
+        # because snapshot guarantees identical environment
+    
+    return session.final_state()
+```
+
+---
+
 # FAQ & Troubleshooting
 
 ## Q: Why does `df -h` show wrong disk space?
@@ -7937,8 +8315,8 @@ sysctl -w vm.max_map_count=262144
 
 ---
 
-*Document Version: 22.0*
+*Document Version: 23.0*
 *Last Updated: 2026-01-29*
-*Total Sections: 111 + FAQ*
-*v22 Fixes: Cache layer terminology clarified, base OS unified to alpine-base, SHA-1/BLAKE3 distinction noted*
+*Total Sections: 116 + FAQ*
+*New in v23: §0.5 Why VeloVFS Exists, §112 Kernel Interaction, §113 CAS Management, §114 DX Layer, §115 Security Model, §116 Agentic Semantics*
 *Status: Production-Ready Specification*
