@@ -4310,6 +4310,487 @@ impl HashRegistry {
 
 ---
 
-*Document Version: 7.0*
+## 69. io_uring Async I/O Integration
+
+### 69.1 Why io_uring?
+
+Traditional async I/O comparison:
+
+| Approach | Syscalls | Context Switches | Latency |
+|----------|----------|------------------|---------|
+| Blocking I/O | 1 per op | 2 per op | ~3μs |
+| epoll + thread pool | 2 per op | 2 per op | ~2μs |
+| io_uring | 0 (batched) | 0 (shared memory) | ~0.3μs |
+
+**io_uring eliminates syscall overhead entirely** via shared memory queues.
+
+### 69.2 Architecture: Brain + Muscle Separation
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  BRAIN (Single Thread - Core Event Loop)                    │
+│  - Metadata operations (HashMap lookup, LRU update)         │
+│  - State machine transitions                                │
+│  - Command dispatching                                      │
+│  - NO blocking I/O                                          │
+└─────────────────────────────────────────────────────────────┘
+        ↓ Submit to SQ                    ↑ Reap from CQ
+┌─────────────────────────────────────────────────────────────┐
+│  MUSCLE (io_uring Kernel Interface)                         │
+│  - Submission Queue (SQ): OPENAT, PREAD, CLOSE              │
+│  - Completion Queue (CQ): Results with user_data            │
+│  - Kernel executes I/O asynchronously                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 69.3 Submission/Completion Flow
+
+```rust
+use io_uring::{IoUring, opcode, types};
+
+struct VeloIoEngine {
+    ring: IoUring,
+    inflight: HashMap<u64, PendingRequest>,
+    next_id: u64,
+}
+
+impl VeloIoEngine {
+    fn submit_open(&mut self, path: &CStr, reply: Sender<RawFd>) {
+        let id = self.next_id;
+        self.next_id += 1;
+        
+        // Build SQE (Submission Queue Entry)
+        let sqe = opcode::OpenAt::new(
+            types::Fd(libc::AT_FDCWD),
+            path.as_ptr()
+        )
+        .flags(libc::O_RDONLY | libc::O_NOATIME)
+        .build()
+        .user_data(id);  // Tag for matching completion
+        
+        // Submit (no syscall yet - just memory write)
+        unsafe { self.ring.submission().push(&sqe).unwrap(); }
+        
+        self.inflight.insert(id, PendingRequest::Open(reply));
+    }
+    
+    fn process_completions(&mut self) {
+        // Batch submit all pending SQEs (1 syscall for many ops)
+        self.ring.submit().unwrap();
+        
+        // Reap completions
+        for cqe in self.ring.completion() {
+            let id = cqe.user_data();
+            let result = cqe.result();
+            
+            if let Some(pending) = self.inflight.remove(&id) {
+                match pending {
+                    PendingRequest::Open(reply) => {
+                        reply.send(result as RawFd).ok();
+                    }
+                    // ... other request types
+                }
+            }
+        }
+    }
+}
+```
+
+### 69.4 Zero-Syscall Batching
+
+```text
+Traditional (3 files):
+  openat() → syscall → return
+  openat() → syscall → return
+  openat() → syscall → return
+  Total: 3 syscalls, 6 context switches
+
+io_uring (3 files):
+  push(SQE1), push(SQE2), push(SQE3)
+  submit()  → 1 syscall
+  poll completions
+  Total: 1 syscall, 2 context switches
+```
+
+### 69.5 Integration with State Machine
+
+```rust
+enum CoreCommand {
+    Open { hash: u128, reply: Sender<Fd> },
+    IoComplete { id: u64, result: i32 },
+}
+
+fn core_loop(rx: Receiver<CoreCommand>, io: &mut VeloIoEngine) {
+    loop {
+        // 1. Process commands from application
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                CoreCommand::Open { hash, reply } => {
+                    if let Some(fd) = cache.get(&hash) {
+                        reply.send(fd);  // Hot path: no I/O
+                    } else {
+                        io.submit_open(hash_to_path(hash), reply);
+                    }
+                }
+            }
+        }
+        
+        // 2. Process io_uring completions
+        io.process_completions();
+        
+        // 3. Brief sleep or wait on eventfd
+        std::thread::sleep(Duration::from_micros(100));
+    }
+}
+```
+
+---
+
+## 70. Zero-Allocation Path Construction (SIMD-Friendly)
+
+### 70.1 The Problem
+
+```text
+Naive approach:
+  let path = format!("/store/{:02x}/{:02x}/{}", h[0], h[1], &rest);
+  
+Cost:
+  - Heap allocation for String
+  - format! parsing overhead
+  - Multiple memory copies
+  
+For 1M file accesses: ~50ms wasted on string formatting alone
+```
+
+### 70.2 Pre-Computed Hex Lookup Table
+
+```rust
+// Compile-time generated: 0-255 → "00"-"ff"
+// Each u8 maps to 2 hex characters packed as u16
+static HEX_LUT: [u16; 256] = {
+    let mut table = [0u16; 256];
+    let mut i = 0;
+    while i < 256 {
+        let hi = if i >> 4 < 10 { 
+            (i >> 4) + b'0' as usize 
+        } else { 
+            (i >> 4) - 10 + b'a' as usize 
+        };
+        let lo = if i & 0xF < 10 { 
+            (i & 0xF) + b'0' as usize 
+        } else { 
+            (i & 0xF) - 10 + b'a' as usize 
+        };
+        // Little-endian: hi in low byte, lo in high byte
+        table[i] = (lo as u16) << 8 | (hi as u16);
+        i += 1;
+    }
+    table
+};
+```
+
+### 70.3 Template Fill Strategy
+
+```text
+Goal: Convert hash bytes to path "ab/cdef..."
+
+DON'T: Build string then insert '/'
+DO: Pre-place '/' then fill around it
+
+Memory Layout (for "ab/cd/efgh..."):
+  Offset: 0  1  2  3  4  5  6  7  8 ...
+  Content: a  b  /  c  d  /  e  f  g ...
+           ↑     ↑        ↑
+           L1    Fixed    L2    Rest
+```
+
+### 70.4 u64 Batch Processing
+
+```rust
+use std::mem::MaybeUninit;
+use std::ptr;
+
+#[inline(always)]
+fn fill_path_fast(hash: &[u8; 32], callback: impl FnOnce(*const i8)) {
+    // Stack allocation: 64 bytes, 8-byte aligned
+    #[repr(align(8))]
+    struct AlignedBuf([u8; 64]);
+    let mut buf = MaybeUninit::<AlignedBuf>::uninit();
+    let ptr = buf.as_mut_ptr() as *mut u8;
+    
+    unsafe {
+        // Fixed slashes (constant, single-cycle store)
+        *ptr.add(2) = b'/';
+        *ptr.add(63) = 0;  // Null terminator
+        
+        // L1: hash[0] → positions 0-1
+        let l1 = HEX_LUT[hash[0] as usize];
+        ptr::write_unaligned(ptr as *mut u16, l1);
+        
+        // Core loop: Process 4 bytes → 8 hex chars at a time
+        let mut in_ptr = hash.as_ptr().add(1);
+        let mut out_ptr = ptr.add(3);
+        let end = in_ptr.add(31);
+        
+        while in_ptr.add(4) <= end {
+            // Read 4 hash bytes
+            let b0 = *in_ptr;
+            let b1 = *in_ptr.add(1);
+            let b2 = *in_ptr.add(2);
+            let b3 = *in_ptr.add(3);
+            
+            // Lookup and pack into u64
+            let h0 = HEX_LUT[b0 as usize] as u64;
+            let h1 = HEX_LUT[b1 as usize] as u64;
+            let h2 = HEX_LUT[b2 as usize] as u64;
+            let h3 = HEX_LUT[b3 as usize] as u64;
+            
+            let combined: u64 = h0 | (h1 << 16) | (h2 << 32) | (h3 << 48);
+            
+            // Single 8-byte write (unaligned OK on modern CPUs)
+            ptr::write_unaligned(out_ptr as *mut u64, combined);
+            
+            in_ptr = in_ptr.add(4);
+            out_ptr = out_ptr.add(8);
+        }
+        
+        // Handle remaining bytes
+        while in_ptr < end {
+            let val = HEX_LUT[*in_ptr as usize];
+            ptr::write_unaligned(out_ptr as *mut u16, val);
+            in_ptr = in_ptr.add(1);
+            out_ptr = out_ptr.add(2);
+        }
+        
+        callback(ptr as *const i8);
+    }
+}
+
+// Usage
+fn open_blob(base_fd: RawFd, hash: &[u8; 32]) -> RawFd {
+    fill_path_fast(hash, |path| {
+        unsafe { libc::openat(base_fd, path, libc::O_RDONLY) }
+    })
+}
+```
+
+### 70.5 Performance: 50-100x Faster Than format!
+
+| Approach | Time per path | Allocations |
+|----------|---------------|-------------|
+| `format!()` | ~200ns | 1 heap |
+| Stack + sprintf | ~50ns | 0 |
+| HEX_LUT + u64 writes | ~4ns | 0 |
+
+### 70.6 Alternative: faster-hex Crate
+
+For maximum throughput, use the `faster-hex` crate which uses AVX2/SSSE3:
+
+```rust
+use faster_hex::hex_encode;
+
+fn hash_to_path(hash: &[u8; 32], buf: &mut [u8; 67]) {
+    // Writes hex directly, ~1ns per byte on AVX2
+    hex_encode(&hash[0..1], &mut buf[0..2]).unwrap();
+    buf[2] = b'/';
+    hex_encode(&hash[1..32], &mut buf[3..65]).unwrap();
+    buf[65] = 0;
+}
+```
+
+---
+
+## 71. Compiler & CPU Co-optimization
+
+### 71.1 Loop Unrolling
+
+The compiler recognizes fixed-size loops and eliminates branching:
+
+```text
+Source code:
+  for i in 0..8 { process(data[i]); }
+
+Compiled (with -O3):
+  process(data[0])
+  process(data[1])
+  process(data[2])
+  ... (no loop, no branches)
+```
+
+**Impact**: Zero branch misprediction, full instruction pipelining.
+
+### 71.2 Instruction-Level Parallelism (ILP)
+
+Modern CPUs execute multiple independent instructions simultaneously:
+
+```text
+// These have no data dependency - CPU runs them in parallel
+let a = load(ptr1);   // Port 2
+let b = load(ptr2);   // Port 3
+let c = hash(x);      // Port 0
+let d = hash(y);      // Port 1
+
+// Latency: ~4 cycles (not 4 × 4 = 16 cycles)
+```
+
+### 71.3 Cache Line Awareness
+
+```text
+CPU Cache Line = 64 bytes
+
+BAD: Strided access (cache line wasted)
+  for i in (0..1000).step_by(64) { arr[i] += 1; }
+  → 1000 cache line loads for 1000 operations
+
+GOOD: Sequential access (cache line reused)
+  for i in 0..1000 { arr[i] += 1; }
+  → ~16 cache line loads for 1000 operations
+```
+
+### 71.4 Branch Prediction
+
+```rust
+// Help the compiler with likely/unlikely hints
+#[cold]
+fn handle_error() { ... }
+
+fn lookup(hash: u64) -> Option<Fd> {
+    if let Some(fd) = cache.get(&hash) {
+        Some(fd)  // Hot path: predicted taken
+    } else {
+        handle_error();  // Cold path: predicted not taken
+        None
+    }
+}
+```
+
+### 71.5 False Sharing Prevention
+
+```rust
+// BAD: Two atomics on same cache line → cache bouncing
+struct BadState {
+    counter1: AtomicU64,  // offset 0
+    counter2: AtomicU64,  // offset 8 (same cache line!)
+}
+
+// GOOD: Pad to separate cache lines
+struct GoodState {
+    counter1: AtomicU64,
+    _pad1: [u8; 56],      // Push to next cache line
+    counter2: AtomicU64,
+    _pad2: [u8; 56],
+}
+```
+
+### 71.6 Pointer Aliasing
+
+```rust
+// Compiler doesn't know if src and dst overlap, must be conservative
+fn copy_slow(src: &[u8], dst: &mut [u8]) {
+    for i in 0..src.len() { dst[i] = src[i]; }
+}
+
+// Use restrict semantics (Rust &mut guarantees no-alias)
+fn copy_fast(src: &[u8], dst: &mut [u8]) {
+    // Compiler knows no overlap → can use SIMD memcpy
+    dst.copy_from_slice(src);
+}
+```
+
+---
+
+## 72. Advanced FD Cache Strategies
+
+### 72.1 O_NOATIME Flag
+
+```rust
+// Without O_NOATIME: Every read updates inode atime → metadata write
+// With O_NOATIME: Skip atime update → pure read operation
+
+let fd = unsafe {
+    libc::openat(
+        base_fd,
+        path,
+        libc::O_RDONLY | libc::O_NOATIME  // Critical for hot files
+    )
+};
+```
+
+**Impact**: Eliminates hidden disk writes on read-heavy workloads.
+
+### 72.2 Sharded LRU Locks
+
+```rust
+const NUM_SHARDS: usize = 16;
+
+struct ShardedCache {
+    shards: [Mutex<LruCache<u64, RawFd>>; NUM_SHARDS],
+}
+
+impl ShardedCache {
+    fn get(&self, hash: u64) -> Option<RawFd> {
+        let shard_idx = (hash as usize) % NUM_SHARDS;
+        self.shards[shard_idx].lock().unwrap().get(&hash).copied()
+    }
+}
+
+// 16 threads can operate simultaneously without contention
+// (unless they happen to hit the same shard)
+```
+
+### 72.3 Dynamic ulimit Adaptation
+
+```rust
+fn optimal_cache_size() -> usize {
+    let limit = unsafe {
+        let mut rlim = std::mem::zeroed::<libc::rlimit>();
+        libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim);
+        rlim.rlim_cur as usize
+    };
+    
+    // Reserve 20% for network sockets, other uses
+    match limit {
+        ..=1024 => 800,
+        ..=4096 => 3200,
+        ..=65536 => 50000,
+        _ => 100000,
+    }
+}
+```
+
+### 72.4 Packfile FD Efficiency
+
+```text
+Loose Files (10,000 files):
+  10,000 FDs needed to keep all open
+  ulimit likely exceeded
+  
+Packfile (10,000 files in 10 packs):
+  10 FDs needed
+  pread(fd, offset, len) for any file
+  
+Amplification: 1000x more files per FD slot
+```
+
+### 72.5 Warm-up Strategy
+
+```rust
+fn prefetch_hot_files(manifest: &Manifest, cache: &mut FdCache) {
+    // Sort by access frequency (from previous run's telemetry)
+    let hot_files: Vec<_> = manifest.entries()
+        .sorted_by_key(|e| std::cmp::Reverse(e.access_count))
+        .take(cache.capacity() / 2)  // Pre-fill 50%
+        .collect();
+    
+    for entry in hot_files {
+        let fd = open_file(&entry.path);
+        cache.insert(entry.hash, fd);
+    }
+}
+```
+
+---
+
+*Document Version: 8.0*
 *Last Updated: 2026-01-29*
-*Total Sections: 68*
+*Total Sections: 72*
