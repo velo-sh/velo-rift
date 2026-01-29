@@ -6,6 +6,10 @@ A technical comparison with related tools, focusing on problem domains and archi
 
 ## 1. What VeloVFS Is (and Isn't)
 
+> **Why VeloVFS exists:**  
+> Modern runtimes are fast. Disks are not.  
+> VeloVFS exists to **remove the filesystem from the critical path of computation**.
+
 ### VeloVFS IS:
 - **A virtual file system layer** optimized for immutable content
 - **Content-addressable storage (CAS)** with deduplication
@@ -17,6 +21,14 @@ A technical comparison with related tools, focusing on problem domains and archi
 - A package manager replacement (wraps uv, npm, cargo)
 - A distributed database
 - A general-purpose file system for mutable workloads
+
+### VeloVFS Intentionally Does NOT Model:
+- **Build graph semantics** (that's Bazel's job)
+- **Functional evaluation** (that's Nix's job)
+- **Process isolation** (that's Docker's job)
+- **Distributed consensus** (that's etcd's job)
+
+VeloVFS focuses on one thing: **making file access instant**.
 
 ---
 
@@ -288,5 +300,25 @@ VeloVFS can be:
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 2.0*
 *Last Updated: 2026-01-29*
+
+---
+
+## 9. Who Should Care (and Who Shouldn't)
+
+### VeloVFS IS FOR YOU if:
+
+- ✅ You run **large dependency trees** (1000+ packages)
+- ✅ You care about **cold start latency** (serverless, CI/CD)
+- ✅ You want **reproducible execution state** (auditing, compliance)
+- ✅ You run **multi-tenant workloads** (SaaS, shared clusters)
+- ✅ You're building **AI agent infrastructure** (deterministic replay)
+
+### VeloVFS is NOT FOR YOU if:
+
+- ❌ You need **POSIX-perfect semantics** (we optimize, not comply)
+- ❌ Your workload is **write-heavy mutable data** (use a real database)
+- ❌ Your bottleneck is **CPU, not I/O** (we can't help with compute)
+- ❌ You're running on **Windows in production** (Linux is Tier 1)
+- ❌ You have **< 100 dependencies** (overhead not worth it)
