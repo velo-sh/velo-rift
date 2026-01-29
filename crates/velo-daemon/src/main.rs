@@ -60,6 +60,18 @@ async fn start_daemon() -> Result<()> {
         cas_index: Mutex::new(HashMap::new()),
     });
 
+    // Start background scan (Warm-up)
+    let scan_state = state.clone();
+    tokio::spawn(async move {
+        println!("velod: Starting CAS warm-up scan...");
+        if let Err(e) = scan_cas_root(&scan_state).await {
+            eprintln!("velod: CAS scan failed: {}", e);
+        } else {
+            let count = scan_state.cas_index.lock().await.len();
+            println!("velod: CAS warm-up complete. Indexed {} blobs.", count);
+        }
+    });
+
     loop {
         tokio::select! {
             accept_result = listener.accept() => {
@@ -195,4 +207,42 @@ async fn handle_spawn(command: Vec<String>, env: Vec<(String, String)>, cwd: Str
         }
         Err(e) => VeloResponse::Error(format!("Failed to spawn: {}", e))
     }
+}
+
+async fn scan_cas_root(state: &DaemonState) -> Result<()> {
+    // Get path from env or default
+    let cas_root_str = std::env::var("VELO_CAS_ROOT").unwrap_or_else(|_| "/var/velo/the_source".to_string());
+    let cas_root = Path::new(&cas_root_str);
+    
+    if !cas_root.exists() {
+        println!("velod: CAS root not found at {:?}, skipping scan.", cas_root);
+        return Ok(());
+    }
+
+    use velo_cas::CasStore;
+    let cas = CasStore::new(cas_root)?;
+    
+    // We can use CasStore's iterator, but it's synchronous (blocking).
+    // For now, we'll wrap it in spawn_blocking or just run it since we are in a dedicated task.
+    // Iterating millions of files might take time, so blocking the runtime is bad if not careful.
+    // But this is a separate task.
+    
+    let mut index = state.cas_index.lock().await;
+    
+    // Using blocking iterator
+    for hash_res in cas.iter()? {
+        if let Ok(hash) = hash_res {
+             // For size, we currently don't store it in the filename, so we might need to stat.
+             // Statting every file is expensive.
+             // For MVP, if we don't have size efficiently, we can put 0 or Stat content.
+             // Optimized Velo stores [hash_prefix]/[hash] and we can trust it exists.
+             if let Some(path) = cas.blob_path_for_hash(&hash) {
+                 if let Ok(metadata) = std::fs::metadata(path) {
+                     index.insert(hash, metadata.len());
+                 }
+             }
+        }
+    }
+    
+    Ok(())
 }

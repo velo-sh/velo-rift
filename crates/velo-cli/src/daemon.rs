@@ -68,6 +68,34 @@ pub async fn spawn_command(command: &[String], cwd: PathBuf) -> Result<()> {
     Ok(())
 }
 
+pub async fn check_blob(hash: [u8; 32]) -> Result<bool> {
+    match connect().await {
+        Ok(mut stream) => {
+            let req = VeloRequest::CasGet { hash };
+            if let Err(_) = send_request(&mut stream, req).await {
+                return Ok(false); // Connection broke during send
+            }
+            match read_response(&mut stream).await {
+                Ok(VeloResponse::CasFound { .. }) => Ok(true),
+                Ok(VeloResponse::CasNotFound) => Ok(false),
+                _ => Ok(false),
+            }
+        }
+        Err(_) => Ok(false), // Daemon offline, assume not in memory
+    }
+}
+
+pub async fn notify_blob(hash: [u8; 32], size: u64) -> Result<()> {
+    // Fire and forget (optional) or wait for ack
+    if let Ok(mut stream) = connect().await {
+        let req = VeloRequest::CasInsert { hash, size };
+        let _ = send_request(&mut stream, req).await;
+        // Ideally wait for Ack, but for speed maybe we don't care if it fails
+        // let _ = read_response(&mut stream).await; 
+    }
+    Ok(())
+}
+
 async fn connect() -> Result<UnixStream> {
     match UnixStream::connect(SOCKET_PATH).await {
         Ok(stream) => Ok(stream),

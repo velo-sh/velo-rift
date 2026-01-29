@@ -8,6 +8,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 velo-ipc = { workspace = true }
+velo-cas = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }
 thiserror = { workspace = true }

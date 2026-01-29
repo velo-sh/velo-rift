@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
             directory,
             output,
             prefix,
-        } => cmd_ingest(&cli.cas_root, &directory, &output, prefix.as_deref()),
+        } => cmd_ingest(&cli.cas_root, &directory, &output, prefix.as_deref()).await,
         Commands::Run {
             manifest,
             command,
@@ -346,7 +346,7 @@ fn cmd_mount(cas_root: &Path, manifest: &Path, mountpoint: &Path) -> Result<()> 
 }
 
 /// Ingest a directory into the CAS and create a manifest
-fn cmd_ingest(
+async fn cmd_ingest(
     cas_root: &Path,
     directory: &Path,
     output: &Path,
@@ -405,19 +405,35 @@ fn cmd_ingest(
             // Store file content in CAS
             let content = fs::read(path)
                 .with_context(|| format!("Failed to read file: {}", path.display()))?;
+            
+            let hash = CasStore::compute_hash(&content);
+            let size = content.len() as u64;
 
-            let was_new = !cas.exists(&CasStore::compute_hash(&content));
-            let hash = cas.store(&content)?;
+            // Daemon-First Query: Check if we already have this blob (in memory index)
+            // If check_blob returns true, we trust it and skip disk write.
+            let exists_in_daemon = daemon::check_blob(hash).await.unwrap_or(false);
 
-            if was_new {
-                unique_blobs += 1;
+            if !exists_in_daemon {
+                // Not in daemon, check/store in CAS
+                let was_new = !cas.exists(&hash);
+                cas.store(&content)?;
+
+                if was_new {
+                    unique_blobs += 1;
+                    // Notify daemon of new blob
+                    let _ = daemon::notify_blob(hash, size).await;
+                }
+            } else {
+                 // Even if it exists in daemon, we need to count stats correctly?
+                 // Dedup ratio logic relies on unique_blobs.
+                 // If it exists in daemon, it's not "new" to the system.
             }
 
-            let vnode = VnodeEntry::new_file(hash, metadata.len(), mtime, metadata.mode());
+            let vnode = VnodeEntry::new_file(hash, size, mtime, metadata.mode());
             manifest.insert(&manifest_path, vnode);
 
             files_ingested += 1;
-            bytes_ingested += metadata.len();
+            bytes_ingested += size;
         }
     }
 
@@ -445,6 +461,7 @@ fn cmd_ingest(
 
     Ok(())
 }
+
 
 /// Execute a command with Velo VFS shim
 fn cmd_run(
