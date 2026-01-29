@@ -91,11 +91,21 @@ impl LinkFarm {
                 }
 
                 fs::hard_link(&src_path, &dest_path)?;
-            } else if (entry.flags & 2) != 0 { // Check if symlink
-                 // Manifest VnodeEntry doesn't currently store symlink target separately
-                 // For now, assuming symlink target is stored in content? 
-                 // ARCHITECTURE.md doesn't explicitly detail symlink target storage in Vnode.
-                 // Assuming standard file for now as per MVP.
+            } else if entry.is_symlink() {
+                // Fetch symlink target from CAS
+                let target_bytes = self.cas.get(&entry.content_hash)
+                    .map_err(|e| RuntimeError::Cas(e))?;
+                
+                let target_path_str = String::from_utf8(target_bytes)
+                    .map_err(|_| RuntimeError::Overlay("Invalid UTF-8 in symlink target".into()))?;
+                
+                // Remove existing file if present
+                if dest_path.exists() {
+                     fs::remove_file(&dest_path)?;
+                }
+
+                std::os::unix::fs::symlink(target_path_str, &dest_path)
+                    .map_err(|e| RuntimeError::Io(e))?;
             }
         }
         Ok(())

@@ -101,6 +101,21 @@ impl VnodeEntry {
         }
     }
 
+    /// Create a new VnodeEntry for a symbolic link
+    ///
+    /// `target_hash` is the hash of the target path string.
+    /// `target_len` is the length of the target path string.
+    pub fn new_symlink(target_hash: Blake3Hash, target_len: u64, mtime: u64) -> Self {
+        Self {
+            content_hash: target_hash,
+            size: target_len,
+            mtime,
+            mode: 0o777, // Symlinks usually have dummy permissions
+            flags: VnodeFlags::Symlink as u16,
+            _pad: 0,
+        }
+    }
+
     /// Check if this entry is a directory
     pub fn is_dir(&self) -> bool {
         self.flags & (VnodeFlags::Directory as u16) != 0
@@ -109,6 +124,11 @@ impl VnodeEntry {
     /// Check if this entry is a regular file
     pub fn is_file(&self) -> bool {
         self.flags == VnodeFlags::File as u16
+    }
+
+    /// Check if this entry is a symbolic link
+    pub fn is_symlink(&self) -> bool {
+        self.flags & (VnodeFlags::Symlink as u16) != 0
     }
 
     /// Check if this entry is executable
