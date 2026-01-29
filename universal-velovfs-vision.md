@@ -98,14 +98,10 @@ To eliminate muscle-memory friction, `rift` supports transparent shell hooks.
 *   **Aesthetic**: **Glitch Art / Sci-Fi**. 
 *   **Metaphor**: "Tearing Space". It shouldn't look like a "File Manager". It should look like a "Portal Gun".
 *   **Landing Page**: Hero section features a dynamic rift opening animation, projecting data as light onto the user's screen.
-*   **Optimization**:
-    *   Ingest dataset into a single VeloVFS CAS blob.
-    *   Mount using `FUSE_PASSTHROUGH` or DAX.
-    *   **Result**: Random access patterns achieve near-sequential read performance.
 
 ---
 
-## 4. Operational Modes
+## 5. Operational Modes
 
 | Mode | Backend | Use Case |
 |:---|:---|:---|
@@ -119,7 +115,7 @@ To eliminate muscle-memory friction, `rift` supports transparent shell hooks.
 
 ---
 
-## 5. Ecosystem Integration
+## 6. Ecosystem Integration
 
 To ensure seamless adoption, we provide adapters for common tools:
 
@@ -129,7 +125,7 @@ To ensure seamless adoption, we provide adapters for common tools:
 
 ---
 
-## 6. Adoption Strategy: Bottom-Up Utility
+## 7. Adoption Strategy: Bottom-Up Utility
 
 The strategy focuses on providing immediate, standalone value to engineers:
 1.  **Solve a Specific Pain Point**: Fix the "slow `node_modules`" or "slow dataloading" problem first.

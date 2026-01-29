@@ -133,6 +133,10 @@ Aligning with the philosophy "Maximize Sharing, Minimize I/O", VeloVFS implement
     *   **Benefit**: 1000 Agents loading `torch` consume exactly **0 bytes** of additional physical RAM for the library code. It becomes a pure pointer mapping operation.
     *   **Result**: "Disk" becomes just a backup. Execution happens entirely in shared memory.
 
+---
+
+## 6. Reference Implementation (Proof of Concept)
+
 ```rust
 //! VeloVFS Reference Implementation (Proof of Concept)
 //! 
