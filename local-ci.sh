@@ -1,18 +1,28 @@
 #!/bin/bash
 set -e
 
-echo "=== Velo Rift Local CI ==="
+MODE="host"
 
-# 1. Build Base Image (cached)
-echo "[*] Building Base Image..."
-docker build -t velo-ci-base -f Dockerfile.base .
+if [[ "$1" == "--docker" ]]; then
+    MODE="docker"
+fi
 
-# 2. Build CI Image
-echo "[*] Building CI Image..."
-docker build -t velo-ci-e2e -f Dockerfile.ci .
+echo "=== Velo Rift Local CI ($MODE) ==="
 
-# 3. Run Tests
-echo "[*] Running Test Suite..."
-docker run --rm --privileged velo-ci-e2e
+if [[ "$MODE" == "docker" ]]; then
+    # Docker Mode
+    echo "[*] Building Base Image (Layer Caching Enabled)..."
+    docker build -t velo-ci-base -f Dockerfile.base .
+
+    echo "[*] Building CI Image..."
+    docker build -t velo-ci-e2e -f Dockerfile.ci .
+
+    echo "[*] Running Test Suite in Docker..."
+    docker run --rm --privileged velo-ci-e2e
+else
+    # Host Mode (macOS/Linux)
+    echo "[*] Running Test Suite on Host..."
+    ./test.sh
+fi
 
 echo "=== Local CI Passed ==="

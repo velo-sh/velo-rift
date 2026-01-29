@@ -5,7 +5,12 @@ echo "=== Velo Rift E2E Verification ==="
 
 # 1. Build project
 echo "[*] Building Velo Rift..."
-cargo build --release
+# Only rebuild if binary is missing, explicitly requested, or in CI
+if [ ! -f "target/release/velo" ] || [ "$1" == "--rebuild" ] || [ -n "$CI" ]; then
+    cargo build --release
+else
+    echo "Skipping build (target/release/velo exists). Use --rebuild to force."
+fi
 
 # Add binaries to path
 export PATH=$PATH:$(pwd)/target/release
