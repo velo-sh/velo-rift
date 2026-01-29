@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/velo-cas",
     "crates/velo-manifest",
+    "crates/velo-pack",
     "crates/velo-shim",
     "crates/velo-cli",
 ]
