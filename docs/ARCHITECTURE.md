@@ -132,7 +132,7 @@ All tenant runtime data lives in a high-performance memory-backed location.
 │   │   └── merged/             # The Tenant's Rootfs (Pivot Root Target)
 │   └── tenant_B/
 │
-└── cas_store/                  # The Raw Blob Store (Optional: can be on NVMe)
+└── the_source/                 # The Source (Raw Blob Store, Matrix reference)
     ├── a8/
     │   └── f9c1...             # Raw Content BLOB (BLAKE3)
     └── b2/
@@ -352,7 +352,7 @@ unshare(
 
 ### 8.3 OverlayFS In-Depth Mechanics
 
-OverlayFS is the core technology enabling the "看起来可写，实际上共享" illusion.
+OverlayFS is the core technology enabling the "appears writable, actually shared" illusion.
 
 **Layer Architecture**:
 ```text
@@ -430,7 +430,7 @@ For maximum performance without FUSE overhead, Velo uses syscall interception:
 [ Linux Kernel ]
        |
        v
-[ Physical RAM (CAS Store) ]  <--- Zero-copy mmap
+[ Physical RAM (The Source) ]  <--- Zero-copy mmap
 ```
 
 **Intercepted Syscalls**:
@@ -441,7 +441,7 @@ For maximum performance without FUSE overhead, Velo uses syscall interception:
 
 ### 9.2 The Manifest Data Structure
 
-Manifest provides "路径 → Hash" mapping with two layers:
+Manifest provides "Path → Hash" mapping with two layers:
 
 **A. Base Layer (Immutable, Shared)**
 *   Contains: System libraries, common packages
@@ -535,7 +535,7 @@ PEP 683 enables truly read-only shared memory for Python objects:
 
 ```python
 # Standard Python: Reference counting on every access
-obj = shared_numpy_array  # Py_INCREF() 写入内存 → Cache失效
+obj = shared_numpy_array  # Py_INCREF() writes to memory → Cache invalidation
 
 # PEP 683 Mode: Immortal objects skip refcount
 # Reference count locked at special value, never modified
@@ -1802,7 +1802,7 @@ main()
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│  L1: Host Local CAS (/mnt/velo_ram_disk/cas_store)     │
+│  L1: Host Local CAS (/mnt/velo_ram_disk/the_source)    │
 │  - Memory-backed, ~10GB                                 │
 │  - Latency: μs (memory access)                          │
 └─────────────────────────────────────────────────────────┘
@@ -5166,7 +5166,7 @@ VeloVFS:
   Path = Key in hash map
   Hash(Path) → Direct lookup → Data
 
-Philosophy: "全路径即内容，内容即 ID"
+Philosophy: "Full Path = Content = ID"
 (The full path IS the content, content IS the ID)
 ```
 
@@ -7160,7 +7160,7 @@ Location is irrelevant. Content is eternal.
 
 ---
 
-# Part X: Day-2 Operations (运维)
+# Part X: Day-2 Operations
 
 ---
 
@@ -7727,7 +7727,7 @@ Phased delivery strategy to manage complexity.
 
 | Component | Deliverable |
 |-----------|-------------|
-| CAS Store | BLAKE3 hashing, ab/cd/ directory layout |
+| The Source | BLAKE3 hashing, ab/cd/ directory layout |
 | Manifest | LMDB-backed path→hash lookup |
 | Intercept | LD_PRELOAD shim for `open()`, `read()`, `stat()` |
 | Validation | `python main.py` reads file from CAS |
@@ -8057,9 +8057,9 @@ fn gc_cycle() {
     let reachable = walk_reachability_graph(active_snapshots);
     
     // 2. Sweep: Delete unreachable blobs (with grace period)
-    for blob in cas_store.all_blobs() {
+    for blob in the_source.all_blobs() {
         if !reachable.contains(blob.hash) && blob.age > GRACE_PERIOD {
-            cas_store.delete(blob.hash);
+            the_source.delete(blob.hash);
         }
     }
 }
