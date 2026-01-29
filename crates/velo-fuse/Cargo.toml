@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# fuser = { version = "0.14", optional = true }
 libc = "0.2"
 velo-cas.workspace = true
 velo-manifest.workspace = true
@@ -14,9 +13,9 @@ log = "0.4"
 env_logger = "0.11"
 anyhow.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "0.14" }
+
 [features]
 default = []
-fuse = []
-
-[dev-dependencies]
-tempfile = "3.14"
+fuse = []  # Enables FUSE support where available (Linux)
