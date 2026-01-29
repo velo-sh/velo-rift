@@ -7,6 +7,7 @@ members = [
     "crates/velo-runtime",
     "crates/velo-shim",
     "crates/velo-fuse",
+    "crates/velo-lock",
     "crates/velo-cli",
 ]
 
