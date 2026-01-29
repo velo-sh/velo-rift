@@ -220,6 +220,24 @@ if [ "$OS" == "Linux" ]; then
          exit 1
     fi
 
+    # Test Large File Integrity (Stress Test)
+    echo "Checking Large File Integrity (10MB)..."
+    if [ -f "$MOUNT_DIR/data/bigfile.bin" ]; then
+        # Calculate checksums
+        SRC_SUM=$(md5sum "$DATA_DIR/bigfile.bin" | awk '{print $1}')
+        MNT_SUM=$(md5sum "$MOUNT_DIR/data/bigfile.bin" | awk '{print $1}')
+        
+        if [ "$SRC_SUM" == "$MNT_SUM" ]; then
+            echo "[PASS] Large file integrity verified ($SRC_SUM)."
+        else
+            echo "ERROR: Checksum mismatch. Src: $SRC_SUM, Mnt: $MNT_SUM"
+            exit 1
+        fi
+    else
+        echo "ERROR: Big file not found in mount."
+        exit 1
+    fi
+
     # Cleanup
     kill $MOUNT_PID || true
     # Force unmount just in case
