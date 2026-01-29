@@ -151,7 +151,7 @@ This is the compiled "Bytecode" derived from `uv.lock`. It bridges the intent (P
 We "flatten" the Git graph into Key-Value pairs for O(1) access.
 
 *   **Database 1: Objects**
-    *   **Key**: `[Hash (20 bytes)]`
+    *   **Key**: `[Hash (20 bytes)]` ← *SHA-1 for Git compatibility; Velo internal uses BLAKE3 (32 bytes)*
     *   **Value**: `[Type (1 byte)] + [Payload]`
 *   **Database 2: References**
     *   **Key**: `refs/tenants/A/HEAD`
@@ -197,7 +197,7 @@ When `velo.lock` says "Tenant A needs Numpy 1.26":
 Details of the syscall sequence to build the "Standard VM Illusion".
 
 ### 5.1 The Layer Stack
-1.  **LowerDir 1 (Base OS)**: `/opt/images/debian-slim` (Contains `glibc`, `python3`, `bash`).
+1.  **LowerDir 1 (Base OS)**: `/opt/images/alpine-base` (or `debian-slim` for glibc compat).
 2.  **LowerDir 2 (Injects)**: `/mnt/velo_ram_disk/tenants/A/lower` (The Hard Link Farm constructed above).
 3.  **UpperDir**: `/mnt/velo_ram_disk/tenants/A/upper` (Private Tmpfs).
 
@@ -211,7 +211,7 @@ velo-internal populate-links --lock velo.lock --target .../lower
 
 # 3. Mount OverlayFS
 mount -t overlay overlay \
-    -o lowerdir=/mnt/velo_ram_disk/tenants/A/lower:/opt/images/debian-slim \
+    -o lowerdir=/mnt/velo_ram_disk/tenants/A/lower:/opt/images/alpine-base \
     -o upperdir=/mnt/velo_ram_disk/tenants/A/upper \
     -o workdir=/mnt/velo_ram_disk/tenants/A/work \
     /mnt/velo_ram_disk/tenants/A/merged
@@ -226,7 +226,9 @@ mount --bind /dev/shm/tenant_A /mnt/velo_ram_disk/tenants/A/merged/dev/shm
 
 The traffic flow for "Miss & Backfill".
 
-### 6.1 The Hierarchy
+> **Note**: Cache layer definitions (L1-L4) vary by deployment topology. This section describes the **standard 3-tier** model. See §15 for multi-region deployments with additional layers.
+
+### 6.1 The Hierarchy (Standard 3-Tier)
 *   **L1: Host Cache** (`/mnt/velo_ram_disk/pool`)
     *   Serving latency: **< 1ms** (Link)
     *   Hit rate goal: 95%
@@ -734,6 +736,8 @@ impl HashRegistry {
 *   Array access `O(1)` vs HashMap lookup
 *   `u32` fits in single cache line with neighbors
 *   32-bit comparison = single CPU instruction
+
+> **Note**: For hot paths where speed is critical, 32-bit indices suffice. For long-lived storage with embedded metadata flags, use the 48-bit VeloId format below.
 
 ### 13.3 Bit-Packed IDs (48-bit ID + 16-bit Flags)
 
@@ -7933,8 +7937,8 @@ sysctl -w vm.max_map_count=262144
 
 ---
 
-*Document Version: 21.0*
+*Document Version: 22.0*
 *Last Updated: 2026-01-29*
 *Total Sections: 111 + FAQ*
-*New in v21: §108 Data Scrubbing, §109 Hot-Upgrade, §110 Disk Quotas, §111 Platform Matrix*
+*v22 Fixes: Cache layer terminology clarified, base OS unified to alpine-base, SHA-1/BLAKE3 distinction noted*
 *Status: Production-Ready Specification*
