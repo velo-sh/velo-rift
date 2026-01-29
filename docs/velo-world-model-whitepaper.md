@@ -37,9 +37,9 @@ As a result:
 
 ### 2. Mutable State Is Not Verifiable
 
-In today’s systems, it is effectively impossible to answer:
+In today's systems, it is effectively impossible to answer:
 
-> *“In exactly what world was this binary produced?”*
+> *"In exactly what world was this binary produced?"*
 
 This becomes catastrophic in the age of AI agents, where:
 - Execution must be auditable
@@ -60,9 +60,9 @@ The file system is merely the *final side effect*, not the authority.
 
 ---
 
-## Velo’s Core Insight
+## Velo's Core Insight
 
-> **The problem is not that file systems are too slow.
+> **The problem is not that file systems are too slow.  
 > The problem is that the world model itself is wrong.**
 
 Velo does not attempt to patch the inode world.
@@ -88,7 +88,7 @@ If two paths are equal, their contents are provably identical.
 
 ### 2. Snapshots Are First‑Class Citizens
 
-The world is not a mutable “current state”.
+The world is not a mutable "current state".
 
 It is an **immutable snapshot**.
 
@@ -128,7 +128,7 @@ It exists to:
 There is:
 - no inode traversal
 - no runtime path ambiguity
-- no “works on my machine” failure mode
+- no "works on my machine" failure mode
 
 ---
 
@@ -163,22 +163,36 @@ You are defining:
 
 ---
 
-## Velo’s Ambition — and Its Boundary
+## Velo's Ambition — and Its Boundaries
 
-Velo does not attempt to:
-- replace operating systems
-- rewrite programming languages
+Velo is **deliberately narrow**.
 
-Velo focuses on one thing:
+### What Velo Does NOT Attempt:
 
-> **Defining a correct world model for modern software and AI.**
+| Domain | Owner | Velo's Stance |
+|--------|-------|---------------|
+| Build graph semantics | Bazel, Buck | We don't model dependencies between targets |
+| Functional evaluation | Nix | We don't evaluate derivations |
+| Process isolation | Docker, gVisor | We don't sandbox syscalls |
+| Distributed consensus | etcd, Raft | We don't coordinate clusters |
+| Package resolution | uv, npm, cargo | We don't solve version conflicts |
+
+### What Velo DOES Do:
+
+> **Make file access instant, reproducible, and verifiable.**
+
+That's it. One thing. Done well.
 
 ---
 
 ## One‑Sentence Summary
 
-> **If software is becoming an autonomous, living entity,
+> **If software is becoming an autonomous, living entity,  
 > it requires a world that does not shift beneath its feet.**
 
 **Velo is that world.**
 
+---
+
+*Document Version: 2.0*  
+*Last Updated: 2026-01-29*
