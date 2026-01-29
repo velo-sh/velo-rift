@@ -11,7 +11,7 @@
 mod imp {
     use std::collections::HashMap;
     use std::ffi::OsStr;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::time::{Duration, UNIX_EPOCH};
 
     use fuser::{
@@ -137,7 +137,7 @@ mod imp {
             FileAttr {
                 ino: inode,
                 size: vnode.size,
-                blocks: (vnode.size + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                blocks: vnode.size.div_ceil(BLOCK_SIZE),
                 atime: UNIX_EPOCH + Duration::from_secs(vnode.mtime),
                 mtime: UNIX_EPOCH + Duration::from_secs(vnode.mtime),
                 ctime: UNIX_EPOCH + Duration::from_secs(vnode.mtime),

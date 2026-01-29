@@ -37,7 +37,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::unix::io::RawFd;
-use std::path::PathBuf;
+
 use std::ptr;
 use std::sync::OnceLock;
 
@@ -200,6 +200,7 @@ fn path_from_cstr(path: *const c_char) -> Option<String> {
 }
 
 /// Get the next available fake FD (negative to avoid conflicts)
+#[allow(dead_code)]
 fn allocate_velo_fd() -> RawFd {
     static NEXT_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1000);
     NEXT_FD.fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
@@ -291,7 +292,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -
         // The shim's read/close/lseek hooks will see it's not in FD_MAP and pass it to libc,
         // which works perfectly for memfd.
         debug!(fd = memfd, "Opened via memfd_create");
-        return memfd;
+        memfd
     }
 
     #[cfg(not(target_os = "linux"))]

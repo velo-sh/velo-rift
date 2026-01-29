@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tokio::net::UnixListener;
+
 use tokio::signal;
 
 #[derive(Parser)]
@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
 
 async fn start_daemon() -> Result<()> {
     println!("velod: Starting daemon...");
-    
+
     // In a real implementation, we would manage the socket file location properly
     // and handle cleanup. For MVP, we'll just print a message.
     // let socket_path = "/tmp/velod.sock";
