@@ -6,6 +6,56 @@
 
 ---
 
+## 0. Design Philosophy: "Full Path = Content = ID"
+
+VeloVFS is built on a single, powerful first principle that fundamentally changes how filesystems work:
+
+### 0.1 The Core Equation
+
+```text
+Traditional FS:  Path → (Tree Traversal) → Inode → Block → Content
+VeloVFS:         Path → Hash(Path) → Content_ID → mmap(Pointer)
+```
+
+**In an immutable snapshot**, the full path string `/src/utils/helper.js` uniquely determines:
+1. **The content bytes** (there's no ambiguity about which version)
+2. **The content hash** (BLAKE3 of those bytes)
+3. **The physical location** (CAS offset or packfile pointer)
+
+Therefore: `Hash(Full_Path) → Content_ID` — The directory tree disappears.
+
+### 0.2 Implications
+
+| Traditional FS Problem | VeloVFS Solution |
+|------------------------|-----------------|
+| O(depth) tree traversal for `open()` | O(1) hash lookup |
+| String comparison on each level | Single integer comparison |
+| Directory locking for concurrent access | Lock-free (immutable data) |
+| Random I/O for nested paths | Sequential packfile access |
+
+### 0.3 The Semantic Gap Bridge
+
+```text
+Application Layer:  "Load React library"     (Semantic intent)
+                          ↓
+Traditional FS:     "Read Block #998"         (No context)
+                          ↓
+VeloVFS:            "Hash 0xABC → mmap ptr"   (Content-aware)
+```
+
+VeloVFS understands that a hash represents a complete logical unit — enabling:
+- **Atomic deduplication**: Same content = same hash = stored once
+- **Intelligent packing**: Related files placed contiguously
+- **Zero-copy delivery**: Return pointer, not copied bytes
+
+### 0.4 Design Mantra
+
+> "VeloVFS is not a storage system — it's a **data virtualization layer**.  
+> Below: Leverage cheap commodity storage (S3, NVMe, Ceph).  
+> Above: Deliver optimized, content-aware data views for high-density compute."
+
+---
+
 ## 1. System Directory Layout (Physical View)
 
 To achieve the "Hard Link Farm" efficiency and "OverlayFS" illusion, Velo enforces a strict physical layout on the Host Machine.
@@ -1172,6 +1222,128 @@ struct CommandRing {
 *   Fixed-size array allocated at startup (static or stack)
 *   Use `& RING_MASK` instead of `% RING_SIZE` for wrap-around
 *   Cache-line padding (64 bytes) between head and tail
+
+### 22.3 io_uring Integration (The Ultimate Async Backend)
+
+The single-threaded core must never block on syscalls. io_uring provides kernel-level async I/O without thread pool overhead.
+
+**Architecture**:
+```text
+┌─────────────────────────────────────────────────────────┐
+│                   VeloVFS Core Thread                    │
+│  ┌─────────────┐         ┌─────────────────────────┐    │
+│  │ State Machine│ ──────→ │ io_uring Submission Q  │    │
+│  │ (No blocking)│         │ (SQ Ring)              │    │
+│  └─────────────┘         └───────────┬─────────────┘    │
+│         ↑                            │                   │
+│         │ Completions                │ Syscall batching  │
+│  ┌──────┴──────┐                     ↓                   │
+│  │ io_uring    │         ┌─────────────────────────┐    │
+│  │ Completion Q│ ←────── │     Linux Kernel        │    │
+│  │ (CQ Ring)   │         └─────────────────────────┘    │
+│  └─────────────┘                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Key Operations**:
+```rust
+use io_uring::{IoUring, opcode, types};
+
+struct VeloIoEngine {
+    ring: IoUring,
+    pending: HashMap<u64, PendingOp>,
+}
+
+impl VeloIoEngine {
+    fn submit_open(&mut self, path: &CStr, callback_id: u64) {
+        let entry = opcode::OpenAt::new(types::Fd(-1), path.as_ptr())
+            .flags(libc::O_RDONLY | libc::O_NOATIME)
+            .build()
+            .user_data(callback_id);
+        
+        unsafe { self.ring.submission().push(&entry).unwrap(); }
+    }
+    
+    fn submit_read(&mut self, fd: i32, buf: &mut [u8], offset: u64, callback_id: u64) {
+        let entry = opcode::Read::new(types::Fd(fd), buf.as_mut_ptr(), buf.len() as u32)
+            .offset(offset)
+            .build()
+            .user_data(callback_id);
+        
+        unsafe { self.ring.submission().push(&entry).unwrap(); }
+    }
+    
+    fn poll_completions(&mut self) -> Vec<Completion> {
+        self.ring.submit_and_wait(0).unwrap();  // Non-blocking
+        
+        self.ring.completion()
+            .map(|cqe| Completion {
+                callback_id: cqe.user_data(),
+                result: cqe.result(),
+            })
+            .collect()
+    }
+}
+```
+
+**Benefits over Thread Pool**:
+| Metric | Thread Pool | io_uring |
+|--------|-------------|----------|
+| Context switches | Per syscall | Batched |
+| Memory overhead | Stack per thread | Single ring buffer |
+| Latency | ~2-5 µs | ~0.5-1 µs |
+| Throughput | Limited by threads | Kernel-limited |
+
+### 22.4 ByteDance Monoio Reference Architecture
+
+VeloVFS's "Brain + Muscle" design is inspired by [ByteDance Monoio](https://github.com/bytedance/monoio), a thread-per-core Rust runtime.
+
+**Core Principles from Monoio**:
+
+1. **Thread-per-Core Model**
+   - Each CPU core runs one event loop
+   - No cross-thread data sharing = No locks
+   - Work is partitioned by hash sharding
+
+2. **Buffer Ownership for io_uring**
+   ```rust
+   // Problem: io_uring holds buffer pointer after submission
+   // If buffer is freed before completion = Use-After-Free
+   
+   // Monoio solution: Slab allocator with stable addresses
+   struct IoBufferPool {
+       slabs: Vec<Box<[u8; 4096]>>,  // Pinned memory
+       free_list: Vec<usize>,
+   }
+   
+   impl IoBufferPool {
+       fn alloc(&mut self) -> &mut [u8] {
+           let idx = self.free_list.pop().unwrap();
+           &mut self.slabs[idx]  // Stable address until reclaim
+       }
+       
+       fn reclaim(&mut self, idx: usize) {
+           // Only after io_uring completion
+           self.free_list.push(idx);
+       }
+   }
+   ```
+
+3. **Zero-Copy Receive with Fixed Buffers**
+   ```rust
+   // Register buffers with kernel at startup
+   ring.register_buffers(&buffer_pool.slabs)?;
+   
+   // Use pre-registered buffer in read
+   let entry = opcode::ReadFixed::new(fd, buf_idx, len)
+       .build();
+   // Kernel reads directly into our buffer - no memcpy
+   ```
+
+**VeloVFS Adoption Strategy**:
+- Phase 1: Use blocking thread pool (simpler, works everywhere)
+- Phase 2: Add io_uring backend for Linux 5.6+
+- Phase 3: Evaluate Monoio as full runtime replacement
 
 ---
 
@@ -7329,6 +7501,262 @@ Reality: Completely sandboxed, zero write capability
 
 ---
 
+## 106. Pre-Flight Defensive Programming
+
+Before coding begins, implement these "defense-in-depth" patterns to prevent production incidents.
+
+### 106.1 Integrity Firewall (Hash Verification)
+
+**Risk**: Malicious Tenant or compromised P2P Peer sends Blob with Hash A but Content B.
+
+**Rule**: Trust-but-verify on all write paths.
+
+```rust
+enum PathType {
+    Read,   // Hot path: trust hash, maximize speed
+    Write,  // Cold path: distrust input, force verify
+}
+
+fn ingest_blob(hash: Blake3Hash, data: &[u8], path_type: PathType) -> Result<()> {
+    match path_type {
+        PathType::Read => {
+            // Hot path: hash already verified at origin
+            store.put(hash, data)
+        },
+        PathType::Write => {
+            // Cold path: ALWAYS re-verify before persisting
+            let computed = blake3::hash(data);
+            if computed.as_bytes() != &hash {
+                return Err(IntegrityViolation {
+                    expected: hash,
+                    actual: computed,
+                });
+            }
+            store.put(hash, data)
+        }
+    }
+}
+```
+
+**Enforcement Points**:
+| Source | Verification |
+|--------|-------------|
+| P2P Peer (L3) | **Mandatory** |
+| Remote L2 Cache | **Mandatory** |
+| Local L1 Cache | Skip (trusted) |
+| Tenant Write-Back | **Mandatory** |
+
+### 106.2 vm.max_map_count Hard Dependency Check
+
+**Risk**: Linux default `vm.max_map_count` (65530) insufficient for large deployments. Velo relies heavily on mmap.
+
+**Calculation**: 1000 Tenants × 1000 Blobs = 1M mappings → instant crash.
+
+**Solution**: Fail-fast at startup.
+
+```rust
+const MIN_MAP_COUNT: u64 = 262144;
+
+fn preflight_check() -> Result<()> {
+    let current = fs::read_to_string("/proc/sys/vm/max_map_count")?
+        .trim()
+        .parse::<u64>()?;
+    
+    if current < MIN_MAP_COUNT {
+        eprintln!(
+            "FATAL: vm.max_map_count is {} (required: {})\n\
+             Fix: sudo sysctl -w vm.max_map_count={}",
+            current, MIN_MAP_COUNT, MIN_MAP_COUNT
+        );
+        std::process::exit(1);
+    }
+    
+    Ok(())
+}
+```
+
+**Additional Preflight Checks**:
+```rust
+fn all_preflight_checks() -> Result<()> {
+    check_vm_max_map_count()?;
+    check_ulimit_nofile(MIN_FD_COUNT)?;    // FD cache needs headroom
+    check_inotify_watches()?;               // For hot-reload scenarios
+    check_overlayfs_available()?;           // Kernel module loaded
+    check_user_namespace_enabled()?;        // /proc/sys/user/max_user_namespaces
+    Ok(())
+}
+```
+
+### 106.3 OverlayFS Whiteout Handling
+
+**Context**: When Tenant deletes file from lowerdir, OverlayFS creates Whiteout (char device 0:0).
+
+**Problem**: Commit scanner must not treat Whiteout as regular file.
+
+```rust
+fn scan_upperdir_for_commit(upperdir: &Path) -> Vec<CommitEntry> {
+    let mut entries = vec![];
+    
+    for entry in WalkDir::new(upperdir) {
+        let path = entry.path();
+        let metadata = path.symlink_metadata()?;
+        
+        if is_whiteout(&metadata) {
+            // Whiteout file: Mark as DELETED in manifest
+            // DO NOT hash, DO NOT store in CAS
+            let relative = path.strip_prefix(upperdir)?;
+            entries.push(CommitEntry::Deleted(relative.to_owned()));
+        } else if metadata.is_file() {
+            // Regular file: Hash and store
+            let hash = blake3::hash_file(path)?;
+            entries.push(CommitEntry::Modified {
+                path: relative,
+                hash,
+            });
+        }
+    }
+    
+    entries
+}
+
+fn is_whiteout(meta: &Metadata) -> bool {
+    // Whiteout = character device with major:minor = 0:0
+    use std::os::unix::fs::MetadataExt;
+    meta.file_type().is_char_device() && meta.rdev() == 0
+}
+```
+
+**Manifest Tombstone Entry**:
+```json
+{
+  "/etc/deleted-config.yaml": { "status": "DELETED" }
+}
+```
+
+### 106.4 Inode Exhaustion Prevention
+
+**Risk**: CAS deduplicates content, but Link Farm still creates physical inode per hardlink entry. ext4 with default settings may exhaust inodes before disk space.
+
+**Detection**:
+```rust
+fn check_inode_health(mount_point: &Path) -> HealthStatus {
+    let stat = nix::sys::statvfs::statvfs(mount_point)?;
+    let used_ratio = 1.0 - (stat.files_free() as f64 / stat.files() as f64);
+    
+    match used_ratio {
+        r if r > 0.95 => HealthStatus::Critical("Inode exhaustion imminent"),
+        r if r > 0.80 => HealthStatus::Warning("Inode usage high"),
+        _ => HealthStatus::Ok,
+    }
+}
+```
+
+**Operational Recommendations**:
+
+| Filesystem | Recommendation |
+|------------|----------------|
+| **XFS** | ✅ Preferred — Dynamic inode allocation |
+| **ext4** | Format with: `mkfs.ext4 -i 1024 /dev/sdX` (1 inode per 1KB → 4x more inodes) |
+| **Btrfs** | ✅ Good — Also dynamic |
+| **tmpfs** | N/A — Memory-based, no inode limit |
+
+---
+
+## 107. Implementation Roadmap
+
+Phased delivery strategy to manage complexity.
+
+### Milestone 1: The Reader (Read-Only Core)
+
+**Goal**: Minimal viable VFS that can intercept reads.
+
+| Component | Deliverable |
+|-----------|-------------|
+| CAS Store | BLAKE3 hashing, ab/cd/ directory layout |
+| Manifest | LMDB-backed path→hash lookup |
+| Intercept | LD_PRELOAD shim for `open()`, `read()`, `stat()` |
+| Validation | `python main.py` reads file from CAS |
+
+**Exit Criteria**: "Hello World" Python script runs successfully with VeloVFS intercepting all file I/O.
+
+---
+
+### Milestone 2: The Warehouse (Hard Link Farm)
+
+**Goal**: Reconstruct package trees from CAS.
+
+| Component | Deliverable |
+|-----------|-------------|
+| Lock Parser | Parse `velo.lock` (uv.lock derived) |
+| Link Farm | Construct hardlink tree from CAS |
+| OverlayFS | Mount merged view for tenant |
+| Validation | `import numpy` works |
+
+**Exit Criteria**: `uv pip install numpy` completes in <1s, numpy actually runs.
+
+---
+
+### Milestone 3: The Brain (Single-Threaded Core)
+
+**Goal**: Extreme performance via io_uring.
+
+| Component | Deliverable |
+|-----------|-------------|
+| Core Thread | Ring Buffer command processing |
+| io_uring | Async open/read submissions |
+| FD Cache | LRU pool with `pread()` |
+| State Machine | Blob lifecycle (Idle→Opening→Ready) |
+| Validation | 100x QPS improvement in benchmarks |
+
+**Exit Criteria**: Sustain 1M+ file lookups/second on single core.
+
+---
+
+### Milestone 4: The Network (Distributed Mode)
+
+**Goal**: Multi-node cache sharing.
+
+| Component | Deliverable |
+|-----------|-------------|
+| L2 Cache | Redis/S3 integration |
+| L3 P2P | Gossip-based peer discovery |
+| Lazy Load | Page-fault-driven blob fetch |
+| Validation | Container starts before full download |
+
+**Exit Criteria**: Cold start new node in <5s with only metadata prefetch.
+
+---
+
+### Milestone 5: Production Hardening
+
+**Goal**: Enterprise-ready deployment.
+
+| Component | Deliverable |
+|-----------|-------------|
+| GC | Mark-and-Sweep with grace period |
+| Security | UserNS, Seccomp, memfd sealing |
+| Monitoring | Prometheus metrics, health endpoints |
+| Docs | Ops runbook, troubleshooting guide |
+| Validation | Survive chaos testing |
+
+**Exit Criteria**: 30-day production burn-in with zero data loss.
+
+---
+
+### Implementation Timeline (Estimated)
+
+```text
+Month 1-2:  Milestone 1 (Reader)
+Month 2-3:  Milestone 2 (Warehouse)  
+Month 3-5:  Milestone 3 (Brain)
+Month 5-7:  Milestone 4 (Network)
+Month 7-9:  Milestone 5 (Hardening)
+
+Total: ~9 months to production-ready
+```
+
+---
+
 # FAQ & Troubleshooting
 
 ## Q: Why does `df -h` show wrong disk space?
@@ -7353,7 +7781,8 @@ sysctl -w vm.max_map_count=262144
 
 ---
 
-*Document Version: 18.0*
+*Document Version: 20.0*
 *Last Updated: 2026-01-29*
-*Total Sections: 105 + FAQ*
+*Total Sections: 107 + FAQ*
+*New in v20: §0 Design Philosophy, §22.3-22.4 io_uring/Monoio, §106 Pre-Flight Checks, §107 Implementation Roadmap*
 *Status: Production-Ready Specification*
