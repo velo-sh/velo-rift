@@ -59,3 +59,33 @@ The new `zero_copy_ingest.rs` uses:
 - Test with larger files (1MB, 100MB, 1GB)
 - Test on network filesystems (NFS)
 - Evaluate if streaming_pipeline watch-first pattern is still needed
+
+---
+
+## Real-World Benchmark: node_modules (139K files)
+
+**Date**: 2026-01-31  
+**Test Data**: Next.js + React project with ~150 dependencies  
+**Script**: `scripts/benchmark_node_modules.sh`
+
+| Metric | Value |
+|--------|-------|
+| **Files** | 139,587 |
+| **Directories** | 14,154 |
+| **Total Size** | 995 MB |
+| **Ingest Time** | 54 seconds |
+| **Throughput** | **~2,585 files/sec** |
+| **Mode** | Solid Tier-2 (hard_link) |
+
+### Verification
+
+```
+$ stat /tmp/vrift-demo/node_modules/lodash/package.json
+  inode: 378565806, links: 2  # hard_link confirmed
+```
+
+### Notes
+
+- Excludes `puppeteer/.local-chromium` (macOS code-signed bundle)
+- LMDB manifest committed to `.vrift/manifest.lmdb`
+- Time is pure ingest (excludes npm download time)
