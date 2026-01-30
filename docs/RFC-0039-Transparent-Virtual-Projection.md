@@ -40,8 +40,53 @@ Velo Rift™ provides two specific modes to balance safety and performance.
 - **Mechanism**: `Live Ingest` + `Move`.
 - **Rollback Experience**: **Virtual-Only**. Deactivating the layer leaves the directory "empty" until Velo performs an inverse-ingest (Restoration) to bring physical files back from the CAS.
 
-## 5. Implementation Notes
-- **Persistent State**: `vrift active` creates a long-lived Session, maintaining the projection across multiple shell instances.
-- **ABI Continuity**: The Session persists the **ABI_Context**, ensuring binary consistency for development.
-- **Shim Performance**: Capture occurs on `close()`, ensuring native disk speeds during active write cycles.
-- **SIP Compliance**: On macOS, `active` mode handles Entitlements and SIP-stripping automatically.
+## 5. Atomic Implementation Strategy
+
+To guarantee data safety, Velo Rift™ adheres to strict atomic syscall sequences.
+
+### 5.1 Solid Mode (Link-to-CAS)
+The goal is to shadow the file without ever removing the source, ensuring zero data loss risk.
+
+```rust
+fn ingest_solid(source: Path) -> Result<()> {
+    // 1. Calculate Hash (Read-Only)
+    let hash = blake3(&source)?;
+    let cas_target = get_cas_path(hash);
+
+    // 2. Atomic Link (The "Anchor")
+    // We create a hardlink in CAS pointing to the source inode.
+    // If system crashes before this, nothing happened.
+    // If system crashes after this, data is safely anchored in CAS.
+    // Source file is NEVER moved or deleted.
+    std::fs::hard_link(&source, &cas_target)?;
+    
+    // 3. Update Manifest
+    manifest.insert(hash, source);
+    Ok(())
+}
+```
+
+### 5.2 Phantom Mode (Atomic Replacement)
+The goal is to replace the physical file with a virtual entry atomically.
+
+```rust
+fn ingest_phantom(source: Path) -> Result<()> {
+    let hash = blake3(&source)?;
+    let cas_target = get_cas_path(hash);
+
+    // 1. Rename (Atomic Move)
+    // rename() is atomic on POSIX for same-filesystem paths.
+    // The file exists either at 'source' OR 'cas_target', never neither.
+    std::fs::rename(&source, &cas_target)?;
+
+    // 2. Update Manifest
+    manifest.insert(hash, source);
+    Ok(())
+}
+```
+
+## 6. Implementation Notes
+- **Persistent State**: `vrift active` creates a long-lived Session.
+- **ABI Continuity**: The Session persists the **ABI_Context**, ensuring that a long-running development environment remains binary-consistent.
+- **Shim Performance**: Shadow capturing avoids the latency of synchronous hashing during small `write()` calls by deferring the ingest until `close()`.
+- **SIP Compliance**: On macOS, `active` mode handles Entitlements and SIP-stripping for children automatically.
