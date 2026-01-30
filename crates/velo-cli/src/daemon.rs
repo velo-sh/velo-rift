@@ -18,7 +18,7 @@ pub async fn check_status() -> Result<()> {
 
     match resp {
         VeloResponse::HandshakeAck { server_version } => {
-            println!("Daemon Connected. Server v{}", server_version);
+            tracing::info!("Daemon Connected. Server v{}", server_version);
         }
         _ => anyhow::bail!("Unexpected handshake response: {:?}", resp),
     }
@@ -30,7 +30,8 @@ pub async fn check_status() -> Result<()> {
 
     match resp {
         VeloResponse::StatusAck { status } => {
-            println!("Daemon Status: {}", status);
+            println!("Daemon Status: {}", status); // Keep println for user output
+            tracing::debug!("Daemon Status Details: {}", status);
         }
         _ => anyhow::bail!("Unexpected status response: {:?}", resp),
     }
@@ -50,13 +51,14 @@ pub async fn spawn_command(command: &[String], cwd: PathBuf) -> Result<()> {
         cwd: cwd.to_string_lossy().to_string(),
     };
 
-    println!("Requesting daemon to spawn: {:?}", command);
+    tracing::info!("Requesting daemon to spawn: {:?}", command);
     send_request(&mut stream, req).await?;
     
     let resp = read_response(&mut stream).await?;
     match resp {
         VeloResponse::SpawnAck { pid } => {
-            println!("Daemon successfully spawned process. PID: {}", pid);
+            tracing::info!("Daemon successfully spawned process. PID: {}", pid);
+            println!("Daemon successfully spawned process. PID: {}", pid); // Keep for user
             println!("(Output will be in daemon logs for now)");
         }
         VeloResponse::Error(msg) => {
@@ -101,14 +103,14 @@ async fn connect() -> Result<UnixStream> {
         Ok(stream) => Ok(stream),
         Err(_) => {
             // Attempt to start daemon
-            println!("Daemon not running. Attempting to start...");
+            tracing::info!("Daemon not running. Attempting to start...");
             spawn_daemon()?;
             
             // Retry connection loop
             for _ in 0..10 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 if let Ok(stream) = UnixStream::connect(SOCKET_PATH).await {
-                     println!("Daemon started successfully.");
+                     tracing::info!("Daemon started successfully.");
                      return Ok(stream);
                 }
             }
@@ -133,7 +135,7 @@ fn spawn_daemon() -> Result<()> {
         .find(|path| path.exists())
         .context("Could not find velo-daemon binary")?;
 
-    println!("Spawning daemon: {:?}", daemon_bin);
+    tracing::info!("Spawning daemon: {:?}", daemon_bin);
 
     std::process::Command::new(daemon_bin)
         .arg("start")
@@ -147,6 +149,7 @@ fn spawn_daemon() -> Result<()> {
 }
 
 async fn send_request(stream: &mut UnixStream, req: VeloRequest) -> Result<()> {
+    tracing::debug!("Sending request: {:?}", req);
     let bytes = bincode::serialize(&req)?;
     let len = (bytes.len() as u32).to_le_bytes();
     stream.write_all(&len).await?;

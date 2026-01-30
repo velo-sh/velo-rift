@@ -56,18 +56,31 @@ fn run_isolated_linux(command: &[String], manifest: &Path, cas_root: &Path) -> R
 
     println!("🔒 Setting up isolated container...");
 
+    // Capture current UID/GID before unsharing
+    let uid = nix::unistd::getuid();
+    let gid = nix::unistd::getgid();
+
     // 1. Unshare Namespaces
     // We need NEWNS (Mount), NEWPID (Process), NEWIPC, NEWUTS.
     // NEWUSER is complex (mapping UIDs), skipping for MVP unless root.
     // NEWNET requires network setup, skipping for MVP (host net).
+    // We include CLONE_NEWUSER to allow rootless execution.
     let flags = CloneFlags::CLONE_NEWNS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWIPC
-        | CloneFlags::CLONE_NEWUTS;
+        | CloneFlags::CLONE_NEWUTS
+        | CloneFlags::CLONE_NEWUSER;
 
     unshare(flags).context("Failed to unshare namespaces")?;
 
-    // 2. Fork?
+    // 2. Setup ID Mappings (User Namespace)
+    // Map current user to root (0) inside the namespace
+    // We must do this *before* any mount operations, as we need capabilities.
+    write_id_map("/proc/self/uid_map", uid.as_raw(), 0, 1)?;
+    write_id_map("/proc/self/setgroups", 0, 0, 0)?; // "deny" for setgroups if possible, or just ignore for single user
+    write_id_map("/proc/self/gid_map", gid.as_raw(), 0, 1)?;
+
+    // 3. Fork?
     // unshare(CLONE_NEWPID) only affects *children*. We need to fork to become pid 1 in new ns.
     // Simplified: We assume current process is now the setup process,
     // and we exec into the target. But for PID ns to work, we need a child.
@@ -90,13 +103,28 @@ fn run_isolated_linux(command: &[String], manifest: &Path, cas_root: &Path) -> R
     // Setup Mounts
     setup_mounts(manifest, cas_root)?;
 
-    // 3. Exec Command
+    // 4. Exec Command
     let err = Command::new(&command[0])
         .args(&command[1..])
         .env("VELO_ISOLATED", "1")
         .exec();
 
     anyhow::bail!("Failed to exec: {}", err);
+}
+
+#[cfg(target_os = "linux")]
+fn write_id_map(path: &str, real_id: u32, inside_id: u32, count: u32) -> Result<()> {
+    // Special case for setgroups: usually we write "deny"
+    if path.ends_with("setgroups") {
+         std::fs::write(path, "deny")
+            .with_context(|| format!("Failed to write deny to {}", path))?;
+         return Ok(());
+    }
+
+    let content = format!("{} {} {}", inside_id, real_id, count);
+    std::fs::write(path, content)
+        .with_context(|| format!("Failed to write id map to {}", path))?;
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -146,23 +174,62 @@ fn setup_mounts(manifest_path: &Path, cas_root: &Path) -> Result<()> {
 
     // 3. Mount OverlayFS
     println!("   [Isolation] Mounting OverlayFS...");
-    let overlay = OverlayManager::new(lower_dir, upper_dir, work_dir, merged_dir.clone());
-    overlay.mount().context("Failed to mount OverlayFS")?;
+    let overlay = OverlayManager::new(lower_dir.clone(), upper_dir, work_dir, merged_dir.clone());
+    
+    // Fallback logic variables
+    let mut use_overlay = true;
+    let root_for_pivot = if let Err(e) = overlay.mount() {
+        println!("   [Isolation] ⚠️ OverlayFS mount failed: {}", e);
+        println!("   [Isolation] ⚠️ Falling back to Read-Only Bind Mount (No CoW).");
+        
+        // Fallback: Use lower_dir as root, but make it Read-Only to protect CAS hardlinks.
+        use_overlay = false;
+        
+        // To pivot_root, 'new_root' must be a mount point.
+        // Bind mount lower_dir to itself.
+        // We use nix::mount::mount directly.
+        use nix::mount::{mount, MsFlags};
+        
+        mount(
+            Some(&lower_dir),
+            &lower_dir,
+            None::<&str>,
+            MsFlags::MS_BIND,
+            None::<&str>,
+        ).context("Failed to bind mount lower_dir for fallback")?;
+        
+        // We will maintain it RW for a moment to create .old_root, then remount RO?
+        // Actually, we can create .old_root before remounting RO logic if we want, 
+        // but typically we can just create it now since we are still outside the namespace restriction effectively 
+        // (or rather we are root inside it).
+        
+        lower_dir 
+    } else {
+        merged_dir
+    };
 
-    // 4. Pivot Root (into merged_dir)
-    // We need to ensure the old root has a place to live momentarily if we want to unmount it cleanly.
-    // pivot_root requirements: new_root and put_old must be on the same filesystem? No.
-    // "new_root and put_old must not be on the same filesystem as the current root."
-    // OverlayFS is a new FS.
-
-    let old_root_path = merged_dir.join(".old_root");
+    // 4. Pivot Root
+    let old_root_path = root_for_pivot.join(".old_root");
     fs::create_dir_all(&old_root_path).context("Failed to create .old_root")?;
 
-    std::env::set_current_dir(&merged_dir).context("Failed to chdir to merged_dir")?;
+    std::env::set_current_dir(&root_for_pivot).context("Failed to chdir to new root")?;
 
     println!("   [Isolation] Pivot Root -> . (old=.old_root)");
     NamespaceManager::pivot_root(Path::new("."), Path::new(".old_root"))
         .context("Failed to pivot_root")?;
+        
+    // If fallback, remount root as Read-Only NOW
+    if !use_overlay {
+        use nix::mount::{mount, MsFlags};
+         println!("   [Isolation] Remounting root Read-Only...");
+         mount(
+            Some(""),
+            Path::new("/"),
+            None::<&str>,
+            MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
+            None::<&str>,
+        ).context("Failed to remount root Read-Only")?;
+    }
 
     // 5. Mount Pseudo-FS (/proc, /sys, /dev) in the new root
     // Now that we are pivoted, "/" is the merged dir.

@@ -38,11 +38,11 @@ pub fn run(args: MountArgs) -> Result<()> {
             .with_context(|| format!("Failed to create mountpoint: {}", mountpoint.display()))?;
     }
 
-    println!("Mounting VeloFS...");
-    println!("  Manifest:   {}", manifest_path.display());
-    println!("  CAS:        {}", cas_root.display());
-    println!("  Mountpoint: {}", mountpoint.display());
-    println!("  Mode:       Read-Only");
+    tracing::info!("Mounting VeloFS...");
+    tracing::info!("  Manifest:   {}", manifest_path.display());
+    tracing::info!("  CAS:        {}", cas_root.display());
+    tracing::info!("  Mountpoint: {}", mountpoint.display());
+    tracing::info!("  Mode:       Read-Only");
 
     #[cfg(feature = "fuse")]
     {
@@ -56,8 +56,8 @@ pub fn run(args: MountArgs) -> Result<()> {
 
     #[cfg(not(feature = "fuse"))]
     {
-        println!("⚠️  FUSE support disabled. Recompile with --features fuse to enable.");
-        println!("    cargo build -p velo-cli --features fuse");
+        tracing::warn!("FUSE support disabled. Recompile with --features fuse to enable.");
+        tracing::warn!("    cargo build -p velo-cli --features fuse");
     }
 
     Ok(())

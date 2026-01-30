@@ -19,6 +19,11 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command.unwrap_or(Commands::Start) {
@@ -43,7 +48,7 @@ struct DaemonState {
 }
 
 async fn start_daemon() -> Result<()> {
-    println!("velod: Starting daemon...");
+    tracing::info!("velod: Starting daemon...");
 
     let socket_path = "/tmp/velo.sock";
     let path = Path::new(socket_path);
@@ -53,7 +58,7 @@ async fn start_daemon() -> Result<()> {
     }
 
     let listener = UnixListener::bind(path)?;
-    println!("velod: Listening on {}", socket_path);
+    tracing::info!("velod: Listening on {}", socket_path);
 
     // Initialize shared state
     let state = Arc::new(DaemonState {
@@ -63,12 +68,12 @@ async fn start_daemon() -> Result<()> {
     // Start background scan (Warm-up)
     let scan_state = state.clone();
     tokio::spawn(async move {
-        println!("velod: Starting CAS warm-up scan...");
+        tracing::info!("velod: Starting CAS warm-up scan...");
         if let Err(e) = scan_cas_root(&scan_state).await {
-            eprintln!("velod: CAS scan failed: {}", e);
+            tracing::error!("velod: CAS scan failed: {}", e);
         } else {
             let count = scan_state.cas_index.lock().await.len();
-            println!("velod: CAS warm-up complete. Indexed {} blobs.", count);
+            tracing::info!("velod: CAS warm-up complete. Indexed {} blobs.", count);
         }
     });
 
@@ -81,7 +86,7 @@ async fn start_daemon() -> Result<()> {
                         tokio::spawn(handle_connection(stream, state));
                     }
                     Err(err) => {
-                        eprintln!("velod: Accept error: {}", err);
+                        tracing::error!("velod: Accept error: {}", err);
                     }
                 }
             }
@@ -137,10 +142,10 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
 }
 
 async fn handle_request(req: VeloRequest, state: &DaemonState) -> VeloResponse {
-    println!("Received request: {:?}", req);
+    tracing::debug!("Received request: {:?}", req);
     match req {
         VeloRequest::Handshake { client_version } => {
-            println!("Handshake from client: {}", client_version);
+            tracing::info!("Handshake from client: {}", client_version);
             VeloResponse::HandshakeAck {
                 server_version: env!("CARGO_PKG_VERSION").to_string(),
             }

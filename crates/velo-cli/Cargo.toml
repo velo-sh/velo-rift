@@ -25,6 +25,8 @@ tempfile.workspace = true
 tokio.workspace = true
 velo-ipc.workspace = true
 bincode.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = []

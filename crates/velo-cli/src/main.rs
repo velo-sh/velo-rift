@@ -118,10 +118,39 @@ enum DaemonCommands {
     Status,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let cli = Cli::parse();
 
+    // Isolation check MUST happen before Tokio runtime starts (single-threaded requirement)
+    if let Commands::Run {
+        manifest,
+        command,
+        isolate,
+        daemon: _, // daemon mode logic handled inside cmd_run if we get there
+    } = &cli.command
+    {
+        if *isolate {
+             // Validate inputs early
+             // We can't use cmd_run directly because it might want async eventually, 
+             // but current cmd_run for isolation calls isolation::run_isolated which is sync.
+             return isolation::run_isolated(command, manifest, &cli.cas_root);
+        }
+    }
+
+    // Start Tokio Runtime for everything else
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async_main(cli))
+}
+
+async fn async_main(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Ingest {
             directory,
@@ -133,7 +162,7 @@ async fn main() -> Result<()> {
             command,
             isolate,
             daemon,
-        } => cmd_run(&cli.cas_root, &manifest, &command, isolate, daemon),
+        } => cmd_run(&cli.cas_root, &manifest, &command, isolate, daemon), // isolate is false here
         Commands::Status { manifest } => cmd_status(&cli.cas_root, manifest.as_deref()),
         Commands::Mount(args) => mount::run(args),
         Commands::Gc(args) => gc::run(args),

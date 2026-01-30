@@ -1312,6 +1312,8 @@ dependencies = [
  "notify",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "velo-cas",
  "velo-fuse",
  "velo-ipc",
@@ -1332,6 +1334,8 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "velo-cas",
  "velo-ipc",
 ]

@@ -21,7 +21,7 @@ mod imp {
     use velo_cas::CasStore;
     use velo_manifest::{Manifest, VnodeEntry};
 
-    const TTL: Duration = Duration::from_secs(1);
+    const TTL: Duration = Duration::from_secs(60);
     const BLOCK_SIZE: u64 = 4096;
 
     struct InodeEntry {
@@ -49,13 +49,17 @@ mod imp {
 
         /// Mount the filesystem at the given path (Ref: <https://docs.rs/fuser>)
         pub fn mount(self, mountpoint: &Path) -> anyhow::Result<()> {
-            let options = [
+            // Performance Optimization: TTL=60s (Implies metadata caching).
+            // auto_cache / kernel_cache causing issues with current fuser/libfuse version in CI.
+            // TTL=60s provides significant getattr reduction.
+            
+            let opts = vec![
                 fuser::MountOption::RO,
                 fuser::MountOption::FSName("velo".to_string()),
                 fuser::MountOption::AutoUnmount,
             ];
-            // fuser::mount blocks until unmounted
-            fuser::mount2(self, mountpoint, &options)?;
+
+            fuser::mount2(self, mountpoint, &opts)?;
             Ok(())
         }
 
