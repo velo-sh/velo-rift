@@ -297,6 +297,85 @@ impl BatchCommitter {
 
 ---
 
+## Stage 3b: Drain-All Commit Strategy
+
+The committer uses a **drain-all** strategy for optimal throughput:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  Drain-All Commit Loop                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  recv_timeout(10ms)  ───▶  Got first item?                     │
+│         │                        │                              │
+│         │                   Yes  │  No (timeout)                │
+│         │                        ▼                              │
+│         │              ┌─────────────────┐                     │
+│         │              │ try_recv() loop │ ← drain all         │
+│         │              │ (non-blocking)  │   available         │
+│         │              └────────┬────────┘                     │
+│         │                       │                               │
+│         │                       ▼                               │
+│         │              Batch full?  ──Yes──▶ commit()          │
+│         │                   │                                   │
+│         │              No   │                                   │
+│         │                   ▼                                   │
+│         │              Continue drain                           │
+│         │                                                       │
+│         ▼                                                       │
+│  Flush partial batch                                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Design Points:**
+
+1. **Short initial timeout (10ms)**: Quick response to first available item
+2. **Non-blocking drain**: `try_recv()` pulls all queued items immediately
+3. **Mid-drain commit**: If batch fills during drain, commit immediately
+4. **Timeout flush**: Partial batches committed after 10ms idle
+
+```rust
+loop {
+    // Wait for first item (short timeout)
+    match commit_rx.recv_timeout(Duration::from_millis(10)) {
+        Ok(item) => {
+            committer.add(item);
+            
+            // Drain all immediately available (non-blocking)
+            while let Ok(item) = commit_rx.try_recv() {
+                committer.add(item);
+                
+                // Commit when batch is full
+                if committer.should_commit() {
+                    committer.commit()?;
+                }
+            }
+            
+            // Commit remaining after drain
+            if committer.should_commit() {
+                committer.commit()?;
+            }
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            // Flush partial batch
+            committer.commit()?;
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            committer.commit()?;
+            break;
+        }
+    }
+}
+```
+
+**Benefits:**
+- Reduced latency: 10ms vs 100ms timeout
+- Higher throughput: processes all queued items in one loop iteration
+- Fuller batches: drains accumulation before committing
+
+---
+
 ## Pipeline Orchestration
 
 ```rust
