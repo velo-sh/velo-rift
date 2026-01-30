@@ -24,22 +24,21 @@ To handle multi-version binaries:
 - The `ingest` process considers the **ABI_Context** for binary files (`.so`, `.dylib`).
 - This prevents collisions between different versions at the same path.
 
-## 4. Operational Strategies: No-feeling Rollback
-Velo Rift™ provides two specific modes to balance safety and performance.
+## 4. Operational Modes
 
-### 4.1 Solid Mode (默认 / Default)
-- **Concept**: The environment is "Solid." Physical files remain in the project directory.
-- **UX Feedback**: `Velo is active in [Solid] mode. Physical files are safe.`
-- **Mechanism**: `Link-to-CAS` (Atomic).
-- **Implementation**: Instead of moving the file, Velo simply creates a hardlink in the CAS pointing to the existing project file. The inode remains identical.
-- **Rollback Experience**: **Perfect**. Since physical inodes never moved, deactivating Velo has zero impact on file availability.
-- **Safety Guarantee**: Even if the CAS (TheSource) is completely wiped or corrupted, project files remain 100% intact. They are independent references to the same data blocks.
+Velo Rift™ provides two modes to balance safety and performance.
 
-### 4.2 Phantom Mode (幻影 / Advanced)
-- **Concept**: The environment is a "Phantom." Physical files are moved to CAS and replaced by the virtual projection.
-- **UX Feedback**: `Velo is active in [Phantom] mode. Project is now purely virtual.`
-- **Mechanism**: `Live Ingest` + `Move`.
-- **Rollback Experience**: **Virtual-Only**. Deactivating the layer leaves the directory "empty" until Velo performs an inverse-ingest (Restoration) to bring physical files back from the CAS.
+### 4.1 Solid Mode (Default)
+- **Behavior**: Physical files remain in project directory.
+- **Rollback**: Instant, zero-impact on file availability.
+- **UX**: `Velo is active in [Solid] mode. Physical files are safe.`
+
+### 4.2 Phantom Mode (Advanced)
+- **Behavior**: Physical files moved to CAS, replaced by virtual projection.
+- **Rollback**: Requires inverse-ingest (Restoration).
+- **UX**: `Velo is active in [Phantom] mode. Project is now purely virtual.`
+
+> For implementation details, see [Section 5](#5-atomic-implementation-strategy).
 
 ## 5. Atomic Implementation Strategy
 
@@ -249,226 +248,60 @@ fn vfs_read(path: &Path) -> Result<Bytes> {
 
 This eliminates the race window between CAS write and Manifest update.
 
-## 6. CAS Directory Structure (The Source)
-Velo Rift™ uses a sharded directory structure to optimize for filesystem performance and debuggability.
+## 6. CAS Directory Structure
 
-### 6.1 Path Logic
-The CAS root resides at `VR_THE_SOURCE` (default: `~/.vrift/the_source`).
+Velo Rift™ uses a sharded CAS structure at `~/.vrift/the_source`:
 
-**Structure:**
 ```text
-the_source/
-  └── blake3/              <-- Algorithm Namespace
-       ├── ab/             <-- Shard L1 (Hash 0-1)
-       │   └── cd/         <-- Shard L2 (Hash 2-3)
-       │       └── efgh..._[Size].[Ext]  <-- Artifact (Remaining Hash)
+the_source/blake3/ab/cd/efgh..._[Size].[Ext]
 ```
 
-### 6.2 Naming Convention
-Artifacts utilize a "Self-Describing" filename format:
-`[Remaining_Hash]_[Size_in_Bytes].[Original_Extension]`
+**Key Properties**:
+- 2-level sharding prevents inode exhaustion
+- Size in filename enables O(1) integrity check
+- Extension enables direct file inspection
 
-**Reconstruction:**
-`Full_Hash = Shard_L1 + Shard_L2 + Remaining_Hash`
-Example: `abcdef12345...` -> `ab/cd/ef12345...`
-
-**Benefits:**
-- **Sharding**: Prevents directory inode exhaustion (billions of files).
-- **Integrity Check**: `stat()` size matches filename size (O(1) corrupt check).
-- **Debuggability**: Extensions allow direct inspection (`cat`, `open`, `objdump`) without metadata lookup.
-- **Example**: `ab/cd/ef12345..._1024.rs`
+> For detailed path logic and naming conventions, see [ARCHITECTURE.md §1.2](./ARCHITECTURE.md#12-structure-hierarchy).
 
 ## 7. Persistence & Crash Recovery
 
-Velo Rift must survive restarts without losing file mappings or corrupting project state.
+Velo Rift must survive restarts without losing file mappings.
 
-### 7.1 Manifest Architecture (Dual-Layer)
+### 7.1 Manifest Architecture
 
-The Manifest is the **Single Source of Truth** for path → hash mappings. It uses a two-layer structure for optimal performance.
-
-#### Layer Structure
+**Dual-Layer Structure**:
 
 | Layer | Content | Storage | Properties |
 |-------|---------|---------|------------|
-| **Base Layer** | System libs, registry deps | LMDB (shared mmap) | Immutable, O(1) lookup |
-| **Delta Layer** | Tenant modifications | DashMap (per-project) | Mutable, Copy-on-Write |
+| **Base Layer** | System libs, registry deps | LMDB (mmap) | Immutable, O(1) |
+| **Delta Layer** | Project modifications | DashMap | Mutable, COW |
 
-```rust
-struct ManifestLookup {
-    base: LmdbManifest,                           // Global, shared
-    delta: DashMap<PathBuf, DeltaEntry>,          // Per-project
-}
+**Why LMDB**:
+- O(1) mmap reads (zero-copy)
+- MVCC (readers never block)
+- ACID transactions
 
-enum DeltaEntry {
-    Modified(ManifestEntry),   // Points to new hash
-    Deleted,                   // Whiteout marker
-}
+**Storage**: `.vrift/manifest.lmdb` (per-project)
 
-struct ManifestEntry {
-    hash: Hash,
-    tier: Tier,
-    original_mode: u32,
-    ingest_time: u64,
-}
-```
+### 7.2 Recovery Strategy
 
-#### Lookup Algorithm
+| Scenario | Recovery |
+|----------|----------|
+| Clean shutdown | Normal load |
+| Manifest missing | Scan CAS, rebuild |
+| Manifest corrupted | Restore from backup |
+| CAS entry missing | Remove entry, warn user |
 
-```rust
-fn lookup(&self, path: &Path) -> Option<ManifestEntry> {
-    // 1. Check Delta Layer (project modifications)
-    if let Some(entry) = self.delta.get(path) {
-        return match entry.value() {
-            DeltaEntry::Modified(e) => Some(e.clone()),
-            DeltaEntry::Deleted => None,  // Whiteout
-        };
-    }
-    // 2. Check Base Layer (shared packages)
-    self.base.get(path)
-}
-```
+### 7.3 Durability Guarantees
 
-### 7.1.1 Storage Backend: LMDB
+| State | Durability |
+|-------|------------|
+| Manifest | LMDB ACID |
+| Tier-1 symlinks | Filesystem |
+| Tier-2 hardlinks | Filesystem |
+| CAS entries | Content-addressable |
 
-**Why LMDB over JSON**:
-
-| Dimension | JSON | LMDB |
-|-----------|------|------|
-| Read | O(n) parse | **O(1) mmap** |
-| Write | O(n) serialize | **O(1) incremental** |
-| Concurrency | Exclusive | **MVCC (readers never block)** |
-| Crash Safety | Atomic rename | **ACID transactions** |
-| Memory | Full load | **Lazy mmap** |
-
-**Implementation**:
-
-```rust
-pub struct LmdbManifest {
-    env: heed::Env,
-    entries: Database<Str, SerdeBincode<ManifestEntry>>,
-}
-
-impl LmdbManifest {
-    fn open(path: &Path) -> Result<Self> {
-        let env = heed::EnvOpenOptions::new()
-            .map_size(1 << 30)  // 1GB max
-            .open(path)?;
-        let entries = env.create_database(Some("manifest"))?;
-        Ok(Self { env, entries })
-    }
-
-    fn get(&self, path: &Path) -> Option<ManifestEntry> {
-        let rtxn = self.env.read_txn().ok()?;
-        self.entries.get(&rtxn, path.to_str()?).ok().flatten()
-    }
-
-    fn put(&self, path: &Path, entry: &ManifestEntry) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.entries.put(&mut wtxn, path.to_str()?, entry)?;
-        wtxn.commit()
-    }
-}
-```
-
-**Storage Location**: `.vrift/manifest.lmdb` (per-project)
-
-### 7.2 Startup Recovery
-
-On `vrift active` or daemon restart:
-
-```rust
-fn startup_recovery() -> Result<()> {
-    let manifest = Manifest::load()?;
-
-    for (path, entry) in &manifest.entries {
-        match entry.tier {
-            Tier::Tier1 => validate_tier1(path, entry)?,
-            Tier::Tier2 => validate_tier2(path, entry)?,
-        }
-    }
-    Ok(())
-}
-
-fn validate_tier1(path: &Path, entry: &ManifestEntry) -> Result<()> {
-    // Tier-1: Source should be symlink → CAS
-    if !path.is_symlink() {
-        // Restore symlink
-        symlink(get_cas_path(&entry.hash), path)?;
-    }
-    Ok(())
-}
-
-fn validate_tier2(path: &Path, entry: &ManifestEntry) -> Result<()> {
-    // Tier-2: Source should be hardlink to CAS (same inode)
-    let source_ino = fs::metadata(path)?.ino();
-    let cas_ino = fs::metadata(get_cas_path(&entry.hash))?.ino();
-    if source_ino != cas_ino {
-        // Hardlink broken, re-establish or warn
-        warn!("Tier-2 link broken for {:?}, re-ingesting", path);
-        ingest_mutable(path)?;
-    }
-    Ok(())
-}
-```
-
-### 7.3 Phantom Mode Recovery
-
-In Phantom Mode, source files are **moved** to CAS. On restart, paths may appear empty.
-
-```rust
-fn restore_phantom_projections(manifest: &Manifest) -> Result<()> {
-    for (path, entry) in manifest.phantom_entries() {
-        if !path.exists() {
-            // Restore visibility via symlink (lightweight)
-            // or FUSE mount (full fidelity)
-            symlink(get_cas_path(&entry.hash), path)?;
-        }
-    }
-    Ok(())
-}
-```
-
-### 7.4 Crash Recovery Matrix
-
-| Scenario | Detection | Recovery |
-|----------|-----------|----------|
-| **Clean shutdown** | Manifest valid | Normal startup |
-| **Manifest missing** | File not found | Scan CAS, rebuild from symlinks |
-| **Manifest corrupted** | Parse error | Restore from `.vrift/manifest.json.bak` |
-| **CAS entry missing** | Hash lookup fails | Remove from Manifest, warn user |
-| **Orphan CAS entries** | Not in any Manifest | GC candidates |
-
-### 7.5 Durability Guarantees
-
-| State | Durability | Recovery |
-|-------|------------|----------|
-| **Manifest** | Persisted atomically | Load from disk |
-| **Tier-1 symlinks** | Filesystem durable | Self-describing |
-| **Tier-2 hardlinks** | Filesystem durable | Verifiable via inode |
-| **CAS entries** | Filesystem durable | Content-addressable |
-
-### 7.6 WAL (Optional Enhancement)
-
-For high-frequency ingest scenarios, a Write-Ahead Log reduces fsync overhead:
-
-```rust
-fn ingest_with_wal(source: &Path) -> Result<()> {
-    let hash = blake3::hash_file(source)?;
-    
-    // Step 1: Append to WAL (fast, sequential write)
-    wal.append(WalEntry::Ingest { path: source, hash })?;
-    
-    // Step 2: Perform ingest
-    do_ingest(source, hash)?;
-    
-    // Step 3: Checkpoint WAL → Manifest periodically
-    if wal.size() > CHECKPOINT_THRESHOLD {
-        manifest.merge_wal(&wal)?;
-        wal.truncate()?;
-    }
-    Ok(())
-}
-```
+> For implementation details (LMDB API, startup recovery code, WAL), see [ARCHITECTURE.md §9.8](./ARCHITECTURE.md#98-persistence--crash-recovery-rfc-0039).
 
 ## 8. Implementation Notes
 - **Persistent State**: `vrift active` creates a long-lived Session.

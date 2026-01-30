@@ -525,6 +525,98 @@ def vfs_open(path: str, mode: int) -> FileDescriptor:
 
 **Recommendation**: Strategy A for Python runtime (import-heavy, ls-rare).
 
+### 9.6 Tiered Asset Model (RFC-0039)
+
+Assets are classified by write frequency for optimized protection strategies.
+
+| Tier | Type | Write Frequency | Strategy | Examples |
+|------|------|-----------------|----------|----------|
+| **Tier-1** | Immutable | Never | Owner transfer + immutable flag + symlink | Toolchains, registry deps |
+| **Tier-2** | Mutable | Rare | Hardlink + Break-Before-Write (VFS) | Build artifacts (`.rlib`, `.js`) |
+
+**Tier-1 Enforcement**:
+- Transfer ownership to `vrift` user
+- Set immutable flag (`chattr +i` / `chflags uchg`)
+- Replace source with symlink to CAS
+- Write attempts return immediate `EACCES`
+
+**Tier-2 Enforcement**:
+- Hardlink to CAS with `chmod 444`
+- VFS intercepts write attempts
+- Break link before write proceeds
+
+### 9.7 Break-Before-Write Protocol (RFC-0039)
+
+When VFS detects a write-intent `open()` on a Tier-2 ingested file:
+
+```rust
+fn vfs_open_write(path: &Path, flags: OpenFlags) -> Result<File> {
+    if !is_tier2_ingested(path) {
+        return File::open(path, flags);
+    }
+
+    if flags.contains(O_TRUNC) {
+        // Fast path: truncate-write, no need to copy old content
+        fs::remove_file(path)?;           // O(1) unlink
+        manifest.mark_stale(path);
+        return File::create_with_reingest_on_close(path);
+    }
+
+    // Slow path: append/update, must preserve old content
+    let content = fs::read(path)?;
+    fs::remove_file(path)?;
+    fs::write(path, &content)?;
+    chmod_writable(path)?;
+    File::open_with_reingest_on_close(path, flags)
+}
+```
+
+**Optimizations**:
+- `O_TRUNC` detection skips content copy (most build tools truncate before write)
+- Re-ingest triggered on `close()` with new hash
+
+### 9.8 Persistence & Crash Recovery (RFC-0039)
+
+#### 9.8.1 Manifest Persistence
+
+Storage: `.vrift/manifest.lmdb` (per-project, LMDB-backed)
+
+```rust
+pub struct LmdbManifest {
+    env: heed::Env,
+    entries: Database<Str, SerdeBincode<ManifestEntry>>,
+}
+```
+
+**Properties**:
+- O(1) mmap reads (zero-copy)
+- ACID transactions
+- MVCC (readers never block)
+
+#### 9.8.2 Startup Recovery
+
+```rust
+fn startup_recovery() -> Result<()> {
+    let manifest = Manifest::load()?;
+    for (path, entry) in &manifest.entries {
+        match entry.tier {
+            Tier::Tier1 => validate_symlink(path, &entry.hash)?,
+            Tier::Tier2 => validate_hardlink_inode(path, &entry.hash)?,
+        }
+    }
+    Ok(())
+}
+```
+
+#### 9.8.3 Crash Recovery Matrix
+
+| Scenario | Detection | Recovery |
+|----------|-----------|----------|
+| Clean shutdown | Manifest valid | Normal startup |
+| Manifest missing | File not found | Scan CAS, rebuild from symlinks |
+| Manifest corrupted | Parse error | Restore from backup |
+| CAS entry missing | Hash lookup fails | Remove from Manifest, warn user |
+
 ---
 
 ## 10. Python-Specific Optimizations
