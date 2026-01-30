@@ -30,7 +30,7 @@ VeloVFS solves two problems:
 |    | - Intercept `open()`, `stat()`, `read()` | | | |
 |    | - Path → Manifest lookup | | | |
 |    | - CAS file redirection | | | |
-| D4 | **CLI Tool (vrift™)** | Dev-2 | 3d | D1, D2 |
+| D4 | **CLI Tool (vrift)** | Dev-2 | 3d | D1, D2 |
 |    | - `vrift ingest <dir>` — Import files to CAS | | | |
 |    | - `vrift run <cmd>` — LD_PRELOAD wrapper | | | |
 |    | - `vrift status` — Display CAS statistics | | | |

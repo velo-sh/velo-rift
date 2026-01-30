@@ -1,4 +1,4 @@
-# VeloVFS Technical Positioning
+# Velo Rift™ Technical Positioning
 
 A technical comparison with related tools, focusing on problem domains and architectural approaches.
 

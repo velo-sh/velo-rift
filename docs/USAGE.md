@@ -1,6 +1,6 @@
 # Velo Rift™: Comprehensive Usage Guide
 
-Velo Rift™ is a high-performance **data virtualization layer** designed for the AI-native era. Unlike traditional filesystems or containers, Velo Rift™ decouples "where a file lives" from "what a file contains."
+Velo Rift is a high-performance **data virtualization layer** designed for the AI-native era. Unlike traditional filesystems or containers, Velo Rift decouples "where a file lives" from "what a file contains."
 
 ---
 
@@ -9,24 +9,24 @@ Velo Rift™ is a high-performance **data virtualization layer** designed for th
 ### 🧠 The Core Equation: `Hash(Content) = Identity`
 In a traditional filesystem, path identity is tied to location. In Velo, identity is tied to **Content**.
 
-*   **Global Deduplication (CAS)**: If 100 projects use the same `libpython.so`, Velo Rift™ stores only **one** physical copy on disk in **TheSource**.
+*   **Global Deduplication (CAS)**: If 100 projects use the same `libpython.so`, Velo Rift stores only **one** physical copy on disk in **TheSource**.
 *   **Zero-Copy Virtualization**: We don't "copy" environments; we "project" them. Whether using links or syscall interception, we provide a virtual view of data that is physically shared.
-*   **Absolute Determinism**: A Velo Rift™ Manifest (`.velo`) uniquely defines an entire environment. If the manifest hash is the same, the execution outcome is guaranteed to be reproducible across any machine.
+*   **Absolute Determinism**: A Velo Rift Manifest (`.velo`) uniquely defines an entire environment. If the manifest hash is the same, the execution outcome is guaranteed to be reproducible across any machine.
 
 ---
 
-## 2. Two Ways Velo Rift™ Runs Your Code
+## 2. Two Ways Velo Rift Runs Your Code
 
-Velo Rift™ provides two distinct mechanisms to "project" your virtual environment into the real world.
+Velo Rift provides two distinct mechanisms to "project" your virtual environment into the real world.
 
 ### A. Link Farm (The Physical Mirage) —— **Recommended for Isolation**
-Velo Rift™ creates a temporary directory structure filled with **Hard Links** back to the global CAS store (**TheSource**).
+Velo Rift creates a temporary directory structure filled with **Hard Links** back to the global CAS store (**TheSource**).
 -   **When to use**: Rootless Linux containers, sandboxed execution, and when running statically linked binaries (Go, Rust).
 -   **Pros**: 100% Native performance (Kernel handles it), compatible with all languages, enables OverlayFS layering.
 -   **Cons**: Minor overhead of creating file inodes in a temporary path.
 
 ### B. The Shim Interception (The Invisible Mirage) —— **Recommended for Local Dev**
-Velo Rift™ uses `LD_PRELOAD` to inject a small library (`velo-shim`) into your process, intercepting filesystem calls like `open()` and `stat()`.
+Velo Rift uses `LD_PRELOAD` to inject a small library (`velo-shim`) into your process, intercepting filesystem calls like `open()` and `stat()`.
 -   **When to use**: MacOS development, rapid local testing, and when you want **zero** physical traces on the disk.
 -   **Pros**: Instantaneous (no directory to create), no disk footprint.
 -   **Cons**: Only works for dynamically linked programs; slight overhead on every syscall.
