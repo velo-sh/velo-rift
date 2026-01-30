@@ -43,29 +43,162 @@ Velo Rift™ provides two specific modes to balance safety and performance.
 
 ## 5. Atomic Implementation Strategy
 
-To guarantee data safety, Velo Rift™ adheres to strict atomic syscall sequences.
+To guarantee **absolute safety**, Velo Rift™ enforces two invariants:
 
-### 5.1 Solid Mode (Link-to-CAS)
-The goal is to shadow the file without ever removing the source, ensuring zero data loss risk.
+| Invariant | Semantic | Guarantee |
+|-----------|----------|----------|
+| **P0-a** | Hash-Content Match | `CAS[hash].content == hash(content)` always |
+| **P0-b** | Projection-Link Match | `VFS[path]` always returns the correct version |
+
+Velo adheres to strict atomic syscall sequences and locking protocols to uphold both invariants.
+
+### 5.1 Solid Mode (Tiered Asset Model)
+
+Assets are classified by write frequency for optimized protection strategies.
+
+#### Asset Tiers
+
+| Tier | Type | Write Frequency | Examples |
+|------|------|-----------------|----------|
+| **Tier-1** | Immutable | Never | Toolchains, registry deps (`rustc`, `node_modules/@*`) |
+| **Tier-2** | Mutable | Rare | Build artifacts (`target/*.rlib`, `dist/*.js`) |
+
+#### 5.1.1 Tier-1: Immutable Assets (Maximum Protection)
+
+**Policy**: Deny all writes. Transfer ownership to Velo Rift.
 
 ```rust
-fn ingest_solid(source: Path) -> Result<()> {
-    // 1. Calculate Hash (Read-Only)
-    let hash = blake3(&source)?;
+fn ingest_immutable(source: &Path) -> Result<()> {
+    let hash = blake3::hash_file(source)?;
     let cas_target = get_cas_path(hash);
 
-    // 2. Atomic Link (The "Anchor")
-    // We create a hardlink in CAS pointing to the source inode.
-    // If system crashes before this, nothing happened.
-    // If system crashes after this, data is safely anchored in CAS.
-    // Source file is NEVER moved or deleted.
-    std::fs::hard_link(&source, &cas_target)?;
-    
-    // 3. Update Manifest
+    fs::hard_link(source, &cas_target)?;
+
+    // Maximum protection: owner → vrift, immutable flag
+    chown(&cas_target, VRIFT_UID, VRIFT_GID)?;
+    chmod(&cas_target, 0o444)?;
+    set_immutable(&cas_target)?;  // chattr +i / chflags uchg
+
+    // Replace source with symlink projection
+    fs::remove_file(source)?;
+    symlink(&cas_target, source)?;
+
     manifest.insert(hash, source);
     Ok(())
 }
 ```
+
+**Guarantees**:
+- **Owner transfer**: vrift user owns CAS, user cannot modify.
+- **Immutable flag**: Even root needs `chattr -i` first.
+- **Source = symlink**: Write attempts → `EACCES`, no VFS overhead.
+
+#### 5.1.2 Tier-2: Mutable Assets (Break-Before-Write)
+
+**Policy**: Allow writes via VFS interception.
+
+```rust
+fn ingest_mutable(source: &Path) -> Result<()> {
+    let hash = blake3::hash_file(source)?;
+    let cas_target = get_cas_path(hash);
+
+    if !cas_target.exists() {
+        fs::hard_link(source, &cas_target)?;
+        chmod_readonly(&cas_target)?;
+    }
+    chmod_readonly(source)?;  // Soft protection
+    manifest.insert(hash, source);
+    Ok(())
+}
+
+fn vfs_open_write(path: &Path) -> Result<File> {
+    if !is_tier2_ingested(path) {
+        return File::open_write(path);
+    }
+    // Break hardlink before write
+    let content = fs::read(path)?;
+    fs::remove_file(path)?;
+    fs::write(path, &content)?;
+    chmod_writable(path)?;
+    File::open_with_reingest_on_close(path)
+}
+```
+
+**Guarantees**:
+- CAS immutable (different inode after break).
+- `close()` triggers re-ingest with new hash.
+
+#### 5.1.3 Tier Classification
+
+| Source | Tier | Detection |
+|--------|------|-----------|
+| Registry deps | Tier-1 | Manifest `source: "registry"` |
+| Toolchains | Tier-1 | Path pattern `/toolchains/*` |
+| Build outputs | Tier-2 | Path pattern `target/*`, `dist/*` |
+| User config | Tier-2 | Default for unclassified |
+
+#### 5.1.4 Comparison
+
+| Dimension | Tier-1 (Immutable) | Tier-2 (Mutable) |
+|-----------|-------------------|------------------|
+| Security | Maximum (owner + immutable) | Medium (chmod 444 + VFS) |
+| Performance | Highest (no VFS intercept) | High (VFS only on write) |
+| Write | Denied | Allowed (break link) |
+| Rollback | Restore symlink | `chmod +w` |
+
+#### 5.1.5 Performance Optimizations
+
+##### Read Path
+
+**Tier-1 (Zero Overhead)**:
+```text
+read(node_modules/@types/node/index.d.ts)
+  → kernel follows symlink → CAS/xxxx
+  → direct read, no VFS intercept
+```
+
+**Tier-2 (Prefetch)**:
+```rust
+fn prefetch_tier2(manifest: &Manifest) {
+    for (_, hash) in manifest.tier2_entries() {
+        posix_fadvise(get_cas_path(hash), POSIX_FADV_WILLNEED);
+    }
+}
+```
+
+##### Write Path (Truncate-Write Pattern)
+
+Build tools typically **truncate + overwrite** (not append). Optimization:
+
+```rust
+fn vfs_open_write_optimized(path: &Path, flags: OpenFlags) -> Result<File> {
+    if !is_tier2_ingested(path) {
+        return File::open(path, flags);
+    }
+
+    if flags.contains(O_TRUNC) {
+        // Fast path: truncate-write, no need to copy old content
+        fs::remove_file(path)?;           // O(1) unlink
+        manifest.mark_stale(path);
+        return File::create_with_reingest_on_close(path);
+    }
+
+    // Slow path: append/update, must preserve old content
+    let content = fs::read(path)?;
+    fs::remove_file(path)?;
+    fs::write(path, &content)?;
+    chmod_writable(path)?;
+    File::open_with_reingest_on_close(path, flags)
+}
+```
+
+**Write Pattern Analysis**:
+
+| Pattern | Operation | Optimization |
+|---------|-----------|--------------|
+| Truncate + Write | `cargo build` → `.rlib` | Skip content copy ✅ |
+| Append | Log files | Copy old content |
+| In-place Update | Binary patch | Copy old content |
 
 ### 5.2 Phantom Mode (Atomic Replacement)
 The goal is to replace the physical file with a virtual entry atomically.
@@ -85,6 +218,36 @@ fn ingest_phantom(source: Path) -> Result<()> {
     Ok(())
 }
 ```
+
+### 5.3 Projection Consistency Protocol (P0-b Enforcement)
+
+To ensure `VFS[path]` always returns the correct version, even during concurrent ingest:
+
+**Ingest Lock Mechanism:**
+- Each `ingest_solid()` call holds an **Ingest Lock** on the source path.
+- Lock is acquired BEFORE snapshot, released AFTER Manifest update.
+- This ensures: _"If Manifest says H, then CAS[H] is already committed."_
+
+**VFS Read Priority:**
+```rust
+fn vfs_read(path: &Path) -> Result<Bytes> {
+    if ingest_locks.is_held(path) {
+        // Ingest in progress: read physical file (source of truth)
+        return fs::read(path);
+    }
+    // Normal: read from CAS via Manifest
+    let hash = manifest.get(path)?;
+    fs::read(get_cas_path(hash))
+}
+```
+
+**Guarantees:**
+| State | VFS Returns | Correctness |
+|-------|-------------|-------------|
+| Ingest lock held | Physical file | ✅ Live content |
+| No lock, Manifest=H | CAS[H] | ✅ Committed snapshot |
+
+This eliminates the race window between CAS write and Manifest update.
 
 ## 6. CAS Directory Structure (The Source)
 Velo Rift™ uses a sharded directory structure to optimize for filesystem performance and debuggability.
