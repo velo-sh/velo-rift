@@ -24,21 +24,23 @@ To handle multi-version binaries:
 - The `ingest` process considers the **ABI_Context** for binary files (`.so`, `.dylib`).
 - This prevents collisions between different versions at the same path.
 
-## 4. Operational Strategies
-Velo Rift™ provides two levels of transparency to ensure "no-feeling rollback" (无感回退):
+## 4. Operational Strategies: No-feeling Rollback
+Velo Rift™ provides two specific modes to balance safety and performance.
 
-### 4.1 Level 1: Hardlinked Shadowing (Default)
+### 4.1 Solid Mode (默认 / Default)
+- **Concept**: The environment is "Solid." Physical files remain in the project directory.
+- **UX Feedback**: `Velo is active in [Solid] mode. Physical files are safe.`
 - **Mechanism**: `Live Ingest` + `Hardlink`. 
-- **User Experience**: Files are moved to CAS but a hardlink is immediately created at the original path. 
-- **Rollback**: Instant. Since the physical inode remains at the path, deactivating the virtual layer has zero effect on file availability.
+- **Rollback Experience**: **Perfect**. Since physical inodes remain at the original paths, deactivating Velo has zero impact on file availability.
 
-### 4.2 Level 2: Virtual Projection (Aggressive)
+### 4.2 Phantom Mode (幻影 / Advanced)
+- **Concept**: The environment is a "Phantom." Physical files are moved to CAS and replaced by the virtual projection.
+- **UX Feedback**: `Velo is active in [Phantom] mode. Project is now purely virtual.`
 - **Mechanism**: `Live Ingest` + `Move`.
-- **User Experience**: The physical file is moved to CAS and removed from the project directory. It remains visible only through the Velo lens.
-- **Rollback**: Requires Restoration. Deactivating the layer requires Velo to restore physical files from the CAS.
+- **Rollback Experience**: **Virtual-Only**. Deactivating the layer leaves the directory "empty" until Velo performs an inverse-ingest (Restoration) to bring physical files back from the CAS.
 
 ## 5. Implementation Notes
-- **Persistent State**: `vrift active` creates a long-lived Session.
-- **ABI Continuity**: The Session persists the **ABI_Context**, ensuring that a long-running development environment remains binary-consistent.
-- **Shim Performance**: Shadow capturing avoids the latency of synchronous hashing during small `write()` calls by deferring the ingest until `close()`.
-- **SIP Compliance**: On macOS, `active` mode handles Entitlements and SIP-stripping for children automatically.
+- **Persistent State**: `vrift active` creates a long-lived Session, maintaining the projection across multiple shell instances.
+- **ABI Continuity**: The Session persists the **ABI_Context**, ensuring binary consistency for development.
+- **Shim Performance**: Capture occurs on `close()`, ensuring native disk speeds during active write cycles.
+- **SIP Compliance**: On macOS, `active` mode handles Entitlements and SIP-stripping automatically.
