@@ -14,6 +14,17 @@
 //!         └── cd/
 //!             └── abcd1234...efgh_12345.bin  # hash_size.ext
 //! ```
+//!
+//! ## I/O Backend Abstraction
+//!
+//! The crate provides platform-specific I/O backends for optimal batch ingestion:
+//! - Linux: io_uring (feature-gated)
+//! - macOS: GCD-style dispatch
+//! - Fallback: Rayon thread pool
+
+mod io_backend;
+
+pub use io_backend::{create_backend, rayon_backend, IngestBackend};
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};

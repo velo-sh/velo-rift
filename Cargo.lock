@@ -1646,6 +1646,7 @@ dependencies = [
  "blake3",
  "criterion",
  "memmap2",
+ "rayon",
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
