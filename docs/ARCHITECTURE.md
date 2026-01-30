@@ -133,15 +133,24 @@ All tenant runtime data lives in a high-performance memory-backed location.
 │   └── tenant_B/
 │
 └── the_source/                 # The Source (Raw Blob Store, Matrix reference)
-    ├── a8/
-    │   └── f9c1...             # Raw Content BLOB (BLAKE3)
-    └── b2/
-        └── d3e4...
+    └── blake3/                 # RFC-0039 Layout: 3-level sharding
+        ├── a8/
+        │   └── f9/
+        │       └── a8f9c1...efgh_12345.bin  # hash_size.ext
+        └── b2/
+            └── d3/
+                └── b2d3e4...ijkl_67890     # hash_size
 ```
 
+> **RFC-0039 CAS Layout**: `blake3/ab/cd/hash_size.ext`  
+> - 3-level sharding prevents inode exhaustion  
+> - Self-describing filename enables O(1) integrity check  
+> - Extension allows direct file type inspection
+
 ### 1.3 Persistent Storage (NVMe/Disk)
-*   **Path**: `/var/vrift/meta.db` -> **LMDB** file for Git Metadata.
-*   **Path**: `/var/vrift/cas_cache/` -> Persistent cache for Cold Blobs.
+*   **Path**: `~/.vrift/the_source/` → Primary CAS storage (RFC-0039 §3.4)
+*   **Path**: `.vrift/manifest.lmdb` → Per-project LMDB manifest (RFC-0039 §7)
+*   **Path**: `.vrift/session.json` → Session state (mode, ABI context)
 
 ---
 
