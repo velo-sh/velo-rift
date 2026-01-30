@@ -1736,6 +1736,7 @@ dependencies = [
  "dashmap",
  "hex",
  "memmap2",
+ "nix 0.28.0",
  "notify",
  "num_cpus",
  "rayon",

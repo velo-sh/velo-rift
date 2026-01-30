@@ -24,9 +24,11 @@
 
 mod io_backend;
 pub mod streaming_pipeline;
+pub mod zero_copy_ingest;
 
 pub use io_backend::{create_backend, rayon_backend, IngestBackend};
 pub use streaming_pipeline::{IngestPipeline, IngestStats, PipelineConfig};
+pub use zero_copy_ingest::{ingest_phantom, ingest_solid_tier1, ingest_solid_tier2};
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};

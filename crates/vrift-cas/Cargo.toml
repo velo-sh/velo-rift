@@ -26,6 +26,7 @@ dashmap = "6.1.0"
 num_cpus = "1.17.0"
 hex = "0.4.3"
 walkdir.workspace = true
+nix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3.14"
@@ -35,3 +36,6 @@ criterion = "0.5"
 name = "cas_bench"
 harness = false
 
+[[bench]]
+name = "zero_copy_bench"
+harness = false
