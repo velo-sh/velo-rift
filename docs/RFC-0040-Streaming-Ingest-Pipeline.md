@@ -44,81 +44,33 @@ This RFC extends RFC-0039 §3.2 (Live Ingest) and §5.3 (Projection Consistency 
 ### S1b: Ingest Lock (RFC-0039 §5.3)
 
 > [!IMPORTANT]
-> **Per [RFC-0039 §5.3](./RFC-0039-Transparent-Virtual-Projection.md#53-projection-consistency-protocol-p0-b-enforcement):**
-> Ingest Lock is an **application-level logical lock**, not `flock()`.
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Ingest Lock Protocol (RFC-0039 §5.3)                                   │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  fn ingest_solid(path: &Path) -> Result<()> {                          │
-│      // 1. Acquire lock BEFORE reading                                  │
-│      ingest_locks.acquire(path);                                        │
-│                                                                         │
-│      // 2. Snapshot content                                             │
-│      let content = fs::read(path)?;                                     │
-│      let hash = blake3::hash(&content);                                 │
-│                                                                         │
-│      // 3. Write to CAS                                                 │
-│      write_cas(hash, &content)?;                                        │
-│                                                                         │
-│      // 4. Update Manifest                                              │
-│      manifest.insert(path, hash);                                       │
-│                                                                         │
-│      // 5. Release lock AFTER Manifest update                           │
-│      ingest_locks.release(path);                                        │
-│  }                                                                      │
-│                                                                         │
-│  fn vfs_read(path: &Path) -> Result<Bytes> {                           │
-│      if ingest_locks.is_held(path) {                                    │
-│          // Ingest in progress: read physical file                      │
-│          return fs::read(path);                                         │
-│      }                                                                   │
-│      // Normal: read from CAS via Manifest                              │
-│      let hash = manifest.get(path)?;                                    │
-│      fs::read(get_cas_path(hash))                                       │
-│  }                                                                      │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-**Guarantees (from RFC-0039):**
-
-| State | VFS Returns | Correctness |
-|-------|-------------|-------------|
-| Ingest lock held | Physical file | ✅ Live content |
-| No lock, Manifest=H | CAS[H] | ✅ Committed snapshot |
-
-**Streaming Pipeline Implementation:**
+> **Ingest Lock = `flock(LOCK_SH)`** — prevents external writes during read.
 
 ```rust
-struct WorkerPool {
-    ingest_locks: DashSet<PathBuf>,  // Per-path logical locks
-    // ...
-}
-
-impl WorkerPool {
-    fn process(&self, path: &Path) -> Result<ProcessedFile> {
-        // Acquire lock
-        self.ingest_locks.insert(path.to_owned());
-        
-        // Read + hash
-        let content = fs::read(path)?;
-        let hash = blake3::hash(&content);
-        
-        // Write to temp (lock still held)
-        let temp_path = write_temp(&hash, &content)?;
-        
-        Ok(ProcessedFile {
-            path: path.to_owned(),
-            hash,
-            temp_path,
-            // Lock released in BatchCommitter after Manifest update
-        })
-    }
+fn ingest_solid(path: &Path) -> Result<()> {
+    let file = File::open(path)?;
+    
+    // 1. Acquire shared lock (blocks external writers)
+    flock(file.as_raw_fd(), FlockArg::LockShared)?;
+    
+    // 2. Read content (safe: no external writes)
+    let content = read_all(&file)?;
+    let hash = blake3::hash(&content);
+    
+    // 3. Write to CAS
+    write_cas(hash, &content)?;
+    
+    // 4. Update Manifest
+    manifest.insert(path, hash);
+    
+    // 5. Release lock
+    flock(file.as_raw_fd(), FlockArg::Unlock)?;
+    
+    Ok(())
 }
 ```
+
+**Purpose**: Ensure hash = content (P0-a) by preventing modifications during read.
 
 ### S2: Event Ordering Guarantees
 
