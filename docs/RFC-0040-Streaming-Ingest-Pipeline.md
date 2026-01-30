@@ -44,33 +44,50 @@ This RFC extends RFC-0039 §3.2 (Live Ingest) and §5.3 (Projection Consistency 
 ### S1b: Ingest Lock (RFC-0039 §5.3)
 
 > [!IMPORTANT]
-> **Ingest Lock = `flock(LOCK_SH)`** — prevents external writes during read.
+> **Zero-Copy Ingest** — per RFC-0039, NO data is copied.
+> - Solid Mode: `hard_link()` 
+> - Phantom Mode: `rename()`
 
 ```rust
-fn ingest_solid(path: &Path) -> Result<()> {
-    let file = File::open(path)?;
-    
-    // 1. Acquire shared lock (blocks external writers)
+// Solid Mode (Tier-1: Immutable)
+fn ingest_solid_tier1(source: &Path) -> Result<()> {
+    let file = File::open(source)?;
     flock(file.as_raw_fd(), FlockArg::LockShared)?;
     
-    // 2. Read content (safe: no external writes)
-    let content = read_all(&file)?;
-    let hash = blake3::hash(&content);
+    let hash = blake3::hash_file(&file)?;  // Stream hash, no full read
+    let cas_target = get_cas_path(hash);
     
-    // 3. Write to CAS
-    write_cas(hash, &content)?;
+    fs::hard_link(source, &cas_target)?;   // Zero-copy!
     
-    // 4. Update Manifest
-    manifest.insert(path, hash);
-    
-    // 5. Release lock
+    manifest.insert(source, hash);
     flock(file.as_raw_fd(), FlockArg::Unlock)?;
     
+    // Replace source with symlink
+    fs::remove_file(source)?;
+    symlink(&cas_target, source)?;
+    
+    Ok(())
+}
+
+// Phantom Mode: atomic move
+fn ingest_phantom(source: &Path) -> Result<()> {
+    let file = File::open(source)?;
+    flock(file.as_raw_fd(), FlockArg::LockShared)?;
+    
+    let hash = blake3::hash_file(&file)?;
+    let cas_target = get_cas_path(hash);
+    
+    flock(file.as_raw_fd(), FlockArg::Unlock)?;
+    drop(file);  // Close before rename
+    
+    fs::rename(source, &cas_target)?;  // Atomic move, zero-copy!
+    
+    manifest.insert(source, hash);
     Ok(())
 }
 ```
 
-**Purpose**: Ensure hash = content (P0-a) by preventing modifications during read.
+**Key**: `hard_link()` and `rename()` are O(1) metadata operations, NO data copy.
 
 ### S2: Event Ordering Guarantees
 
