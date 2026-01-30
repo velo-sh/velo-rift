@@ -26,17 +26,20 @@ if [[ "$MODE" == "docker" ]]; then
     # Ensure volumes exist for caching
     docker volume create velo-cargo-registry > /dev/null
     docker volume create velo-target-cache > /dev/null
+    docker volume create velo-rustup > /dev/null
 
     # Run directly in base image (or previous e2e image if dependencies stick)
     # We use velo-ci-base because it has the tools.
     # -v $(pwd):/workspace: Mounts current code
     # -v velo-target-cache:/workspace/target: Persists compilation artifacts across runs
     # -v velo-cargo-registry:/usr/local/cargo/registry: Persists downloaded crates
+    # -v velo-rustup:/usr/local/rustup: Persists rustup toolchains
     docker run --rm --privileged \
         --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor:unconfined \
         -v "$(pwd):/workspace" \
         -v velo-cargo-registry:/usr/local/cargo/registry \
         -v velo-target-cache:/workspace/target \
+        -v velo-rustup:/usr/local/rustup \
         -w /workspace \
         -e CI=true \
         -e SKIP_BUILD=false \

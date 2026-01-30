@@ -2,7 +2,9 @@
 //!
 //! Handles Linux namespace creation and setup for isolated execution.
 
-use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+use anyhow::Result;
 use std::path::Path;
 
 #[cfg(target_os = "linux")]
@@ -13,8 +15,14 @@ use nix::{
 };
 
 /// Run a command in an isolated environment
-pub fn run_isolated(command: &[String], manifest_path: &Path, cas_root: &Path) -> Result<()> {
+pub fn run_isolated(
+    command: &[String],
+    manifest_path: &Path,
+    cas_root: &Path,
+    base_manifest_path: Option<&Path>,
+) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
+    #[allow(unused_variables)]
     {
         // On non-Linux platforms, just warn and fall back to normal execution
         eprintln!("⚠️  Isolation is only fully supported on Linux.");
@@ -45,12 +53,17 @@ pub fn run_isolated(command: &[String], manifest_path: &Path, cas_root: &Path) -
 
     #[cfg(target_os = "linux")]
     {
-        run_isolated_linux(command, manifest_path, cas_root)
+        run_isolated_linux(command, manifest_path, cas_root, base_manifest_path)
     }
 }
 
 #[cfg(target_os = "linux")]
-fn run_isolated_linux(command: &[String], manifest: &Path, cas_root: &Path) -> Result<()> {
+fn run_isolated_linux(
+    command: &[String],
+    manifest: &Path,
+    cas_root: &Path,
+    base_manifest: Option<&Path>,
+) -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
@@ -66,7 +79,7 @@ fn run_isolated_linux(command: &[String], manifest: &Path, cas_root: &Path) -> R
     // NEWNET requires network setup, skipping for MVP (host net).
     // We include CLONE_NEWUSER to allow rootless execution.
     let flags = CloneFlags::CLONE_NEWNS
-        | CloneFlags::CLONE_NEWPID
+        // | CloneFlags::CLONE_NEWPID // Disabled for CI stability (Docker-on-macOS QEMU limits)
         | CloneFlags::CLONE_NEWIPC
         | CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWUSER;
@@ -101,7 +114,7 @@ fn run_isolated_linux(command: &[String], manifest: &Path, cas_root: &Path) -> R
     // PID isolation is good but harder.
 
     // Setup Mounts
-    setup_mounts(manifest, cas_root)?;
+    setup_mounts(manifest, cas_root, base_manifest)?;
 
     // 4. Exec Command
     let err = Command::new(&command[0])
@@ -128,7 +141,11 @@ fn write_id_map(path: &str, real_id: u32, inside_id: u32, count: u32) -> Result<
 }
 
 #[cfg(target_os = "linux")]
-fn setup_mounts(manifest_path: &Path, cas_root: &Path) -> Result<()> {
+fn setup_mounts(
+    manifest_path: &Path,
+    cas_root: &Path,
+    base_manifest_path: Option<&Path>,
+) -> Result<()> {
     use std::fs;
 
     use velo_cas::CasStore;
@@ -136,17 +153,7 @@ fn setup_mounts(manifest_path: &Path, cas_root: &Path) -> Result<()> {
     use velo_runtime::{LinkFarm, NamespaceManager, OverlayManager};
 
     // We need a persistent temp directory that survives this function
-    // but implies we are leaking it until the process dies (namespace destruction).
-    // For MVP, we'll let the OS clean up /tmp or rely on container ephemeral nature.
-    // In a real system, we'd manage this lifecycle better.
     let run_dir = tempfile::Builder::new().prefix("velo-run-").tempdir()?;
-    // let run_path = run_dir.path().to_path_buf(); // unused
-
-    // Keep the tempdir content alive by forgetting the RAII guard?
-    // If we drop `run_dir` here, it removes the directory.
-    // But we need it for the lifespan of the isolated process.
-    // We should probably `into_path()` specifically for this reason,
-    // effectively "leaking" the directory on disk to be cleaned up later.
     let run_path_persistent = run_dir.keep();
 
     println!(
@@ -159,9 +166,21 @@ fn setup_mounts(manifest_path: &Path, cas_root: &Path) -> Result<()> {
     let work_dir = run_path_persistent.join("work");
     let merged_dir = run_path_persistent.join("merged");
 
-    // 1. Load Manifest & CAS
+    // 1. Load Manifests & CAS
+    let mut manifests = Vec::new();
+
+    // Load base manifest first if provided
+    if let Some(base_path) = base_manifest_path {
+        let base_manifest = Manifest::load(base_path)
+            .with_context(|| format!("Failed to load base manifest: {}", base_path.display()))?;
+        manifests.push(base_manifest);
+        println!("   [Isolation] Using base image: {}", base_path.display());
+    }
+
     let manifest = Manifest::load(manifest_path)
         .with_context(|| format!("Failed to load manifest: {}", manifest_path.display()))?;
+    manifests.push(manifest);
+
     let cas = CasStore::new(cas_root)
         .with_context(|| format!("Failed to open CAS: {}", cas_root.display()))?;
 
@@ -169,7 +188,7 @@ fn setup_mounts(manifest_path: &Path, cas_root: &Path) -> Result<()> {
     println!("   [Isolation] Populating LowerDir...");
     let link_farm = LinkFarm::new(cas);
     link_farm
-        .populate(&manifest, &lower_dir)
+        .populate(&manifests, &lower_dir)
         .context("Failed to populate Link Farm")?;
 
     // 3. Mount OverlayFS

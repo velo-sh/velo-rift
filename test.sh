@@ -269,6 +269,21 @@ if [ "$OS" == "Linux" ]; then
         echo "[PASS] Isolation verified (Host /bin/ls execution failed as expected)."
     fi
 
+    # 10.2 Positive Isolation Test (with Static Toolchain)
+    echo "[*] Testing Static Binary Support (with Base Image)..."
+    ./scripts/setup_busybox.sh
+    
+    # Use /bin/sh from the busybox base to run a command
+    # Note: we use 'id -u' because 'whoami' requires /etc/passwd which we don't have.
+    # Inside the user namespace, we should be UID 0 (root).
+    ISO_OUT=$(velo run --isolate --base busybox.manifest --manifest "$MANIFEST" -- /bin/sh -c "id -u")
+    if [[ "$ISO_OUT" == *"0"* ]]; then
+        echo "[PASS] Static binary (busybox) executed in isolate successfully."
+    else
+        echo "ERROR: Static binary execution failed or output mismatch: $ISO_OUT"
+        exit 1
+    fi
+
     # To truly verify we are "inside" and not just crashing, we would need a static binary.
     # But for MVP, "Not finding host binaries" is the strongest signal we have without ingesting a rootfs.
 else

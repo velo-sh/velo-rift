@@ -53,65 +53,78 @@ impl LinkFarm {
         Self { cas }
     }
 
-    /// Populate the target directory with hard links based on the manifest.
-    pub fn populate(&self, manifest: &Manifest, target: &Path) -> Result<()> {
+    /// Populate the target directory with hard links based on one or more manifests.
+    /// 
+    /// If multiple manifests are provided, they are applied in order. Files in later
+    /// manifests will overwrite those in earlier ones at the same path.
+    pub fn populate(&self, manifests: &[Manifest], target: &Path) -> Result<()> {
         if !target.exists() {
             fs::create_dir_all(target)?;
         }
 
-        for (path_str, entry) in manifest.iter() {
-            // Skip root directory entry itself if present
-            if path_str == "/" {
-                continue;
-            }
-
-            // Construct full destination path
-            let relative_path = path_str.trim_start_matches('/');
-            let dest_path = target.join(relative_path);
-
-            if entry.is_dir() {
-                fs::create_dir_all(&dest_path)?;
-                continue;
-            }
-
-            // Ensure parent directory exists
-            if let Some(parent) = dest_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-
-            if entry.is_file() {
-                // Find source blob in CAS
-                let src_path = self
-                    .cas
-                    .blob_path_for_hash(&entry.content_hash)
-                    .ok_or_else(|| {
-                        RuntimeError::BlobNotFound(format!("{:?}", entry.content_hash))
-                    })?;
-
-                // Create hard link: src (CAS) -> dest (Link Farm)
-                // Remove existing file if present (idempotency)
-                if dest_path.exists() {
-                    fs::remove_file(&dest_path)?;
+        for manifest in manifests {
+            for (path_str, entry) in manifest.iter() {
+                // Skip root directory entry itself if present
+                if path_str == "/" {
+                    continue;
                 }
 
-                fs::hard_link(&src_path, &dest_path)?;
-            } else if entry.is_symlink() {
-                // Fetch symlink target from CAS
-                let target_bytes = self
-                    .cas
-                    .get(&entry.content_hash)
-                    .map_err(RuntimeError::Cas)?;
+                // Construct full destination path
+                let relative_path = path_str.trim_start_matches('/');
+                let dest_path = target.join(relative_path);
 
-                let target_path_str = String::from_utf8(target_bytes)
-                    .map_err(|_| RuntimeError::Overlay("Invalid UTF-8 in symlink target".into()))?;
-
-                // Remove existing file if present
-                if dest_path.exists() {
-                    fs::remove_file(&dest_path)?;
+                if entry.is_dir() {
+                    fs::create_dir_all(&dest_path)?;
+                    continue;
                 }
 
-                std::os::unix::fs::symlink(target_path_str, &dest_path)
-                    .map_err(RuntimeError::Io)?;
+                // Ensure parent directory exists
+                if let Some(parent) = dest_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+
+                if entry.is_file() {
+                    // Find source blob in CAS
+                    let src_path = self
+                        .cas
+                        .blob_path_for_hash(&entry.content_hash)
+                        .ok_or_else(|| {
+                            RuntimeError::BlobNotFound(format!("{:?}", entry.content_hash))
+                        })?;
+
+                    // Create hard link: src (CAS) -> dest (Link Farm)
+                    // Remove existing file if present (idempotency/overwrite)
+                    if dest_path.exists() {
+                        fs::remove_file(&dest_path)?;
+                    }
+
+                    fs::hard_link(&src_path, &dest_path)?;
+
+                    // Apply metadata (mode, mtime)
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&dest_path, fs::Permissions::from_mode(entry.mode))?;
+                    
+                    // Note: Setting mtime requires filetime or similar, 
+                    // skipping for MVP unless we add dependency.
+                    // But permissions are CRITICAL for execution.
+                } else if entry.is_symlink() {
+                    // Fetch symlink target from CAS
+                    let target_bytes = self
+                        .cas
+                        .get(&entry.content_hash)
+                        .map_err(RuntimeError::Cas)?;
+
+                    let target_path_str = String::from_utf8(target_bytes)
+                        .map_err(|_| RuntimeError::Overlay("Invalid UTF-8 in symlink target".into()))?;
+
+                    // Remove existing file if present
+                    if dest_path.exists() {
+                        fs::remove_file(&dest_path)?;
+                    }
+
+                    std::os::unix::fs::symlink(target_path_str, &dest_path)
+                        .map_err(RuntimeError::Io)?;
+                }
             }
         }
         Ok(())
@@ -337,7 +350,7 @@ mod tests {
 
         // Populate Link Farm
         let farm = LinkFarm::new(cas);
-        farm.populate(&manifest, &link_farm_root).unwrap();
+        farm.populate(&[manifest], &link_farm_root).unwrap();
 
         // Verify
         let config_path = link_farm_root.join("etc/config");
@@ -355,5 +368,63 @@ mod tests {
         let log_path = link_farm_root.join("var/log");
         assert!(log_path.exists());
         assert!(log_path.is_dir());
+    }
+
+    #[test]
+    fn test_link_farm_merge() {
+        let temp = TempDir::new().unwrap();
+        let cas_root = temp.path().join("cas");
+        let link_farm_root = temp.path().join("lower");
+
+        let cas = CasStore::new(&cas_root).unwrap();
+
+        // 1. Create Base Manifest
+        let base_content = b"base content";
+        let base_hash = cas.store(base_content).unwrap();
+        let mut base_manifest = Manifest::new();
+        base_manifest.insert(
+            "/bin/sh",
+            VnodeEntry::new_file(base_hash, base_content.len() as u64, 0, 0o755),
+        );
+        base_manifest.insert(
+            "/etc/common",
+            VnodeEntry::new_file(base_hash, base_content.len() as u64, 0, 0o644),
+        );
+
+        // 2. Create App Manifest
+        let app_content = b"app content";
+        let app_hash = cas.store(app_content).unwrap();
+        let mut app_manifest = Manifest::new();
+        app_manifest.insert(
+            "/app/main",
+            VnodeEntry::new_file(app_hash, app_content.len() as u64, 0, 0o755),
+        );
+        // Overwrite etc/common
+        app_manifest.insert(
+            "/etc/common",
+            VnodeEntry::new_file(app_hash, app_content.len() as u64, 0, 0o644),
+        );
+
+        // 3. Populate Link Farm with both
+        let farm = LinkFarm::new(cas);
+        farm.populate(&[base_manifest, app_manifest], &link_farm_root)
+            .unwrap();
+
+        // 4. Verify Merged View
+        // - From base
+        assert_eq!(
+            fs::read(link_farm_root.join("bin/sh")).unwrap(),
+            base_content
+        );
+        // - From app
+        assert_eq!(
+            fs::read(link_farm_root.join("app/main")).unwrap(),
+            app_content
+        );
+        // - Merged/Overwritten
+        assert_eq!(
+            fs::read(link_farm_root.join("etc/common")).unwrap(),
+            app_content
+        );
     }
 }

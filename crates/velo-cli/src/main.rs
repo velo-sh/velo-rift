@@ -69,6 +69,10 @@ enum Commands {
         #[arg(long)]
         isolate: bool,
 
+        /// Optional base manifest for isolation
+        #[arg(long)]
+        base: Option<PathBuf>,
+
         /// Run via daemon (delegated execution)
         #[arg(long)]
         daemon: bool,
@@ -131,6 +135,7 @@ fn main() -> Result<()> {
         manifest,
         command,
         isolate,
+        base,
         daemon: _, // daemon mode logic handled inside cmd_run if we get there
     } = &cli.command
     {
@@ -138,7 +143,7 @@ fn main() -> Result<()> {
              // Validate inputs early
              // We can't use cmd_run directly because it might want async eventually, 
              // but current cmd_run for isolation calls isolation::run_isolated which is sync.
-             return isolation::run_isolated(command, manifest, &cli.cas_root);
+             return isolation::run_isolated(command, manifest, &cli.cas_root, base.as_deref());
         }
     }
 
@@ -161,8 +166,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             manifest,
             command,
             isolate,
+            base,
             daemon,
-        } => cmd_run(&cli.cas_root, &manifest, &command, isolate, daemon), // isolate is false here
+        } => cmd_run(&cli.cas_root, &manifest, &command, isolate, base.as_deref(), daemon), // isolate is false here
         Commands::Status { manifest } => cmd_status(&cli.cas_root, manifest.as_deref()),
         Commands::Mount(args) => mount::run(args),
         Commands::Gc(args) => gc::run(args),
@@ -276,7 +282,7 @@ async fn cmd_ingest(
             format!("/{}/{}", base_prefix, relative.display())
         };
 
-        let metadata = fs::metadata(path)?;
+        let metadata = fs::symlink_metadata(path)?;
         let mtime = metadata
             .modified()
             .ok()
@@ -296,23 +302,16 @@ async fn cmd_ingest(
             let size = content.len() as u64;
 
             // Daemon-First Query: Check if we already have this blob (in memory index)
-            // If check_blob returns true, we trust it and skip disk write.
             let exists_in_daemon = daemon::check_blob(hash).await.unwrap_or(false);
 
             if !exists_in_daemon {
-                // Not in daemon, check/store in CAS
                 let was_new = !cas.exists(&hash);
                 cas.store(&content)?;
 
                 if was_new {
                     unique_blobs += 1;
-                    // Notify daemon of new blob
                     let _ = daemon::notify_blob(hash, size).await;
                 }
-            } else {
-                 // Even if it exists in daemon, we need to count stats correctly?
-                 // Dedup ratio logic relies on unique_blobs.
-                 // If it exists in daemon, it's not "new" to the system.
             }
 
             let vnode = VnodeEntry::new_file(hash, size, mtime, metadata.mode());
@@ -320,6 +319,20 @@ async fn cmd_ingest(
 
             files_ingested += 1;
             bytes_ingested += size;
+        } else if metadata.is_symlink() {
+            let target = fs::read_link(path)?;
+            let target_str = target.to_str().ok_or_else(|| {
+                anyhow::anyhow!("Non-UTF8 symlink target: {}", path.display())
+            })?;
+            
+            let content = target_str.as_bytes();
+            let hash = CasStore::compute_hash(content);
+            
+            // Store symlink target string as a blob in CAS
+            cas.store(content)?;
+            
+            let vnode = VnodeEntry::new_symlink(hash, content.len() as u64, mtime);
+            manifest.insert(&manifest_path, vnode);
         }
     }
 
@@ -355,6 +368,7 @@ fn cmd_run(
     manifest: &Path,
     command: &[String],
     isolate: bool,
+    base: Option<&Path>,
     daemon_mode: bool,
 ) -> Result<()> {
     if command.is_empty() {
@@ -375,7 +389,7 @@ fn cmd_run(
 
     // Handle isolation if requested
     if isolate {
-        return isolation::run_isolated(command, manifest, cas_root);
+        return isolation::run_isolated(command, manifest, cas_root, base);
     }
 
     // Standard LD_PRELOAD execution
