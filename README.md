@@ -47,18 +47,39 @@ Velo Rift:    open("/node_modules/...") → mmap pointer → done
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Local)
 
-Experience Velo Rift in seconds with our automated demo script:
+1. **Build**: `cargo build --release`
+2. **Ingest**: `velo ingest ./path/to/folder --output app.velo`
+3. **Run**: `velo run --manifest app.velo -- ls -R`
 
+For more advanced scenarios, see the [Full Usage Guide](docs/USAGE.md).
+
+---
+
+## 🛠 Usage Modes
+
+Velo Rift supports three primary execution modes depending on your needs:
+
+### 1. Local Development (Mode B: Library Interception)
+Uses `LD_PRELOAD` to transparently virtualize files without creating physical links.
 ```bash
-./scripts/demo.sh
+velo run --manifest app.velo -- python main.py
 ```
 
-This script will:
-1. Build the project (release mode).
-2. Create a temporary CAS and Manifest.
-3. Drop you into a shell where `/velo/hello_velo.txt` exists via the Shim.
+### 2. High-Performance Sharing (Mode A: Link Farm)
+Instantly creates a directory of hard links back to the global CAS. The default for non-SANDBOX Linux tasks.
+```bash
+# Default behavior for standard runs
+velo run --manifest app.velo -- ./my_binary
+```
+
+### 3. Secure Isolation (Mode A + Sandboxing)
+Creates a rootless Linux Namespace container with a layered rootfs (Multi-manifest support).
+```bash
+./scripts/setup_busybox.sh
+velo run --isolate --base busybox.manifest --manifest app.velo -- /bin/sh
+```
 
 ## ⚡️ Performance & Benchmarking
 
@@ -78,6 +99,7 @@ This measures the nanosecond-latency of `store`, `get`, and `get_mmap` operation
 
 | Document | Description |
 |----------|-------------|
+| [Usage Guide](docs/USAGE.md) | **Start Here!** Multi-mode execution guide |
 | [Comparison](docs/COMPARISON.md) | How we compare to other tools |
 | [Architecture](docs/ARCHITECTURE.md) | Implementation specification |
 
@@ -99,7 +121,7 @@ This measures the nanosecond-latency of `store`, `get`, and `get_mmap` operation
 
 ## Status
 
-🚧 **Early Development** — Architecture defined, implementation in progress.
+� **Active Development** — Core architecture implemented. Stable CAS, VFS Shim, and Rootless Isolation (Linux) are ready for use.
 
 ## License
 
