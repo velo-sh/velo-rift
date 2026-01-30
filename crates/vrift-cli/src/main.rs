@@ -79,11 +79,19 @@ enum Commands {
         daemon: bool,
     },
 
-    /// Display CAS statistics
+    /// Display CAS statistics and session status
     Status {
         /// Also show manifest statistics if a manifest file is provided
         #[arg(short, long)]
         manifest: Option<PathBuf>,
+
+        /// Show active session info
+        #[arg(short = 's', long)]
+        session: bool,
+
+        /// Project directory (default: current directory)
+        #[arg(value_name = "DIR")]
+        directory: Option<PathBuf>,
     },
 
     /// Mount the manifest as a FUSE filesystem
@@ -188,7 +196,10 @@ async fn async_main(cli: Cli) -> Result<()> {
             base,
             daemon,
         } => cmd_run(&cli.cas_root, &manifest, &command, isolate, base.as_deref(), daemon), // isolate is false here
-        Commands::Status { manifest } => cmd_status(&cli.cas_root, manifest.as_deref()),
+        Commands::Status { manifest, session, directory } => {
+            let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
+            cmd_status(&cli.cas_root, manifest.as_deref(), session, &dir)
+        }
         Commands::Mount(args) => mount::run(args),
         Commands::Gc(args) => gc::run(args),
         Commands::Resolve { lockfile } => cmd_resolve(&cli.cas_root, &lockfile),
@@ -523,11 +534,45 @@ fn find_shim_library() -> Result<PathBuf> {
     );
 }
 
-/// Display CAS and optionally manifest statistics
-fn cmd_status(cas_root: &Path, manifest: Option<&Path>) -> Result<()> {
+/// Display CAS, manifest, and optionally session statistics
+fn cmd_status(cas_root: &Path, manifest: Option<&Path>, show_session: bool, project_dir: &Path) -> Result<()> {
     println!("Velo Rift Status");
     println!("================");
     println!();
+
+    // Session status (RFC-0039)
+    if show_session {
+        let vrift = active::VriftDir::new(project_dir);
+        if vrift.has_session() {
+            match vrift.load_session() {
+                Ok(session) => {
+                    let mode_icon = match session.mode {
+                        active::ProjectionMode::Solid => "●",
+                        active::ProjectionMode::Phantom => "◐",
+                    };
+                    let status = if session.active { "Active" } else { "Inactive" };
+                    println!("Session: {} [{}] {}", mode_icon, session.mode, status);
+                    println!("  Project:  {}", session.project_root.display());
+                    println!("  Created:  {}", format_timestamp(session.created_at));
+                    println!("  Platform: {}", session.abi_context.target_triple);
+                    if let Some(ref rust) = session.abi_context.toolchain_version {
+                        println!("  Rust:     {}", rust);
+                    }
+                    if let Some(ref py) = session.abi_context.python_version {
+                        println!("  Python:   {}", py);
+                    }
+                    println!();
+                }
+                Err(e) => {
+                    println!("Session: Error loading - {}", e);
+                    println!();
+                }
+            }
+        } else {
+            println!("Session: None (run `vrift active` to start)");
+            println!();
+        }
+    }
 
     // CAS statistics
     if cas_root.exists() {
@@ -584,6 +629,28 @@ fn cmd_status(cas_root: &Path, manifest: Option<&Path>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Format Unix timestamp as human-readable date
+fn format_timestamp(epoch: u64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+    let dt = UNIX_EPOCH + Duration::from_secs(epoch);
+    // Simple formatting without chrono dependency
+    let now = std::time::SystemTime::now();
+    if let Ok(duration) = now.duration_since(dt) {
+        let secs = duration.as_secs();
+        if secs < 60 {
+            format!("{} seconds ago", secs)
+        } else if secs < 3600 {
+            format!("{} minutes ago", secs / 60)
+        } else if secs < 86400 {
+            format!("{} hours ago", secs / 3600)
+        } else {
+            format!("{} days ago", secs / 86400)
+        }
+    } else {
+        format!("epoch {}", epoch)
+    }
 }
 
 /// Format bytes in human-readable form
