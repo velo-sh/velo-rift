@@ -30,8 +30,9 @@ Velo Rift™ provides two specific modes to balance safety and performance.
 ### 4.1 Solid Mode (默认 / Default)
 - **Concept**: The environment is "Solid." Physical files remain in the project directory.
 - **UX Feedback**: `Velo is active in [Solid] mode. Physical files are safe.`
-- **Mechanism**: `Live Ingest` + `Hardlink`. 
-- **Rollback Experience**: **Perfect**. Since physical inodes remain at the original paths, deactivating Velo has zero impact on file availability.
+- **Mechanism**: `Link-to-CAS` (Atomic).
+- **Implementation**: Instead of moving the file, Velo simply creates a hardlink in the CAS pointing to the existing project file. The inode remains identical.
+- **Rollback Experience**: **Perfect**. Since physical inodes never moved, deactivating Velo has zero impact on file availability.
 
 ### 4.2 Phantom Mode (幻影 / Advanced)
 - **Concept**: The environment is a "Phantom." Physical files are moved to CAS and replaced by the virtual projection.
