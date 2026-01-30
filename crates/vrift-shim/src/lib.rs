@@ -85,13 +85,16 @@ struct VeloFd {
     mmap: Mmap,
     /// Current read position
     position: usize,
-    /// Virtual path (for debugging)
-    #[allow(dead_code)]
+    /// Virtual path (for debugging and re-ingest)
     vpath: String,
     /// The actual underlying fd (for writes after break-before-write)
     real_fd: Option<RawFd>,
+    /// Temp file path for BBW content (for re-ingest)
+    temp_path: Option<String>,
     /// Whether this fd was written to (needs re-ingest on close)
     modified: bool,
+    /// Whether opened with O_TRUNC (fast path: skip content copy)
+    o_trunc: bool,
 }
 
 /// Global shim state
@@ -344,7 +347,9 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -
                     position: 0,
                     vpath: path_str.clone(),
                     real_fd: None,
+                    temp_path: None,
                     modified: false,
+                    o_trunc: false,
                 },
             );
         });
@@ -413,8 +418,9 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: size_t) -> 
             // Seek to the current position
             libc::lseek(temp_fd, vfd.position as libc::off_t, libc::SEEK_SET);
 
-            // Store the real fd and mark as modified
+            // Store the real fd, temp path, and mark as modified
             vfd.real_fd = Some(temp_fd);
+            vfd.temp_path = Some(temp_path);
             vfd.modified = true;
 
             // Now write to the real fd
@@ -457,6 +463,12 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: size_t) -> ssi
 }
 
 /// Intercept close() syscall with re-ingest support (RFC-0039)
+///
+/// For modified files (post-BBW), this:
+/// 1. Reads the temp file content
+/// 2. Computes new BLAKE3 hash
+/// 3. Stores in CAS (if new)
+/// 4. Cleans up temp file
 #[no_mangle]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     let real_close = get_real_fn!(REAL_CLOSE, "close", CloseFn);
@@ -470,16 +482,42 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
             // If we broke the link and wrote, we need to re-ingest
             if vfd.modified {
                 if let Some(real_fd) = vfd.real_fd {
-                    debug!(path = %vfd.vpath, "Closing modified file - re-ingest needed");
-                    // Close the temp fd
+                    // Close the temp fd first
                     real_close(real_fd);
-                    // TODO: Trigger re-ingest via manifest update
-                    // For now, we just log that re-ingest is needed
-                    // In full implementation, this would:
-                    // 1. Read the temp file
-                    // 2. Calculate new BLAKE3 hash
-                    // 3. Store in CAS
-                    // 4. Update manifest with new hash
+
+                    // Perform re-ingest if we have temp_path
+                    if let Some(ref temp_path) = vfd.temp_path {
+                        debug!(path = %vfd.vpath, temp = %temp_path, "Re-ingesting modified file");
+
+                        // Read temp file content
+                        if let Ok(content) = std::fs::read(temp_path) {
+                            // Compute new BLAKE3 hash
+                            let new_hash = vrift_cas::CasStore::compute_hash(&content);
+
+                            // Try to store in CAS
+                            if let Some(state) = ShimState::get() {
+                                match state.cas.store(&content) {
+                                    Ok(_) => {
+                                        debug!(
+                                            hash = %vrift_cas::CasStore::hash_to_hex(&new_hash),
+                                            size = content.len(),
+                                            "Re-ingest: stored new content in CAS"
+                                        );
+                                        // Note: Manifest update requires mutable access
+                                        // Deferred to daemon IPC or session recovery
+                                    }
+                                    Err(e) => {
+                                        error!(error = %e, "Re-ingest: failed to store in CAS");
+                                    }
+                                }
+                            }
+                        } else {
+                            error!(path = %temp_path, "Re-ingest: failed to read temp file");
+                        }
+
+                        // Clean up temp file
+                        let _ = std::fs::remove_file(temp_path);
+                    }
                 }
             }
         }
