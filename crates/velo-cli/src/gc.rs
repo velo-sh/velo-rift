@@ -8,7 +8,7 @@ use velo_manifest::Manifest;
 #[derive(Args, Debug)]
 pub struct GcArgs {
     /// Path to the Manifest file to treat as the "root" of live objects.
-    #[arg(long, default_value = "manifest.velo")]
+    #[arg(long, default_value = "vrift.manifest")]
     manifest: PathBuf,
 
     /// Actually delete blobs (default is dry-run)

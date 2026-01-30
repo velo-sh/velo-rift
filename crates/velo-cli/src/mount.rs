@@ -10,7 +10,7 @@ use velo_manifest::Manifest;
 #[derive(Args, Debug)]
 pub struct MountArgs {
     /// Manifest file to mount
-    #[arg(short, long, default_value = "velo.manifest")]
+    #[arg(short, long, default_value = "vrift.manifest")]
     manifest: PathBuf,
 
     /// Mount point directory
@@ -38,7 +38,7 @@ pub fn run(args: MountArgs) -> Result<()> {
             .with_context(|| format!("Failed to create mountpoint: {}", mountpoint.display()))?;
     }
 
-    tracing::info!("Mounting VeloFS...");
+    tracing::info!("Mounting Velo Rift™...");
     tracing::info!("  Manifest:   {}", manifest_path.display());
     tracing::info!("  CAS:        {}", cas_root.display());
     tracing::info!("  Mountpoint: {}", mountpoint.display());

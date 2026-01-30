@@ -25,10 +25,10 @@
 //!
 //! ## Environment Variables
 //!
-//! - `VELO_MANIFEST`: Path to the manifest file (required)
+//! - `VRIFT_MANIFEST`: Path to the manifest file (required)
 //! - `VR_THE_SOURCE`: Path to CAS root directory (default: `/var/vrift/the_source`)
-//! - `VELO_VFS_PREFIX`: Virtual path prefix to intercept (default: `/velo`)
-//! - `VELO_DEBUG`: Enable debug logging if set
+//! - `VRIFT_VFS_PREFIX`: Virtual path prefix to intercept (default: `/velo`)
+//! - `VRIFT_DEBUG`: Enable debug logging if set
 
 #![allow(clippy::missing_safety_doc)]
 #![allow(unused_doc_comments)]
@@ -104,10 +104,10 @@ use tracing::{debug, error};
 
 impl ShimState {
     fn init() -> Option<Self> {
-        let manifest_path = std::env::var("VELO_MANIFEST").ok()?;
+        let manifest_path = std::env::var("VRIFT_MANIFEST").ok()?;
         let cas_root =
             std::env::var("VR_THE_SOURCE").unwrap_or_else(|_| "/var/vrift/the_source".to_string());
-        let vfs_prefix = std::env::var("VELO_VFS_PREFIX").unwrap_or_else(|_| "/velo".to_string());
+        let vfs_prefix = std::env::var("VRIFT_VFS_PREFIX").unwrap_or_else(|_| "/velo".to_string());
 
         // Initialize tracing if not already initialized
         // We use try_init because this might be called multiple times or conflict with app
@@ -136,14 +136,14 @@ impl ShimState {
                 // Return a dummy state that doesn't intercept anything
                 ShimState {
                     manifest: Manifest::new(),
-                    cas: CasStore::new("/tmp/velo-shim-dummy").unwrap(),
-                    vfs_prefix: "/nonexistent-velo-prefix".to_string(),
+                    cas: CasStore::new("/tmp/vrift-shim-dummy").unwrap(),
+                    vfs_prefix: "/nonexistent-vrift-prefix".to_string(),
                 }
             })
         });
         let state = SHIM_STATE.get()?;
         // Only return state if manifest is non-empty (properly initialized)
-        if state.manifest.is_empty() && state.vfs_prefix == "/nonexistent-velo-prefix" {
+        if state.manifest.is_empty() && state.vfs_prefix == "/nonexistent-vrift-prefix" {
             None
         } else {
             Some(state)
@@ -300,7 +300,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -
     #[cfg(not(target_os = "linux"))]
     {
         // Fallback (macOS): Use temp file + mmap
-        let temp_path = format!("/tmp/velo-shim-{}", std::process::id());
+        let temp_path = format!("/tmp/vrift-shim-{}", std::process::id());
         let temp_file_path =
             PathBuf::from(&temp_path).join(CasStore::hash_to_hex(&entry.content_hash));
 

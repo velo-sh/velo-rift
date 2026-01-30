@@ -81,9 +81,9 @@ else
     exit 1
 fi
 
-export VELO_MANIFEST="$MANIFEST_PATH"
-export VELO_CAS_ROOT="$CAS_ROOT"
-export VELO_VFS_PREFIX="/velo"
+export VRIFT_MANIFEST="$MANIFEST_PATH"
+export VR_THE_SOURCE="$CAS_ROOT"
+export VRIFT_VFS_PREFIX="/velo"
 export RUST_LOG="info" # Enable our new tracing!
 
 # Execute shell with env

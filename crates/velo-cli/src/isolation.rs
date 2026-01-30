@@ -119,7 +119,7 @@ fn run_isolated_linux(
     // 4. Exec Command
     let err = Command::new(&command[0])
         .args(&command[1..])
-        .env("VELO_ISOLATED", "1")
+        .env("VRIFT_ISOLATED", "1")
         .exec();
 
     anyhow::bail!("Failed to exec: {}", err);

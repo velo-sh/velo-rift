@@ -55,7 +55,7 @@ mod imp {
             
             let opts = vec![
                 fuser::MountOption::RO,
-                fuser::MountOption::FSName("velo".to_string()),
+                fuser::MountOption::FSName("vrift".to_string()),
                 fuser::MountOption::AutoUnmount,
             ];
 

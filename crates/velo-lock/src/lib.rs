@@ -1,6 +1,6 @@
 //! # velo-lock
 //!
-//! Parser for `velo.lock` files, based on the Velo Technical Architecture §3.1.
+//! Parser for `vrift.lock` files, based on the Velo Technical Architecture §3.1.
 //!
 //! This crate handles the translation of high-level dependency intent (packages)
 //! into physical storage capabilities (CAS trees).
@@ -24,7 +24,7 @@ pub enum LockError {
 
 pub type Result<T> = std::result::Result<T, LockError>;
 
-/// Top-level velo.lock structure
+/// Top-level vrift.lock structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VeloLock {
     pub meta: LockMeta,
@@ -80,7 +80,7 @@ mod tests {
     fn test_lock_roundtrip() {
         let lock = VeloLock {
             meta: LockMeta {
-                engine: "velo-native-v1".to_string(),
+                engine: "vrift-native-v1".to_string(),
                 generated_at: 1706448000,
                 uv_lock_hash: "sha256:7f8a...".to_string(),
                 target_platform: "linux_x86_64_gnu".to_string(),
@@ -117,7 +117,7 @@ mod tests {
 
         let loaded = VeloLock::load(file.path()).unwrap();
 
-        assert_eq!(loaded.meta.engine, "velo-native-v1");
+        assert_eq!(loaded.meta.engine, "vrift-native-v1");
         assert_eq!(loaded.packages.len(), 2);
         assert_eq!(loaded.packages["numpy"].version, "1.26.0");
         assert!(loaded.packages["pandas"].dist_info_tree.is_none());

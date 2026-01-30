@@ -28,7 +28,7 @@ export PATH=$PATH:$(pwd)/target/release
 TEST_DIR="/tmp/velo_test"
 CAS_DIR="$TEST_DIR/cas"
 DATA_DIR="$TEST_DIR/data"
-MANIFEST="$TEST_DIR/manifest.velo"
+MANIFEST="$TEST_DIR/vrift.manifest"
 
 rm -rf "$TEST_DIR"
 mkdir -p "$CAS_DIR" "$DATA_DIR"

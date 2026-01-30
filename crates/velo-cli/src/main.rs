@@ -47,7 +47,7 @@ enum Commands {
         directory: PathBuf,
 
         /// Output manifest file path
-        #[arg(short, long, default_value = "velo.manifest")]
+        #[arg(short, long, default_value = "vrift.manifest")]
         output: PathBuf,
 
         /// Base path prefix in manifest (default: use directory name)
@@ -58,7 +58,7 @@ enum Commands {
     /// Execute a command with VeloVFS virtualization
     Run {
         /// Manifest file to use
-        #[arg(short, long, default_value = "velo.manifest")]
+        #[arg(short, long, default_value = "vrift.manifest")]
         manifest: PathBuf,
 
         /// Command to execute
@@ -94,7 +94,7 @@ enum Commands {
     /// Resolve dependencies from a velo.lock file
     Resolve {
         /// Lockfile path
-        #[arg(short, long, default_value = "velo.lock")]
+        #[arg(short, long, default_value = "vrift.lock")]
         lockfile: PathBuf,
     },
 
@@ -111,7 +111,7 @@ enum Commands {
         directory: PathBuf,
 
         /// Output manifest file path
-        #[arg(short, long, default_value = "velo.manifest")]
+        #[arg(short, long, default_value = "vrift.manifest")]
         output: PathBuf,
     },
 }
@@ -415,8 +415,8 @@ fn cmd_run(
     cmd.args(&command[1..]);
 
     // Set Velo environment variables
-    cmd.env("VELO_MANIFEST", &manifest_abs);
-    cmd.env("VELO_CAS_ROOT", &cas_abs);
+    cmd.env("VRIFT_MANIFEST", &manifest_abs);
+    cmd.env("VR_THE_SOURCE", &cas_abs);
 
     // Set platform-specific library preload
     #[cfg(target_os = "macos")]
@@ -431,9 +431,9 @@ fn cmd_run(
         cmd.env("LD_PRELOAD", &shim_path);
     }
 
-    // Enable debug output if VELO_DEBUG is set
-    if std::env::var("VELO_DEBUG").is_ok() {
-        cmd.env("VELO_DEBUG", "1");
+    // Enable debug output if VRIFT_DEBUG is set
+    if std::env::var("VRIFT_DEBUG").is_ok() {
+        cmd.env("VRIFT_DEBUG", "1");
     }
 
     let status = cmd
