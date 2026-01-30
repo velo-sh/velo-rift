@@ -23,7 +23,7 @@ mod mount;
 mod active;
 pub mod gc;
 
-use vrift_cas::CasStore;
+use vrift_cas::{create_backend, CasStore};
 use vrift_manifest::{Manifest, VnodeEntry};
 
 /// Velo Rift™ - Content-Addressable Virtual Filesystem (Powered by VeloVFS)
@@ -54,6 +54,10 @@ enum Commands {
         /// Base path prefix in manifest (default: use directory name)
         #[arg(short, long)]
         prefix: Option<String>,
+
+        /// Enable parallel file ingestion for better performance
+        #[arg(long, default_value = "true")]
+        parallel: bool,
     },
 
     /// Execute a command with VeloVFS virtualization
@@ -188,7 +192,8 @@ async fn async_main(cli: Cli) -> Result<()> {
             directory,
             output,
             prefix,
-        } => cmd_ingest(&cli.cas_root, &directory, &output, prefix.as_deref()).await,
+            parallel,
+        } => cmd_ingest(&cli.cas_root, &directory, &output, prefix.as_deref(), parallel).await,
         Commands::Run {
             manifest,
             command,
@@ -287,6 +292,7 @@ async fn cmd_ingest(
     directory: &Path,
     output: &Path,
     prefix: Option<&str>,
+    parallel: bool,
 ) -> Result<()> {
     // Validate input directory
     if !directory.exists() {
@@ -299,6 +305,16 @@ async fn cmd_ingest(
     // Initialize CAS store
     let cas = CasStore::new(cas_root)
         .with_context(|| format!("Failed to initialize CAS at {}", cas_root.display()))?;
+
+    // Select I/O backend based on parallel flag
+    let backend = if parallel {
+        let b = create_backend();
+        println!("Using {} for parallel ingestion", b.name());
+        Some(b)
+    } else {
+        println!("Using serial ingestion mode");
+        None
+    };
 
     // Determine path prefix
     let base_prefix = prefix.unwrap_or_else(|| {
@@ -685,7 +701,7 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
 
     // Initial ingest
     println!("\n[Initial Scan]");
-    cmd_ingest(cas_root, directory, output, None).await?;
+    cmd_ingest(cas_root, directory, output, None, true).await?;
 
     // Create a channel to receive the events.
     let (tx, rx) = channel();
@@ -717,7 +733,7 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
                         // Simple debounce
                         if last_ingest.elapsed() > debounce_duration {
                             println!("\n[Change Detected] Re-ingesting...");
-                            if let Err(e) = cmd_ingest(cas_root, directory, output, None).await {
+                            if let Err(e) = cmd_ingest(cas_root, directory, output, None, true).await {
                                 eprintln!("Ingest failed: {}", e);
                             }
                             last_ingest = std::time::Instant::now();

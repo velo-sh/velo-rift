@@ -36,14 +36,25 @@ pub trait IngestBackend: Send + Sync {
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 mod uring {
     use super::*;
+    use std::fs;
+    use tokio_uring::fs::File as UringFile;
 
+    /// High-performance io_uring backend for Linux 5.1+
+    ///
+    /// Uses io_uring for batch file reads with minimal syscall overhead.
+    /// The async runtime handles batching and completion queue processing.
     pub struct UringBackend {
-        ring_size: u32,
+        /// Maximum concurrent operations
+        concurrency: usize,
     }
 
     impl UringBackend {
         pub fn new() -> Self {
-            Self { ring_size: 256 }
+            Self { concurrency: 256 }
+        }
+
+        pub fn with_concurrency(concurrency: usize) -> Self {
+            Self { concurrency }
         }
     }
 
@@ -53,9 +64,50 @@ mod uring {
             cas: Arc<CasStore>,
             paths: Vec<PathBuf>,
         ) -> Result<Vec<Blake3Hash>> {
-            // TODO: Implement io_uring batch submission
-            // For now, fall back to rayon
-            rayon_fallback::RayonBackend.store_files_batch(cas, paths)
+            // Run the async io_uring operations in a tokio-uring runtime
+            tokio_uring::start(async move {
+                let mut hashes = Vec::with_capacity(paths.len());
+                
+                // Process in chunks to limit memory usage
+                for chunk in paths.chunks(self.concurrency) {
+                    let mut handles = Vec::with_capacity(chunk.len());
+                    
+                    for path in chunk {
+                        let cas_clone = cas.clone();
+                        let path_clone = path.clone();
+                        
+                        // Spawn async task for each file
+                        let handle = tokio_uring::spawn(async move {
+                            // Read file using io_uring
+                            let file = UringFile::open(&path_clone).await?;
+                            let meta = fs::metadata(&path_clone)?;
+                            let size = meta.len() as usize;
+                            
+                            // Allocate buffer and read
+                            let buf = vec![0u8; size];
+                            let (res, buf) = file.read_at(buf, 0).await;
+                            res?;
+                            
+                            // Store in CAS (sync operation, but file read was async)
+                            cas_clone.store(&buf)
+                        });
+                        handles.push(handle);
+                    }
+                    
+                    // Collect results from this chunk
+                    for handle in handles {
+                        let hash = handle.await.map_err(|e| {
+                            crate::CasError::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Task join error: {:?}", e),
+                            ))
+                        })??;
+                        hashes.push(hash);
+                    }
+                }
+                
+                Ok(hashes)
+            })
         }
 
         fn name(&self) -> &'static str {
