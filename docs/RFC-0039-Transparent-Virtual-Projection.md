@@ -24,6 +24,22 @@ To handle multi-version binaries:
 - The `ingest` process considers the **ABI_Context** for binary files (`.so`, `.dylib`).
 - This prevents collisions between different versions at the same path.
 
+### 3.4 Storage Layout
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **User View** | **Original project directory** | Users work normally; Velo transparently redirects |
+| **CAS (The Source)** | `~/.vrift/the_source/` | Content-addressable storage for all files |
+| **Manifest** | `.vrift/manifest.lmdb` (per-project) | Path → Hash mappings |
+| **Session State** | `.vrift/session.json` | Active mode, ABI context |
+
+**Projection Mechanism**:
+
+| Tier | User Sees | Actual Storage |
+|------|-----------|----------------|
+| **Tier-1** | `/project/node_modules/...` | Symlink → `~/.vrift/the_source/...` |
+| **Tier-2** | `/project/target/...` | Hardlink (shared inode with CAS) |
+
 ## 4. Operational Modes
 
 Velo Rift™ provides two modes to balance safety and performance.
