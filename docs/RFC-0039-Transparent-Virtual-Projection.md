@@ -475,3 +475,15 @@ fn ingest_with_wal(source: &Path) -> Result<()> {
 - **ABI Continuity**: The Session persists the **ABI_Context**, ensuring that a long-running development environment remains binary-consistent.
 - **Shim Performance**: Shadow capturing avoids the latency of synchronous hashing during small `write()` calls by deferring the ingest until `close()`.
 - **SIP Compliance**: On macOS, `active` mode handles Entitlements and SIP-stripping for children automatically.
+
+## 9. Implementation References
+
+For internal data structures and performance optimizations, see [ARCHITECTURE.md](./ARCHITECTURE.md):
+
+| Topic | Section | Description |
+|-------|---------|-------------|
+| Hash & ID Optimization | [§13](./ARCHITECTURE.md#13-hash--id-optimization-strategy) | Interning, VeloId bit-packing, storage vs runtime sizes |
+| Packfile / Blob Packing | [§12.1](./ARCHITECTURE.md#121-packfile--blob-packing-hotspot-consolidation) | Profile-guided packing, hotspot consolidation |
+| VeloVFS Runtime | [§9](./ARCHITECTURE.md#9-velovfs-runtime-architecture) | LD_PRELOAD shim, Manifest lookup, Vnode structure |
+| Multi-Tenant Isolation | [§8](./ARCHITECTURE.md#8-multi-tenant-isolation-architecture) | Namespace isolation, OverlayFS mechanics |
+| Python Optimizations | [§10](./ARCHITECTURE.md#10-python-specific-optimizations) | PEP 683, import hooks, bytecode caching |
