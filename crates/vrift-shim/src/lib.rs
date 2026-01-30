@@ -339,6 +339,12 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -
 
         let velo_fd = allocate_velo_fd();
 
+        // Check if opened with O_TRUNC (P2 optimization: skip content copy)
+        let opened_with_trunc = (flags & libc::O_TRUNC) != 0;
+        if opened_with_trunc {
+            debug!("Opened with O_TRUNC - will skip content copy on write");
+        }
+
         FD_MAP.with(|map| {
             map.borrow_mut().insert(
                 velo_fd,
@@ -349,7 +355,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -
                     real_fd: None,
                     temp_path: None,
                     modified: false,
-                    o_trunc: false,
+                    o_trunc: opened_with_trunc,
                 },
             );
         });
@@ -402,17 +408,24 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: size_t) -> 
                 return -1;
             }
 
-            // Copy existing content to temp file
-            let written = libc::write(
-                temp_fd,
-                vfd.mmap.as_ptr() as *const c_void,
-                vfd.mmap.len(),
-            );
+            // P2 Optimization: Skip content copy if opened with O_TRUNC
+            // O_TRUNC means the file will be truncated anyway, so copying
+            // existing content is wasted work
+            if !vfd.o_trunc {
+                // Copy existing content to temp file
+                let written = libc::write(
+                    temp_fd,
+                    vfd.mmap.as_ptr() as *const c_void,
+                    vfd.mmap.len(),
+                );
 
-            if written != vfd.mmap.len() as ssize_t {
-                error!("Failed to copy content for BBW");
-                libc::close(temp_fd);
-                return -1;
+                if written != vfd.mmap.len() as ssize_t {
+                    error!("Failed to copy content for BBW");
+                    libc::close(temp_fd);
+                    return -1;
+                }
+            } else {
+                debug!("O_TRUNC fast-path: skipping {} bytes content copy", vfd.mmap.len());
             }
 
             // Seek to the current position
