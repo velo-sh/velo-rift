@@ -1640,7 +1640,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
-name = "velo-cas"
+name = "vrift-cas"
 version = "0.1.0"
 dependencies = [
  "blake3",
@@ -1652,7 +1652,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "velo-cli"
+name = "vrift-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1666,18 +1666,18 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "velo-cas",
- "velo-fuse",
- "velo-ipc",
- "velo-lock",
- "velo-manifest",
- "velo-runtime",
- "velo-shim",
+ "vrift-cas",
+ "vrift-fuse",
+ "vrift-ipc",
+ "vrift-lock",
+ "vrift-manifest",
+ "vrift-runtime",
+ "vrift-shim",
  "walkdir",
 ]
 
 [[package]]
-name = "velo-daemon"
+name = "vrift-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1688,12 +1688,12 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "velo-cas",
- "velo-ipc",
+ "vrift-cas",
+ "vrift-ipc",
 ]
 
 [[package]]
-name = "velo-fuse"
+name = "vrift-fuse"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1701,12 +1701,12 @@ dependencies = [
  "fuser",
  "libc",
  "log",
- "velo-cas",
- "velo-manifest",
+ "vrift-cas",
+ "vrift-manifest",
 ]
 
 [[package]]
-name = "velo-ipc"
+name = "vrift-ipc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1715,19 +1715,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "velo-lock"
+name = "vrift-lock"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
- "velo-cas",
- "velo-manifest",
+ "vrift-cas",
+ "vrift-manifest",
 ]
 
 [[package]]
-name = "velo-manifest"
+name = "vrift-manifest"
 version = "0.1.0"
 dependencies = [
  "bincode",
@@ -1738,11 +1738,11 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
- "velo-cas",
+ "vrift-cas",
 ]
 
 [[package]]
-name = "velo-pack"
+name = "vrift-pack"
 version = "0.1.0"
 dependencies = [
  "bincode",
@@ -1751,24 +1751,24 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 1.0.69",
- "velo-cas",
+ "vrift-cas",
 ]
 
 [[package]]
-name = "velo-runtime"
+name = "vrift-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "nix 0.27.1",
  "tempfile",
  "thiserror 1.0.69",
- "velo-cas",
- "velo-manifest",
+ "vrift-cas",
+ "vrift-manifest",
  "walkdir",
 ]
 
 [[package]]
-name = "velo-shim"
+name = "vrift-shim"
 version = "0.1.0"
 dependencies = [
  "cc",
@@ -1778,8 +1778,8 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "velo-cas",
- "velo-manifest",
+ "vrift-cas",
+ "vrift-manifest",
 ]
 
 [[package]]

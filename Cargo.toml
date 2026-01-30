@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/velo-cas",
-    "crates/velo-manifest",
-    "crates/velo-pack",
-    "crates/velo-runtime",
-    "crates/velo-shim",
-    "crates/velo-fuse",
-    "crates/velo-lock",
-    "crates/velo-cli",
-    "crates/velo-daemon", "crates/velo-ipc",
+    "crates/vrift-cas",
+    "crates/vrift-manifest",
+    "crates/vrift-pack",
+    "crates/vrift-runtime",
+    "crates/vrift-shim",
+    "crates/vrift-fuse",
+    "crates/vrift-lock",
+    "crates/vrift-cli",
+    "crates/vrift-daemon", "crates/vrift-ipc",
 ]
 
 [workspace.package]
@@ -43,11 +43,11 @@ notify = "6.1.1"
 tracing = "0.1"
 
 # Internal crates
-velo-cas = { path = "crates/velo-cas" }
-velo-manifest = { path = "crates/velo-manifest" }
-velo-pack = { path = "crates/velo-pack" }
-velo-runtime = { path = "crates/velo-runtime" }
-velo-shim = { path = "crates/velo-shim" }
-velo-fuse = { path = "crates/velo-fuse" }
-velo-lock = { path = "crates/velo-lock" }
-velo-ipc = { path = "crates/velo-ipc" }
+vrift-cas = { path = "crates/vrift-cas" }
+vrift-manifest = { path = "crates/vrift-manifest" }
+vrift-pack = { path = "crates/vrift-pack" }
+vrift-runtime = { path = "crates/vrift-runtime" }
+vrift-shim = { path = "crates/vrift-shim" }
+vrift-fuse = { path = "crates/vrift-fuse" }
+vrift-lock = { path = "crates/vrift-lock" }
+vrift-ipc = { path = "crates/vrift-ipc" }

@@ -1,0 +1,16 @@
+[package]
+name = "vrift-lock"
+description = "Lockfile parser for Velo Rift (uv integration)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json = "1.0"
+thiserror.workspace = true
+vrift-cas.workspace = true
+vrift-manifest.workspace = true
+
+[dev-dependencies]
+tempfile = "3.14"

@@ -1,9 +1,0 @@
-[package]
-name = "velo-ipc"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-serde = { workspace = true, features = ["derive"] }
-thiserror = { workspace = true }
-anyhow = { workspace = true }

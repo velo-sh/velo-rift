@@ -1,0 +1,37 @@
+[package]
+name = "vrift-cli"
+description = "Command-line interface for Velo Rift"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vrift"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+anyhow.workspace = true
+walkdir.workspace = true
+notify.workspace = true
+vrift-cas.workspace = true
+vrift-manifest.workspace = true
+vrift-shim.workspace = true
+vrift-fuse = { workspace = true, optional = true }
+vrift-lock.workspace = true
+vrift-runtime.workspace = true
+nix.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+vrift-ipc.workspace = true
+bincode.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { workspace = true }
+serde_json = "1.0"
+
+[features]
+default = []
+fuse = ["vrift-fuse/fuse"]
+
+#[dev-dependencies]
