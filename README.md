@@ -27,7 +27,7 @@ Velo Rift™:   open("/node_modules/...") → mmap pointer → done
 - ✅ A **content-addressable store** with global deduplication  
 - ✅ An **I/O accelerator** for Python, Node.js, Rust, and more
 
-## What Velo Rift is NOT
+## What Velo Rift™ is NOT
 
 - ❌ A runtime replacement (we accelerate existing runtimes)
 - ❌ A package manager (we wrap uv, npm, cargo)
@@ -50,8 +50,8 @@ Velo Rift™:   open("/node_modules/...") → mmap pointer → done
 ## 🚀 Quick Start (Local)
 
 1. **Build**: `cargo build --release`
-2. **Ingest**: `vrift ingest ./path/to/folder --output app.velo`
-3. **Run**: `vrift run --manifest app.velo -- ls -R`
+2. **Ingest**: `vrift™ ingest ./path/to/folder --output app.velo`
+3. **Run**: `vrift™ run --manifest app.velo -- ls -R`
 
 For more advanced scenarios, see the [Full Usage Guide](docs/USAGE.md).
 
@@ -64,21 +64,21 @@ Velo Rift™ supports three primary execution modes depending on your needs:
 ### 1. Local Development (Mode B: Library Interception)
 Uses `LD_PRELOAD` to transparently virtualize files without creating physical links.
 ```bash
-vrift run --manifest app.velo -- python main.py
+vrift™ run --manifest app.velo -- python main.py
 ```
 
 ### 2. High-Performance Sharing (Mode A: Link Farm)
 Instantly creates a directory of hard links back to the global CAS. The default for non-SANDBOX Linux tasks.
 ```bash
 # Default behavior for standard runs
-vrift run --manifest app.velo -- ./my_binary
+vrift™ run --manifest app.velo -- ./my_binary
 ```
 
 ### 3. Secure Isolation (Mode A + Sandboxing)
 Creates a rootless Linux Namespace container with a layered rootfs (Multi-manifest support).
 ```bash
 ./scripts/setup_busybox.sh
-vrift run --isolate --base busybox.manifest --manifest app.velo -- /bin/sh
+vrift™ run --isolate --base busybox.manifest --manifest app.velo -- /bin/sh
 ```
 
 ## ⚡️ Performance & Benchmarking

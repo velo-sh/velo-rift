@@ -1,4 +1,4 @@
-# Velo Rift — Development Task Assignments
+# Velo Rift™ — Development Task Assignments
 
 > **Architect**: Prioritized tasks based on ARCHITECTURE.md specification
 
@@ -20,7 +20,7 @@ VeloVFS solves two problems:
 |----|------|-------|------|------|
 | D1 | **The Source (CAS) Basic Implementation** | Dev-1 | 3d | None |
 |    | - BLAKE3 hash computation | | | |
-|    | - `/var/velo/the_source/` directory layout (fan-out) | | | |
+|    | - `/var/vrift/the_source/` directory layout (fan-out) | | | |
 |    | - `store(bytes) → hash`, `get(hash) → bytes` | | | |
 | D2 | **Manifest Data Structure** | Dev-2 | 2d | None |
 |    | - `VnodeEntry` struct (56 bytes) | | | |
@@ -30,10 +30,10 @@ VeloVFS solves two problems:
 |    | - Intercept `open()`, `stat()`, `read()` | | | |
 |    | - Path → Manifest lookup | | | |
 |    | - CAS file redirection | | | |
-| D4 | **CLI Tool (velo)** | Dev-2 | 3d | D1, D2 |
-|    | - `velo ingest <dir>` — Import files to CAS | | | |
-|    | - `velo run <cmd>` — LD_PRELOAD wrapper | | | |
-|    | - `velo status` — Display CAS statistics | | | |
+| D4 | **CLI Tool (vrift™)** | Dev-2 | 3d | D1, D2 |
+|    | - `vrift ingest <dir>` — Import files to CAS | | | |
+|    | - `vrift run <cmd>` — LD_PRELOAD wrapper | | | |
+|    | - `vrift status` — Display CAS statistics | | | |
 
 ### QA Tasks
 
@@ -113,7 +113,7 @@ VeloVFS solves two problems:
 
 | Phase | Completion Criteria | Est. Duration |
 |-------|---------------------|---------------|
-| **P0 MVP** | `velo run python -c "import numpy"` succeeds | 2 weeks |
+| **P0 MVP** | `vrift run python -c "import numpy"` succeeds | 2 weeks |
 | **P1 Performance** | Cold start < 100ms, dedup rate > 80% | 1 week |
 | **P2 Isolation** | 100 concurrent tenants without issues | 2 weeks |
 

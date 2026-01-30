@@ -140,8 +140,8 @@ All tenant runtime data lives in a high-performance memory-backed location.
 ```
 
 ### 1.3 Persistent Storage (NVMe/Disk)
-*   **Path**: `/var/velo/meta.db` -> **LMDB** file for Git Metadata.
-*   **Path**: `/var/velo/cas_cache/` -> Persistent cache for Cold Blobs.
+*   **Path**: `/var/vrift™/meta.db` -> **LMDB** file for Git Metadata.
+*   **Path**: `/var/vrift™/cas_cache/` -> Persistent cache for Cold Blobs.
 
 ---
 
@@ -606,7 +606,7 @@ uv pip install numpy pandas
 
 # Velo-uv: Resolve Only → Query CAS → Instant Link
 uv pip compile requirements.txt --universal -o deps.lock
-velo ingest deps.lock  # Check CAS, download missing only
+vrift™ ingest deps.lock  # Check CAS, download missing only
 ```
 
 ### 11.2 Virtual Installation Flow
@@ -720,13 +720,13 @@ Module._extensions['.js'] = function(module, filename) {
 };
 ```
 
-### 12.3 velod Daemon Architecture
+### 12.3 vriftd Daemon Architecture
 
-The Velo daemon (`velod`) manages background tasks:
+The Velo daemon (`vriftd`) manages background tasks:
 
 ```text
 ┌──────────────────────────────────────┐
-│               velod                  │
+│               vriftd                  │
 ├──────────────────────────────────────┤
 │  ┌────────────┐  ┌────────────────┐  │
 │  │ CAS Manager│  │ Session Tracker│  │
@@ -1541,7 +1541,7 @@ ptr::write_unaligned(out_ptr as *mut u64, combined);
 RUSTFLAGS="-Cprofile-generate=/tmp/pgo-data" cargo build --release
 
 # Step 2: Run typical workload
-./target/release/velo < typical_workload.sh
+./target/release/vrift < typical_workload.sh
 
 # Step 3: Merge profile data
 llvm-profdata merge -o velo.profdata /tmp/pgo-data
@@ -1596,7 +1596,7 @@ fcntl(fd, F_ADD_SEALS,
 
 ```c
 // Host holds READ+WRITE fd (capable of exec/mmap)
-int host_fd = open("/var/velo/models/llama.bin", O_RDWR);
+int host_fd = open("/var/vrift™/models/llama.bin", O_RDWR);
 
 // Create read-only copy for tenant
 // This is a new fd pointing to same inode, with reduced permissions
@@ -1967,9 +1967,9 @@ impl Compass {
 ```
 
 **Use Cases**:
-- `velo compass jump HEAD^` — Instant rollback
-- `velo compass fork experiment` — Clone environment in 0ms
-- `velo compass log` — Full audit trail
+- `vrift™ compass jump HEAD^` — Instant rollback
+- `vrift™ compass fork experiment` — Clone environment in 0ms
+- `vrift™ compass log` — Full audit trail
 
 ### 30.5 LMDB Persistence
 
@@ -2030,7 +2030,7 @@ X ≠ Y → Both compile tokio from scratch.
 
 ```bash
 # Velo wrapper creates isolated namespace
-velo build
+vrift™ build
 
 # Inside namespace:
 mount --bind /home/user/proj_a /app/workspace  # Project A
@@ -2086,7 +2086,7 @@ Velo destroys the "node_modules black hole" with VFS + CAS.
 
 ```text
 # Physical CAS (shared by all projects)
-/var/velo/cas/
+/var/vrift™/cas/
 ├── abc123... (react.js)
 ├── def456... (lodash.js)
 └── ...
@@ -2472,9 +2472,9 @@ Module._extensions['.js'] = function(module, filename) {
 node app.js
 
 # Turbo mode (opt-in, maximum speed)
-velo run node app.js
+vrift™ run node app.js
 # or
-alias vnode="velo run node"
+alias vnode="vrift™ run node"
 vnode app.js
 ```
 
@@ -3581,7 +3581,7 @@ Savings: Automatic, no configuration needed
 ```text
 ┌─────────────────────────────────────────────┐
 │  L1: Host Cache (Per-Machine)               │
-│  - /var/velo/cas/ on local NVMe             │
+│  - /var/vrift™/cas/ on local NVMe             │
 │  - Shared by all tenants on this host       │
 │  - OS Page Cache = memory-speed reads       │
 │  - Hit latency: ~0ms                        │
@@ -3799,12 +3799,12 @@ impl Compass {
 ### 59.4 CLI Example
 
 ```bash
-$ velo compass show
+$ vrift™ compass show
 > [Current] 10:05 - Installed PyTorch (a1b2c)
   [History] 09:55 - Updated Pandas (d4e5f)
   [History] 09:00 - System Init (99887)
 
-$ velo compass jump d4e5f
+$ vrift™ compass jump d4e5f
 >>> Rewinding... DONE (12ms)
 >>> Now at: "Updated Pandas"
 ```
@@ -3982,7 +3982,7 @@ Same path → cache hit → instant build
 
 ```bash
 $ cd ~/my_project
-$ velo build
+$ vrift™ build
 
 # Velo internally:
 # 1. Mount ~/my_project → /app/workspace (in container)
@@ -4001,7 +4001,7 @@ $ velo build
 
 ---
 
-## 64. Node.js Bytecode Acceleration (`velo run`)
+## 64. Node.js Bytecode Acceleration (`vrift™ run`)
 
 ### 64.1 The Problem: V8 Parsing Overhead
 
@@ -4038,7 +4038,7 @@ Storage Structure:
 | Mode | Command | Behavior |
 |------|---------|----------|
 | **Standard** | `node app.js` | VFS only (I/O acceleration) |
-| **Turbo** | `velo run node app.js` | VFS + Bytecode injection |
+| **Turbo** | `vrift™ run node app.js` | VFS + Bytecode injection |
 
 Standard mode is safe fallback. Turbo mode is opt-in for maximum performance.
 
@@ -4133,7 +4133,7 @@ Model as CAS Blob:
   llama-3-8b/weights.bin → blake3:def456...
 
 Switch Operation:
-  velo switch --model llama-3-8b
+  vrift™ switch --model llama-3-8b
   → Updates manifest pointer (1ms)
   → mmap new weights on next load
   → Delta download only if needed
@@ -4203,8 +4203,8 @@ Result: 10-50× server density improvement
 ```text
 Data Team maintains: /velo/datasets/golden_v1 (Tree Hash: abc123)
 
-Analyst A: velo mount /velo/datasets/golden_v1 ~/data
-Analyst B: velo mount /velo/datasets/golden_v1 ~/data
+Analyst A: vrift™ mount /velo/datasets/golden_v1 ~/data
+Analyst B: vrift™ mount /velo/datasets/golden_v1 ~/data
 
 Both see identical data, zero copies made.
 Writes use CoW → personal overlay, originals untouched.
@@ -4328,7 +4328,7 @@ Access:
 ```text
 ┌─────────────────────────────────────────────┐
 │  L1: Host Cache (Per-Machine)               │
-│  - /var/velo/cas/ on local NVMe             │
+│  - /var/vrift™/cas/ on local NVMe             │
 │  - OS Page Cache = memory-speed             │
 │  - Latency: ~0ms                            │
 └─────────────────────────────────────────────┘
@@ -4414,9 +4414,9 @@ Traditional: Upload 100GB to S3, server downloads
 Time: Hours
 
 Velo:
-  1. Developer: velo publish model/
+  1. Developer: vrift™ publish model/
      → CAS hashes computed, manifest uploaded (1MB)
-  2. Server: velo mount model/
+  2. Server: vrift™ mount model/
      → Manifest downloaded, virtual mount ready
   3. Server accesses file → Page fault → P2P fetch from developer laptop
   
@@ -5530,7 +5530,7 @@ RUSTFLAGS="-Cprofile-generate=/tmp/pgo-data" \
   cargo build --release
 
 # Step 2: Run typical workload
-./target/release/velo install numpy pandas torch
+./target/release/vrift install numpy pandas torch
 
 # Step 3: Merge profile data
 llvm-profdata merge -o merged.profdata /tmp/pgo-data
@@ -6444,8 +6444,8 @@ Never: Use Zlib for frequently accessed blobs
 ### 92.1 The Challenge: Same Path, Different Content
 
 ```text
-Terminal 1: cd project_a && velo build
-Terminal 2: cd project_b && velo build
+Terminal 1: cd project_a && vrift™ build
+Terminal 2: cd project_b && vrift™ build
 
 Both processes access: /velo_mnt/workspace/Cargo.toml
 But they need DIFFERENT contents!
@@ -6492,7 +6492,7 @@ impl SessionTable {
 ### 92.3 Request Flow with PID Context
 
 ```text
-1. User runs: velo build (PID 1001)
+1. User runs: vrift™ build (PID 1001)
    → Session registered: 1001 → Project_A
 
 2. Velo spawns: cargo build (PID 1002)
@@ -6503,7 +6503,7 @@ impl SessionTable {
    → Lookup: 1002's parent 1001 → Project_A
    → Return Project_A's Cargo.toml
 
-4. Concurrent: velo build in project_b (PID 2001)
+4. Concurrent: vrift™ build in project_b (PID 2001)
    → Session registered: 2001 → Project_B
    → Same path → Different content
 ```
@@ -7132,12 +7132,12 @@ fn read_file(store: &dyn BlobStore, hash: Blake3) -> Bytes {
 
 ```text
 Developer laptop:
-  $ velo push myenv
+  $ vrift™ push myenv
   → Uploads metadata only (Git Tree)
   → Blobs uploaded lazily on-demand
 
 Production server:
-  $ velo pull myenv
+  $ vrift™ pull myenv
   → Downloads metadata (instant)
   → Blobs fetched as accessed
 
@@ -7396,7 +7396,7 @@ USDT_PROBE(velo, gc_sweep, (freed_bytes, duration_ms));
 
 ```bash
 # Runtime observability
-$ bpftrace -e 'usdt:./velod:velo:cache_miss { @[arg1] = count(); }'
+$ bpftrace -e 'usdt:./vriftd:velo:cache_miss { @[arg1] = count(); }'
 ```
 
 ### 103.5 Metrics Export
@@ -7429,7 +7429,7 @@ Goal: Persist to CAS for other tenants to reuse
 ### 104.2 The Commit Operation
 
 ```bash
-$ velo commit tenant_42 my-custom-wheel
+$ vrift™ commit tenant_42 my-custom-wheel
 ```
 
 ### 104.3 Implementation
@@ -7867,8 +7867,8 @@ Zero-downtime upgrades via FD transfer.
 ### 109.1 Mechanism
 
 ```text
-1. Old velod receives SIGUSR1
-2. Spawns new velod
+1. Old vriftd receives SIGUSR1
+2. Spawns new vriftd
 3. Sends FDs via Unix Socket (SCM_RIGHTS):
    - Listening sockets
    - io_uring rings
@@ -8111,9 +8111,9 @@ Developers need "normal" mutable experience despite immutable substrate:
 ```
 
 **Workflow**:
-1. `velo dev start` → Creates mutable overlay
+1. `vrift™ dev start` → Creates mutable overlay
 2. Developer edits freely → Changes in tmpfs
-3. `velo snapshot` → Commit changes to new immutable snapshot
+3. `vrift™ snapshot` → Commit changes to new immutable snapshot
 4. Fast iteration: Edit → Snapshot → Test cycle in seconds
 
 ### 114.2 Edit-Time Path Virtualization
@@ -8140,7 +8140,7 @@ def velo_open(path, mode):
 | Save file | Write to overlay only |
 | File watcher | Monitor overlay, ignore snapshot |
 | Git status | Compare overlay to snapshot base |
-| "Commit" | `velo snapshot create` |
+| "Commit" | `vrift™ snapshot create` |
 
 ---
 
@@ -8295,7 +8295,7 @@ def replay_agent_session(base_snapshot, action_log):
 
 ## Q: Why does `df -h` show wrong disk space?
 
-OverlayFS merges multiple layers. `df` reports the underlying filesystem, not the logical view. Use `velo status` for accurate CAS usage.
+OverlayFS merges multiple layers. `df` reports the underlying filesystem, not the logical view. Use `vrift™ status` for accurate CAS usage.
 
 ## Q: Why can't I modify file timestamps?
 
