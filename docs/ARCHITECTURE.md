@@ -136,16 +136,16 @@ All tenant runtime data lives in a high-performance memory-backed location.
     └── blake3/                 # RFC-0039 Layout: 3-level sharding
         ├── a8/
         │   └── f9/
-        │       └── a8f9c1...efgh_12345.bin  # hash_size.ext
+        │       └── a8f9c1...efgh_1048576.bin  # hash_size.ext (size in decimal bytes)
         └── b2/
             └── d3/
-                └── b2d3e4...ijkl_67890     # hash_size
+                └── b2d3e4...ijkl_256     # hash_size (256 bytes, decimal)
 ```
 
 > **RFC-0039 CAS Layout**: `blake3/ab/cd/hash_size.ext`  
 > - 3-level sharding prevents inode exhaustion  
-> - Self-describing filename enables O(1) integrity check  
-> - Extension allows direct file type inspection
+> - Self-describing filename: hash (hex) + size (**decimal bytes**) + extension  
+> - O(1) integrity check: compare file length vs filename size
 
 ### 1.3 Persistent Storage (NVMe/Disk)
 *   **Path**: `~/.vrift/the_source/` → Primary CAS storage (RFC-0039 §3.4)
