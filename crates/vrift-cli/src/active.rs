@@ -467,4 +467,123 @@ mod tests {
         assert_eq!(format!("{}", ProjectionMode::Solid), "Solid");
         assert_eq!(format!("{}", ProjectionMode::Phantom), "Phantom");
     }
+
+    // =========================================================================
+    // RFC-0039 Specific Tests
+    // =========================================================================
+
+    #[test]
+    fn test_activate_creates_session() {
+        let temp = TempDir::new().unwrap();
+        
+        let session = activate(temp.path(), ProjectionMode::Solid).unwrap();
+        
+        assert!(session.active);
+        assert_eq!(session.mode, ProjectionMode::Solid);
+        assert_eq!(session.project_root.canonicalize().unwrap(), 
+                   temp.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_activate_phantom_mode() {
+        let temp = TempDir::new().unwrap();
+        
+        let session = activate(temp.path(), ProjectionMode::Phantom).unwrap();
+        
+        assert_eq!(session.mode, ProjectionMode::Phantom);
+    }
+
+    #[test]
+    fn test_deactivate_sets_inactive() {
+        let temp = TempDir::new().unwrap();
+        
+        // First activate
+        activate(temp.path(), ProjectionMode::Solid).unwrap();
+        
+        // Then deactivate
+        deactivate(temp.path()).unwrap();
+        
+        // Verify session is inactive
+        let vrift = VriftDir::new(temp.path());
+        let session = vrift.load_session().unwrap();
+        assert!(!session.active);
+    }
+
+    #[test]
+    fn test_startup_recovery_no_session() {
+        let temp = TempDir::new().unwrap();
+        let cas_dir = TempDir::new().unwrap();
+        
+        // No session exists - recovery should return default
+        let report = startup_recovery(temp.path(), cas_dir.path()).unwrap();
+        
+        assert!(!report.session_found);
+        assert!(!report.manifest_loaded);
+        assert_eq!(report.total_entries, 0);
+    }
+
+    #[test]
+    fn test_startup_recovery_with_session() {
+        let temp = TempDir::new().unwrap();
+        let cas_dir = TempDir::new().unwrap();
+        
+        // Create a session first
+        activate(temp.path(), ProjectionMode::Solid).unwrap();
+        
+        // Run recovery
+        let report = startup_recovery(temp.path(), cas_dir.path()).unwrap();
+        
+        assert!(report.session_found);
+        // Manifest may or may not be loaded depending on if LMDB was created
+    }
+
+    #[test]
+    fn test_recovery_report_needs_repair() {
+        let mut report = RecoveryReport::default();
+        
+        assert!(!report.needs_repair(), "Empty report should not need repair");
+        
+        report.broken_symlinks = 1;
+        assert!(report.needs_repair(), "Report with broken symlinks needs repair");
+        
+        report.broken_symlinks = 0;
+        report.inode_mismatches = 1;
+        assert!(report.needs_repair(), "Report with inode mismatches needs repair");
+    }
+
+    #[test]
+    fn test_recovery_report_all_valid() {
+        let mut report = RecoveryReport::default();
+        report.total_entries = 5;
+        report.valid_entries = 5;
+        
+        assert!(report.all_valid(), "All entries should be valid");
+        
+        report.valid_entries = 3;
+        assert!(!report.all_valid(), "Not all entries are valid");
+    }
+
+    #[test]
+    fn test_validation_status_equality() {
+        assert_eq!(ValidationStatus::Valid, ValidationStatus::Valid);
+        assert_eq!(ValidationStatus::Missing, ValidationStatus::Missing);
+        assert_ne!(ValidationStatus::Valid, ValidationStatus::Missing);
+    }
+
+    #[test]
+    fn test_projection_tier_classification() {
+        assert_eq!(ProjectionTier::Tier1, ProjectionTier::Tier1);
+        assert_ne!(ProjectionTier::Tier1, ProjectionTier::Tier2);
+    }
+
+    #[test]
+    fn test_abi_context_detection() {
+        let ctx = detect_abi_context();
+        
+        // Should at least have target triple
+        assert!(!ctx.target_triple.is_empty());
+        // Platform should be part of target
+        assert!(ctx.target_triple.contains(std::env::consts::OS));
+    }
 }
+

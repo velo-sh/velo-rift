@@ -742,4 +742,121 @@ mod tests {
         assert!(target_path.symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(fs::read(&target_path).unwrap(), data);
     }
+
+    // =========================================================================
+    // RFC-0039 Specific Tests
+    // =========================================================================
+
+    #[test]
+    fn test_3level_sharding_path_format() {
+        // RFC-0039: CAS path layout should be blake3/ab/cd/hash
+        // Note: blob_path() returns hash-only, blob_path_with_metadata() includes size
+        let temp = TempDir::new().unwrap();
+        let cas = CasStore::new(temp.path()).unwrap();
+
+        let data = b"test content for sharding";
+        let hash = cas.store(data).unwrap();
+        let hex = CasStore::hash_to_hex(&hash);
+
+        // Verify the file exists in the correct 3-level structure
+        let expected_l1 = &hex[..2];
+        let expected_l2 = &hex[2..4];
+        
+        let blob_dir = temp.path().join("blake3").join(expected_l1).join(expected_l2);
+        assert!(blob_dir.exists(), "3-level directory should exist: {:?}", blob_dir);
+        
+        // Find the blob file
+        let entries: Vec<_> = fs::read_dir(&blob_dir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "Should have exactly one blob");
+        
+        let filename = entries[0].as_ref().unwrap().file_name();
+        let filename_str = filename.to_string_lossy();
+        
+        // Verify filename starts with hash (basic blob_path format)
+        assert!(filename_str.starts_with(&hex), "Filename should start with hash");
+    }
+
+    #[test]
+    fn test_blob_path_with_metadata() {
+        // RFC-0039: Self-describing filename hash_size.ext
+        let temp = TempDir::new().unwrap();
+        let cas = CasStore::new(temp.path()).unwrap();
+
+        let data = b"metadata test";
+        let hash = CasStore::compute_hash(data);
+        let hex = CasStore::hash_to_hex(&hash);
+
+        // Test with extension
+        let path_with_ext = cas.blob_path_with_metadata(&hash, 1024, "bin");
+        assert!(path_with_ext.to_string_lossy().contains("blake3"));
+        assert!(path_with_ext.to_string_lossy().contains(&hex[..2]));
+        assert!(path_with_ext.to_string_lossy().contains(&hex[2..4]));
+        assert!(path_with_ext.to_string_lossy().ends_with("_1024.bin"));
+
+        // Test without extension
+        let path_no_ext = cas.blob_path_with_metadata(&hash, 512, "");
+        assert!(path_no_ext.to_string_lossy().ends_with("_512"));
+        assert!(!path_no_ext.to_string_lossy().ends_with("."));
+    }
+
+    #[test]
+    fn test_self_describing_filename_with_metadata() {
+        // RFC-0039: blob_path_with_metadata() should produce hash_size.ext format
+        let temp = TempDir::new().unwrap();
+        let cas = CasStore::new(temp.path()).unwrap();
+
+        let data = vec![0u8; 1234]; // Known size
+        let hash = CasStore::compute_hash(&data);
+
+        // Test blob_path_with_metadata produces correct format
+        let path = cas.blob_path_with_metadata(&hash, 1234, "bin");
+        let filename = path.file_name().unwrap().to_string_lossy();
+
+        // Filename should contain decimal size "1234"
+        assert!(
+            filename.contains("_1234."),
+            "Filename '{}' should contain decimal size _1234.",
+            filename
+        );
+        assert!(
+            filename.ends_with(".bin"),
+            "Filename '{}' should end with .bin",
+            filename
+        );
+    }
+
+    #[test]
+    fn test_stats_traverses_3level_structure() {
+        // RFC-0039: stats() should correctly traverse blake3/ab/cd/ structure
+        let temp = TempDir::new().unwrap();
+        let cas = CasStore::new(temp.path()).unwrap();
+
+        // Store multiple blobs
+        cas.store(b"blob1").unwrap();
+        cas.store(b"blob2").unwrap();
+        cas.store(b"blob3").unwrap();
+
+        let stats = cas.stats().unwrap();
+        assert_eq!(stats.blob_count, 3, "Should count all 3 blobs");
+        assert!(stats.total_bytes > 0, "Total bytes should be non-zero");
+    }
+
+    #[test]
+    fn test_iter_traverses_3level_structure() {
+        // RFC-0039: iter() should correctly traverse blake3/ab/cd/ structure
+        let temp = TempDir::new().unwrap();
+        let cas = CasStore::new(temp.path()).unwrap();
+
+        let hash1 = cas.store(b"iter1").unwrap();
+        let hash2 = cas.store(b"iter2").unwrap();
+        let hash3 = cas.store(b"iter3").unwrap();
+
+        let mut found_hashes: Vec<_> = cas.iter().unwrap().filter_map(|r| r.ok()).collect();
+        found_hashes.sort();
+
+        let mut expected = vec![hash1, hash2, hash3];
+        expected.sort();
+
+        assert_eq!(found_hashes, expected, "Iterator should find all stored hashes");
+    }
 }
