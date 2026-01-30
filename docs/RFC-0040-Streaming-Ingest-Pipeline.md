@@ -13,6 +13,72 @@
 
 ---
 
+## Safety Invariants & Timing Guarantees
+
+### S1: Data Integrity Invariants
+
+| Invariant | Description | Enforcement |
+|-----------|-------------|-------------|
+| **I-1** | CAS entry hash MUST equal content hash | Verify before rename |
+| **I-2** | Committed file MUST be durable (fsync) | Batch dir fsync |
+| **I-3** | Partial writes MUST NOT be visible | Atomic rename from tmp |
+| **I-4** | Modified file MUST be rejected | mtime check before/after |
+
+### S2: Event Ordering Guarantees
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Happens-Before Relationships                                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  [O-1] watch.start() ──happens-before──▶ scanner.walk()                │
+│        (ensures no file creation is missed during scan)                 │
+│                                                                         │
+│  [O-2] file.write() ──happens-before──▶ file.close_write()             │
+│        (only process after IN_CLOSE_WRITE, not IN_MODIFY)               │
+│                                                                         │
+│  [O-3] temp.write() ──happens-before──▶ dir.fsync()                    │
+│        ──happens-before──▶ rename(temp, final)                          │
+│        ──happens-before──▶ dir.fsync()                                  │
+│        (crash-safe commit sequence)                                     │
+│                                                                         │
+│  [O-4] mtime_before ──read-before──▶ content ──read-before──▶ mtime_after│
+│        (detect modification during read)                                │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### S3: Timing Constraints
+
+| Constraint | Value | Rationale |
+|------------|-------|-----------|
+| **T-1** watch → scan gap | < 1ms | Minimize race window |
+| **T-2** batch timeout | 10ms | Balance latency vs batch size |
+| **T-3** mtime resolution | 1ms | Filesystem-dependent, usually ms |
+| **T-4** fsync budget | 2 per 100 files | 200x reduction vs naive |
+
+### S4: Failure Modes & Recovery
+
+| Failure | Detection | Recovery |
+|---------|-----------|----------|
+| Crash during write | Temp file orphan | Cleanup tmp/ on startup |
+| Crash after fsync | Rename incomplete | Retry rename on startup |
+| File modified during read | mtime mismatch | Discard temp, re-queue path |
+| Hash collision | Impossible (BLAKE3) | N/A |
+| OOM | Semaphore blocks | Backpressure, not crash |
+
+### S5: Concurrency Safety
+
+```rust
+// Thread-safe components
+MemorySemaphore:    Mutex + Condvar (blocking acquire)
+DashSet<PathBuf>:   Lock-free concurrent set (dedup)
+PathRingBuffer:     Atomic state transitions (lock-free)
+BatchCommitter:     Single-threaded (main thread only)
+```
+
+---
+
 ## Architecture Overview
 
 ```
