@@ -499,9 +499,9 @@ fn find_shim_library() -> Result<PathBuf> {
                 }
             }),
         // Installed location
-        Some(PathBuf::from("/usr/local/lib/velo/libvelo_shim.so")),
+        Some(PathBuf::from("/usr/local/lib/vrift/libvelo_shim.so")),
         #[cfg(target_os = "macos")]
-        Some(PathBuf::from("/usr/local/lib/velo/libvelo_shim.dylib")),
+        Some(PathBuf::from("/usr/local/lib/vrift/libvelo_shim.dylib")),
     ];
 
     for candidate in candidates.into_iter().flatten() {

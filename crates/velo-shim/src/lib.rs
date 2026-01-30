@@ -8,7 +8,7 @@
 //! ## Usage (Linux)
 //!
 //! ```bash
-//! VELO_MANIFEST=/path/to/manifest.bin \
+//! VRIFT_MANIFEST=/path/to/manifest.bin \
 //! VR_THE_SOURCE=/var/vrift/the_source \
 //! LD_PRELOAD=/path/to/libvelo_shim.so \
 //! python -c "import numpy"
@@ -17,7 +17,7 @@
 //! ## Usage (macOS)
 //!
 //! ```bash
-//! VELO_MANIFEST=/path/to/manifest.bin \
+//! VRIFT_MANIFEST=/path/to/manifest.bin \
 //! VR_THE_SOURCE=/var/vrift/the_source \
 //! DYLD_INSERT_LIBRARIES=/path/to/libvelo_shim.dylib \
 //! python -c "import numpy"
@@ -27,7 +27,7 @@
 //!
 //! - `VRIFT_MANIFEST`: Path to the manifest file (required)
 //! - `VR_THE_SOURCE`: Path to CAS root directory (default: `/var/vrift/the_source`)
-//! - `VRIFT_VFS_PREFIX`: Virtual path prefix to intercept (default: `/velo`)
+//! - `VRIFT_VFS_PREFIX`: Virtual path prefix to intercept (default: `/vrift`)
 //! - `VRIFT_DEBUG`: Enable debug logging if set
 
 #![allow(clippy::missing_safety_doc)]
@@ -111,7 +111,7 @@ impl ShimState {
         let manifest_path = std::env::var("VRIFT_MANIFEST").ok()?;
         let cas_root =
             std::env::var("VR_THE_SOURCE").unwrap_or_else(|_| "/var/vrift/the_source".to_string());
-        let vfs_prefix = std::env::var("VRIFT_VFS_PREFIX").unwrap_or_else(|_| "/velo".to_string());
+        let vfs_prefix = std::env::var("VRIFT_VFS_PREFIX").unwrap_or_else(|_| "/vrift".to_string());
 
         // Initialize tracing if not already initialized
         // We use try_init because this might be called multiple times or conflict with app
