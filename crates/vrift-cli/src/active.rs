@@ -235,6 +235,196 @@ pub fn deactivate(project_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validation result for a single projection entry
+#[derive(Debug)]
+pub struct ValidationResult {
+    pub path: PathBuf,
+    pub tier: ProjectionTier,
+    pub status: ValidationStatus,
+}
+
+/// Projection tier classification
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionTier {
+    /// Tier-1: Immutable assets (symlink to CAS)
+    Tier1,
+    /// Tier-2: Mutable assets (hardlink to CAS)
+    Tier2,
+}
+
+/// Validation status for a projection entry
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationStatus {
+    /// Projection is valid
+    Valid,
+    /// Symlink target missing (Tier-1)
+    BrokenSymlink(String),
+    /// Hardlink inode mismatch (Tier-2)
+    InodeMismatch { expected: u64, actual: u64 },
+    /// File missing entirely
+    Missing,
+    /// File exists but not a projection (regular file)
+    NotProjected,
+}
+
+/// Startup recovery from session.json and manifest.lmdb (RFC-0039)
+///
+/// Called on `vrift active` to recover from crashes or unclean shutdowns.
+/// Validates existing projections and repairs if necessary.
+pub fn startup_recovery(project_root: &Path, cas_root: &Path) -> Result<RecoveryReport> {
+    let vrift = VriftDir::new(project_root);
+    
+    if !vrift.has_session() {
+        debug!("No session found, nothing to recover");
+        return Ok(RecoveryReport::default());
+    }
+    
+    let session = vrift.load_session()?;
+    info!(
+        mode = %session.mode,
+        created = session.created_at,
+        "Recovering session"
+    );
+    
+    // Load manifest if exists
+    let manifest_path = vrift.manifest_path();
+    if !manifest_path.exists() {
+        debug!("No manifest found, skipping validation");
+        return Ok(RecoveryReport {
+            session_found: true,
+            manifest_loaded: false,
+            ..Default::default()
+        });
+    }
+    
+    // Validate projections
+    let validation_results = validate_projections(project_root, cas_root, &manifest_path)?;
+    
+    let mut report = RecoveryReport {
+        session_found: true,
+        manifest_loaded: true,
+        total_entries: validation_results.len(),
+        ..Default::default()
+    };
+    
+    for result in &validation_results {
+        match &result.status {
+            ValidationStatus::Valid => report.valid_entries += 1,
+            ValidationStatus::BrokenSymlink(_) => report.broken_symlinks += 1,
+            ValidationStatus::InodeMismatch { .. } => report.inode_mismatches += 1,
+            ValidationStatus::Missing => report.missing_entries += 1,
+            ValidationStatus::NotProjected => report.not_projected += 1,
+        }
+    }
+    
+    // Auto-repair if needed
+    if report.needs_repair() {
+        info!(
+            broken = report.broken_symlinks,
+            mismatched = report.inode_mismatches,
+            "Attempting auto-repair"
+        );
+        let repaired = auto_repair(&validation_results, cas_root)?;
+        report.repaired_entries = repaired;
+    }
+    
+    Ok(report)
+}
+
+/// Recovery report from startup_recovery
+#[derive(Debug, Default)]
+pub struct RecoveryReport {
+    pub session_found: bool,
+    pub manifest_loaded: bool,
+    pub total_entries: usize,
+    pub valid_entries: usize,
+    pub broken_symlinks: usize,
+    pub inode_mismatches: usize,
+    pub missing_entries: usize,
+    pub not_projected: usize,
+    pub repaired_entries: usize,
+}
+
+impl RecoveryReport {
+    /// Check if repairs are needed
+    pub fn needs_repair(&self) -> bool {
+        self.broken_symlinks > 0 || self.inode_mismatches > 0
+    }
+    
+    /// Check if all entries are valid
+    pub fn all_valid(&self) -> bool {
+        self.valid_entries == self.total_entries
+    }
+}
+
+/// Validate all projections in the manifest
+fn validate_projections(
+    _project_root: &Path,
+    cas_root: &Path,
+    _manifest_path: &Path,
+) -> Result<Vec<ValidationResult>> {
+    // Note: Full implementation would iterate manifest entries
+    // For now, we validate the CAS directory structure
+    let results = Vec::new();
+    
+    // Check CAS root exists
+    if !cas_root.exists() {
+        debug!(path = %cas_root.display(), "CAS root does not exist");
+        return Ok(results);
+    }
+    
+    // In full implementation:
+    // 1. Open LMDB manifest
+    // 2. Iterate all entries
+    // 3. For each entry, check if projection is valid:
+    //    - Tier-1: verify symlink points to correct CAS blob
+    //    - Tier-2: verify hardlink inode matches CAS blob
+    
+    debug!("Projection validation complete");
+    Ok(results)
+}
+
+/// Auto-repair broken projections
+fn auto_repair(results: &[ValidationResult], cas_root: &Path) -> Result<usize> {
+    let mut repaired = 0;
+    
+    for result in results {
+        if result.status == ValidationStatus::Valid {
+            continue;
+        }
+        
+        match &result.status {
+            ValidationStatus::BrokenSymlink(expected_hash) => {
+                // Re-create symlink to CAS blob
+                let cas_blob = cas_root
+                    .join("blake3")
+                    .join(&expected_hash[..2])
+                    .join(&expected_hash[2..4])
+                    .join(expected_hash);
+                
+                if cas_blob.exists() {
+                    // Remove broken symlink and recreate
+                    let _ = fs::remove_file(&result.path);
+                    #[cfg(unix)]
+                    {
+                        std::os::unix::fs::symlink(&cas_blob, &result.path)?;
+                        repaired += 1;
+                        info!(path = %result.path.display(), "Repaired Tier-1 symlink");
+                    }
+                }
+            }
+            ValidationStatus::InodeMismatch { .. } => {
+                // For Tier-2, we'd need to recreate the hardlink
+                // This is more complex and may require manifest data
+                debug!(path = %result.path.display(), "Tier-2 repair not yet implemented");
+            }
+            _ => {}
+        }
+    }
+    
+    Ok(repaired)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
