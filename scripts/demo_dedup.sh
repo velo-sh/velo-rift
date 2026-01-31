@@ -262,7 +262,7 @@ print_final_results() {
         echo "  ├──────────┼─────────┼───────────┼──────────┼──────────────┼───────────┤"
         
         for i in "${!SCENARIO_A_NAMES[@]}"; do
-            printf "  │ %-8s │ %7s │ %9s │ %6s%% │ %12s │ %7s/s │\n" \
+            printf "  │ %-8s │ %7s │ %9s │ %7s%% │ %12s │ %7s/s │\n" \
                 "${SCENARIO_A_NAMES[$i]}" \
                 "${SCENARIO_A_FILES[$i]}" \
                 "${SCENARIO_A_BLOBS[$i]}" \
@@ -283,7 +283,7 @@ print_final_results() {
         echo "  ├──────────┼─────────┼───────────┼──────────┼──────────────┼───────────┤"
         
         for i in "${!SCENARIO_B_NAMES[@]}"; do
-            printf "  │ %-8s │ %7s │ %9s │ %6s%% │ %12s │ %7s/s │\n" \
+            printf "  │ %-8s │ %7s │ %9s │ %7s%% │ %12s │ %7s/s │\n" \
                 "${SCENARIO_B_NAMES[$i]}" \
                 "${SCENARIO_B_FILES[$i]}" \
                 "${SCENARIO_B_BLOBS[$i]}" \
