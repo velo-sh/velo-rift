@@ -73,6 +73,33 @@ fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
 }
 
 // ============================================================================
+// Tier-1 Immutable Flag (RFC-0039 §5.1.1)
+// ============================================================================
+
+/// Set immutable flag on CAS blob for maximum Tier-1 protection.
+/// 
+/// - Linux: `chattr +i` (requires root or CAP_LINUX_IMMUTABLE)
+/// - macOS: `chflags uchg` (user immutable flag)
+/// 
+/// This is best-effort: silently fails if permissions are insufficient.
+#[cfg(target_os = "linux")]
+fn set_immutable_on_cas(path: &Path) {
+    use std::process::Command;
+    let _ = Command::new("chattr").arg("+i").arg(path).status();
+}
+
+#[cfg(target_os = "macos")]
+fn set_immutable_on_cas(path: &Path) {
+    use std::process::Command;
+    let _ = Command::new("chflags").arg("uchg").arg(path).status();
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn set_immutable_on_cas(_path: &Path) {
+    // Unsupported platform - no-op
+}
+
+// ============================================================================
 // Configuration
 // ============================================================================
 
@@ -136,6 +163,11 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
     
+    // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection
+    if was_new {
+        set_immutable_on_cas(&cas_target);
+    }
+    
     // Drop the lock guard before modifying source
     drop(locked_file);
     
@@ -189,6 +221,9 @@ pub fn ingest_solid_tier1_dedup(
         
         // Tiered link: hard_link → clonefile → copy (RFC-0040)
         link_or_clone_or_copy(source, &cas_target)?;
+        
+        // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection
+        set_immutable_on_cas(&cas_target);
     }
     
     // Drop the lock guard before modifying source
