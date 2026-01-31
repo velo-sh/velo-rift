@@ -232,7 +232,7 @@ pub fn create_backend() -> Box<dyn IngestBackend> {
     #[cfg(all(target_os = "linux", feature = "io_uring"))]
     {
         tracing::info!("Using io_uring backend for Linux");
-        return Box::new(uring::UringBackend::new());
+        Box::new(uring::UringBackend::new())
     }
 
     #[cfg(target_os = "macos")]

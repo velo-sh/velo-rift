@@ -163,9 +163,8 @@ impl LinkStrategy for LinuxLinkStrategy {
         }
         
         // Tier 2: reflink (btrfs, xfs)
-        match reflink_copy::reflink(source, target) {
-            Ok(()) => return Ok(()),
-            Err(_) => {}
+        if let Ok(()) = reflink_copy::reflink(source, target) {
+            return Ok(());
         }
         
         // Tier 3: copy
