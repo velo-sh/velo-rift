@@ -11,6 +11,17 @@ members = [
     "crates/vrift-cli",
     "crates/vrift-daemon", "crates/vrift-ipc",
 ]
+# Exclude vrift-shim from default cargo commands (INIT constructor causes hangs)
+default-members = [
+    "crates/vrift-cas",
+    "crates/vrift-manifest",
+    "crates/vrift-pack",
+    "crates/vrift-runtime",
+    "crates/vrift-fuse",
+    "crates/vrift-lock",
+    "crates/vrift-cli",
+    "crates/vrift-daemon", "crates/vrift-ipc",
+]
 
 [workspace.package]
 version = "0.1.0"
