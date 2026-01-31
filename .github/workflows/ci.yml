@@ -162,6 +162,9 @@ jobs:
           shared-key: "vrift-build"
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
       - name: Build Release
         run: cargo build --release -p vrift-cli
       - name: Run Tier 2 Demos
