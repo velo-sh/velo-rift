@@ -163,14 +163,37 @@ static SHIM_STATE: AtomicPtr<ShimState> = AtomicPtr::new(ptr::null_mut());
 static INITIALIZING: AtomicBool = AtomicBool::new(false);
 static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 
-static RECURSION_KEY: std::sync::OnceLock<libc::pthread_key_t> = std::sync::OnceLock::new();
+// Lock-free recursion key using atomic instead of OnceLock (avoids mutex deadlock during library init)
+static RECURSION_KEY_INIT: AtomicBool = AtomicBool::new(false);
+static RECURSION_KEY_VALUE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn get_recursion_key() -> libc::pthread_key_t {
-    *RECURSION_KEY.get_or_init(|| {
-        let mut key = 0;
-        unsafe { libc::pthread_key_create(&mut key, None) };
+    // Fast path: already initialized
+    if RECURSION_KEY_INIT.load(Ordering::Acquire) {
+        return RECURSION_KEY_VALUE.load(Ordering::Relaxed) as libc::pthread_key_t;
+    }
+
+    // Slow path: initialize (only one thread will succeed)
+    let mut key: libc::pthread_key_t = 0;
+    let ret = unsafe { libc::pthread_key_create(&mut key, None) };
+    if ret != 0 {
+        // Failed to create key, return 0 (will always consider as "not in recursion")
+        return 0;
+    }
+
+    // Try to be the one to set the value (CAS)
+    let expected = 0usize;
+    if RECURSION_KEY_VALUE
+        .compare_exchange(expected, key as usize, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        RECURSION_KEY_INIT.store(true, Ordering::Release);
         key
-    })
+    } else {
+        // Another thread beat us, clean up and use their key
+        unsafe { libc::pthread_key_delete(key) };
+        RECURSION_KEY_VALUE.load(Ordering::Relaxed) as libc::pthread_key_t
+    }
 }
 
 const LOG_BUF_SIZE: usize = 64 * 1024;
@@ -257,9 +280,10 @@ struct SyntheticDir {
 }
 
 struct ShimState {
-    cas: CasStore,
-    vfs_prefix: String,
-    socket_path: String,
+    cas: std::sync::Mutex<Option<CasStore>>, // Lazy init to avoid fs calls during dylib load
+    cas_root: std::borrow::Cow<'static, str>,
+    vfs_prefix: std::borrow::Cow<'static, str>,
+    socket_path: std::borrow::Cow<'static, str>,
     open_fds: Mutex<HashMap<c_int, OpenFile>>,
     /// Synthetic directories for VFS readdir (DIR* pointer -> SyntheticDir)
     open_dirs: Mutex<HashMap<usize, SyntheticDir>>,
@@ -268,51 +292,43 @@ struct ShimState {
 
 impl ShimState {
     fn init() -> Option<*mut Self> {
+        // CRITICAL: Must not allocate during early dyld init (malloc may not be ready)
+        // Use Cow::Borrowed for static defaults to avoid heap allocation
+
         let cas_ptr = unsafe { libc::getenv(c"VR_THE_SOURCE".as_ptr()) };
-        let cas_root = if cas_ptr.is_null() {
-            "/tmp/vrift/the_source".into()
+        let cas_root: std::borrow::Cow<'static, str> = if cas_ptr.is_null() {
+            std::borrow::Cow::Borrowed("/tmp/vrift/the_source")
         } else {
-            unsafe { CStr::from_ptr(cas_ptr).to_string_lossy() }
+            // Environment var found - must allocate (rare case, malloc should be ready by now)
+            std::borrow::Cow::Owned(unsafe {
+                CStr::from_ptr(cas_ptr).to_string_lossy().into_owned()
+            })
         };
 
         let prefix_ptr = unsafe { libc::getenv(c"VRIFT_VFS_PREFIX".as_ptr()) };
-        let vfs_prefix = if prefix_ptr.is_null() {
-            "/vrift".into()
+        let vfs_prefix: std::borrow::Cow<'static, str> = if prefix_ptr.is_null() {
+            std::borrow::Cow::Borrowed("/vrift")
         } else {
-            unsafe { CStr::from_ptr(prefix_ptr).to_string_lossy() }
+            std::borrow::Cow::Owned(unsafe {
+                CStr::from_ptr(prefix_ptr).to_string_lossy().into_owned()
+            })
         };
 
-        let cas = match CasStore::new(cas_root.as_ref()) {
-            Ok(c) => c,
-            Err(_) => return None,
-        };
+        // DEFERRED: Do NOT call CasStore::new() here to avoid fs syscalls during init
+        // CasStore will be created lazily on first VFS file access
 
-        let socket_path = "/tmp/vrift.sock".to_string();
+        // Static default - no allocation needed
+        let socket_path: std::borrow::Cow<'static, str> =
+            std::borrow::Cow::Borrowed("/tmp/vrift.sock");
 
-        // Map Bloom Filter
-        let bloom_ptr = (|| {
-            use nix::fcntl::OFlag;
-            use nix::sys::mman::{mmap, shm_open, MapFlags, ProtFlags};
-            use nix::sys::stat::Mode;
-            let shm_fd = shm_open("/vrift_bloom", OFlag::O_RDONLY, Mode::empty()).ok()?;
-            let ptr = unsafe {
-                mmap(
-                    None,
-                    std::num::NonZeroUsize::new(vrift_ipc::BLOOM_SIZE).unwrap(),
-                    ProtFlags::PROT_READ,
-                    MapFlags::MAP_SHARED,
-                    &shm_fd,
-                    0,
-                )
-                .ok()?
-            };
-            Some(ptr.as_ptr() as *const u8)
-        })()
-        .unwrap_or(ptr::null());
+        // NOTE: Bloom mmap is deferred - don't call during init to avoid syscalls
+        // that might retrigger the interposition during early dyld phases
+        let bloom_ptr = ptr::null(); // Defer to later
 
-        let state = Box::new(Self {
-            cas,
-            vfs_prefix: vfs_prefix.into_owned(),
+        let state = Box::new(ShimState {
+            cas: std::sync::Mutex::new(None),
+            cas_root,
+            vfs_prefix,
             socket_path,
             open_fds: Mutex::new(HashMap::new()),
             open_dirs: Mutex::new(HashMap::new()),
@@ -320,6 +336,18 @@ impl ShimState {
         });
 
         Some(Box::into_raw(state))
+    }
+
+    /// Get or create CasStore lazily (only called when actually needed)
+    fn get_cas(&self) -> Option<std::sync::MutexGuard<'_, Option<CasStore>>> {
+        let mut cas = self.cas.lock().ok()?;
+        if cas.is_none() {
+            match CasStore::new(self.cas_root.as_ref()) {
+                Ok(c) => *cas = Some(c),
+                Err(_) => return None,
+            }
+        }
+        Some(cas)
     }
 
     fn get() -> Option<&'static Self> {
@@ -779,6 +807,16 @@ unsafe fn execve_impl(
 }
 
 unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t, real_open: OpenFn) -> c_int {
+    // Early bailout during ShimState initialization to prevent CasStore::new recursion
+    if INITIALIZING.load(Ordering::SeqCst) {
+        return real_open(path, flags, mode);
+    }
+
+    // Skip if ShimState is not yet initialized (avoids malloc during dyld __malloc_init)
+    if SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return real_open(path, flags, mode);
+    }
+
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => return real_open(path, flags, mode),
@@ -793,40 +831,45 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t, real_open: 
     };
 
     let is_write = (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_TRUNC)) != 0;
-    if path_str.starts_with(&state.vfs_prefix) {
+    if path_str.starts_with(&*state.vfs_prefix) {
         let vpath = &path_str[state.vfs_prefix.len()..];
         if let Some(entry) = state.query_manifest(vpath) {
             if entry.is_dir() {
                 set_errno(libc::EISDIR);
                 return -1;
             }
-            if let Ok(content) = state.cas.get(&entry.content_hash) {
-                let mut tmp_path_buf = [0u8; 128];
-                let prefix = b"/tmp/vrift-mem-";
-                tmp_path_buf[..prefix.len()].copy_from_slice(prefix);
-                for i in 0..32 {
-                    let hex = b"0123456789abcdef";
-                    tmp_path_buf[prefix.len() + i * 2] = hex[(entry.content_hash[i] >> 4) as usize];
-                    tmp_path_buf[prefix.len() + i * 2 + 1] =
-                        hex[(entry.content_hash[i] & 0x0f) as usize];
-                }
-                tmp_path_buf[prefix.len() + 64] = 0;
+            if let Some(cas_guard) = state.get_cas() {
+                if let Some(cas) = cas_guard.as_ref() {
+                    if let Ok(content) = cas.get(&entry.content_hash) {
+                        let mut tmp_path_buf = [0u8; 128];
+                        let prefix = b"/tmp/vrift-mem-";
+                        tmp_path_buf[..prefix.len()].copy_from_slice(prefix);
+                        for i in 0..32 {
+                            let hex = b"0123456789abcdef";
+                            tmp_path_buf[prefix.len() + i * 2] =
+                                hex[(entry.content_hash[i] >> 4) as usize];
+                            tmp_path_buf[prefix.len() + i * 2 + 1] =
+                                hex[(entry.content_hash[i] & 0x0f) as usize];
+                        }
+                        tmp_path_buf[prefix.len() + 64] = 0;
 
-                let tmp_fd = libc::open(
-                    tmp_path_buf.as_ptr() as *const c_char,
-                    libc::O_CREAT | libc::O_RDWR | libc::O_TRUNC,
-                    0o644,
-                );
-                if tmp_fd >= 0 {
-                    libc::write(tmp_fd, content.as_ptr() as *const c_void, content.len());
-                    libc::lseek(tmp_fd, 0, libc::SEEK_SET);
-                    return tmp_fd;
+                        let tmp_fd = libc::open(
+                            tmp_path_buf.as_ptr() as *const c_char,
+                            libc::O_CREAT | libc::O_RDWR | libc::O_TRUNC,
+                            0o644,
+                        );
+                        if tmp_fd >= 0 {
+                            libc::write(tmp_fd, content.as_ptr() as *const c_void, content.len());
+                            libc::lseek(tmp_fd, 0, libc::SEEK_SET);
+                            return tmp_fd;
+                        }
+                    }
                 }
             }
         }
     }
 
-    if is_write && path_str.starts_with(&state.vfs_prefix) {
+    if is_write && path_str.starts_with(&*state.vfs_prefix) {
         let _ = break_link(path_str);
 
         let fd = real_open(path, flags, mode);
@@ -851,6 +894,11 @@ unsafe fn write_impl(fd: c_int, buf: *const c_void, count: size_t, real_write: W
 }
 
 unsafe fn close_impl(fd: c_int, real_close: CloseFn) -> c_int {
+    // Skip if ShimState is not yet initialized (avoids malloc during dyld __malloc_init)
+    if SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return real_close(fd);
+    }
+
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => return real_close(fd),
@@ -883,6 +931,16 @@ type StatFn = unsafe extern "C" fn(*const c_char, *mut libc::stat) -> c_int;
 type FstatFn = unsafe extern "C" fn(c_int, *mut libc::stat) -> c_int;
 
 unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: StatFn) -> c_int {
+    // Early bailout during ShimState initialization to prevent CasStore::new recursion
+    if INITIALIZING.load(Ordering::SeqCst) {
+        return real_stat(path, buf);
+    }
+
+    // Skip if ShimState is not yet initialized (avoids malloc during dyld __malloc_init)
+    if SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return real_stat(path, buf);
+    }
+
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => return real_stat(path, buf),
@@ -905,7 +963,7 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: Stat
         return 0;
     }
 
-    if path_str.starts_with(&state.vfs_prefix) {
+    if path_str.starts_with(&*state.vfs_prefix) {
         let vpath = &path_str[state.vfs_prefix.len()..];
         if let Some(entry) = state.query_manifest(vpath) {
             ptr::write_bytes(buf, 0, 1);
@@ -930,6 +988,17 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: Stat
 }
 
 unsafe fn fstat_impl(fd: c_int, buf: *mut libc::stat, real_fstat: FstatFn) -> c_int {
+    // Early bailout during ShimState initialization to prevent CasStore::new recursion
+    if INITIALIZING.load(Ordering::SeqCst) {
+        return real_fstat(fd, buf);
+    }
+
+    // Skip if ShimState is not yet initialized (avoids malloc during dyld __malloc_init)
+    // We do NOT trigger init here - init happens on first user-level stat/open call
+    if SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return real_fstat(fd, buf);
+    }
+
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => return real_fstat(fd, buf),
@@ -989,6 +1058,16 @@ static SYNTHETIC_DIR_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0x7F000000);
 
 unsafe fn opendir_impl(path: *const c_char, real_opendir: OpendirFn) -> *mut libc::DIR {
+    // Early bailout during ShimState initialization to prevent CasStore::new recursion
+    if INITIALIZING.load(Ordering::SeqCst) {
+        return real_opendir(path);
+    }
+
+    // Skip if ShimState is not yet initialized (avoids malloc during dyld __malloc_init)
+    if SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return real_opendir(path);
+    }
+
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => return real_opendir(path),
@@ -1004,7 +1083,7 @@ unsafe fn opendir_impl(path: *const c_char, real_opendir: OpendirFn) -> *mut lib
     };
 
     // Check if this is a VFS path
-    if path_str.starts_with(&state.vfs_prefix) {
+    if path_str.starts_with(&*state.vfs_prefix) {
         let vpath = &path_str[state.vfs_prefix.len()..];
 
         // Query daemon for directory entries
@@ -1132,14 +1211,18 @@ unsafe fn readlink_impl(
         Err(_) => return real_readlink(path, buf, bufsiz),
     };
 
-    if path_str.starts_with(&state.vfs_prefix) {
+    if path_str.starts_with(&*state.vfs_prefix) {
         let vpath = &path_str[state.vfs_prefix.len()..];
         if let Some(entry) = state.query_manifest(vpath) {
             if entry.is_symlink() {
-                if let Ok(data) = state.cas.get(&entry.content_hash) {
-                    let len = std::cmp::min(data.len(), bufsiz);
-                    ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, len);
-                    return len as ssize_t;
+                if let Some(cas_guard) = state.get_cas() {
+                    if let Some(cas) = cas_guard.as_ref() {
+                        if let Ok(data) = cas.get(&entry.content_hash) {
+                            let len = std::cmp::min(data.len(), bufsiz);
+                            ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, len);
+                            return len as ssize_t;
+                        }
+                    }
                 }
             }
         }
@@ -1252,43 +1335,51 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn stat_shim(p: *const c_char, b: *mut libc::stat) -> c_int {
-    stat_common(p, b, stat)
+    // Use IT_STAT.old_func to get the real libc stat, avoiding recursion
+    let real = std::mem::transmute::<*const (), StatFn>(IT_STAT.old_func);
+    stat_common(p, b, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn lstat_shim(p: *const c_char, b: *mut libc::stat) -> c_int {
-    stat_common(p, b, lstat)
+    let real = std::mem::transmute::<*const (), StatFn>(IT_LSTAT.old_func);
+    stat_common(p, b, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn fstat_shim(fd: c_int, b: *mut libc::stat) -> c_int {
-    fstat_impl(fd, b, fstat)
+    let real = std::mem::transmute::<*const (), FstatFn>(IT_FSTAT.old_func);
+    fstat_impl(fd, b, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn opendir_shim(p: *const c_char) -> *mut libc::DIR {
-    opendir_impl(p, opendir)
+    let real = std::mem::transmute::<*const (), OpendirFn>(IT_OPENDIR.old_func);
+    opendir_impl(p, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn readdir_shim(d: *mut libc::DIR) -> *mut libc::dirent {
-    readdir(d)
+    let real = std::mem::transmute::<*const (), ReaddirFn>(IT_READDIR.old_func);
+    readdir_impl(d, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn closedir_shim(d: *mut libc::DIR) -> c_int {
-    closedir(d)
+    let real = std::mem::transmute::<*const (), ClosedirFn>(IT_CLOSEDIR.old_func);
+    closedir_impl(d, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn readlink_shim(p: *const c_char, b: *mut c_char, s: size_t) -> ssize_t {
-    readlink_impl(p, b, s, readlink)
+    let real = std::mem::transmute::<*const (), ReadlinkFn>(IT_READLINK.old_func);
+    readlink_impl(p, b, s, real)
 }
 
 #[cfg(target_os = "macos")]
