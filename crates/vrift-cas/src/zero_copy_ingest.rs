@@ -49,9 +49,11 @@ use crate::{Blake3Hash, CasError, Result};
 /// * Ok(false) if file already existed (dedup)
 /// * Err on all fallback methods failed
 fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
-    // Audit: Check existence first. If it exists and is set to 0444 + uchg,
-    // hard_link will fail with EPERM on many systems.
+    // Audit: Check existence first. If it exists, enforce invariant anyway (idempotency fix)
     if target.exists() {
+        // QA Fix: Existing blobs might have wrong permissions from older ingests
+        // Re-enforce CAS invariant to ensure read-only, non-executable state
+        let _ = crate::protection::enforce_cas_invariant(target);
         return Ok(false);
     }
 
