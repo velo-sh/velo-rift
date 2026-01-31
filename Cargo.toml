@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/vrift-cas",
+    "crates/vrift-config",
     "crates/vrift-manifest",
     "crates/vrift-pack",
     "crates/vrift-runtime",
@@ -14,6 +15,7 @@ members = [
 # Exclude vrift-shim from default cargo commands (INIT constructor causes hangs)
 default-members = [
     "crates/vrift-cas",
+    "crates/vrift-config",
     "crates/vrift-manifest",
     "crates/vrift-pack",
     "crates/vrift-runtime",
@@ -55,6 +57,7 @@ tracing = "0.1"
 
 # Internal crates
 vrift-cas = { path = "crates/vrift-cas" }
+vrift-config = { path = "crates/vrift-config" }
 vrift-manifest = { path = "crates/vrift-manifest" }
 vrift-pack = { path = "crates/vrift-pack" }
 vrift-runtime = { path = "crates/vrift-runtime" }

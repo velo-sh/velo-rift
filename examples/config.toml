@@ -1,0 +1,68 @@
+# Velo Rift Configuration
+# Place in ~/.vrift/config.toml (global) or .vrift/config.toml (project)
+
+[storage]
+# TheSource™ CAS root directory
+the_source = "~/.vrift/the_source"
+# Default projection mode: solid or phantom
+default_mode = "solid"
+
+[ingest]
+# Number of parallel threads (auto if not set)
+# threads = 4
+# Default tier: tier1, tier2, or auto
+default_tier = "tier2"
+
+[tiers]
+# Tier-1 (Immutable) path patterns - symlink + chattr
+tier1_patterns = [
+    "node_modules/",
+    ".cargo/registry/",
+    ".rustup/",
+    "/toolchains/",
+    ".venv/lib/",
+    "site-packages/",
+    "/usr/lib/",
+    "/usr/share/",
+]
+
+# Tier-2 (Mutable) path patterns - hardlink + BBW
+tier2_patterns = [
+    "target/",
+    "target/debug/",
+    "target/release/",
+    "dist/",
+    "build/",
+    ".next/",
+    "__pycache__/",
+    ".pytest_cache/",
+    ".cache/",
+    "out/",
+]
+
+[security]
+# Enable security filter (RFC-0042)
+enabled = true
+# Patterns to exclude (sensitive files)
+exclude_patterns = [
+    ".env",
+    ".env.*",
+    "*.key",
+    "*.pem",
+    "*.p12",
+    "*.pfx",
+    "id_rsa",
+    "id_rsa.*",
+    "id_ed25519",
+    "id_ed25519.*",
+    "*.keystore",
+    "credentials.json",
+    "secrets.yaml",
+    "secrets.yml",
+]
+
+[daemon]
+# Unix socket path
+socket = "/run/vrift/daemon.sock"
+# Enable daemon mode
+enabled = false

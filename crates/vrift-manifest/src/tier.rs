@@ -6,8 +6,8 @@
 
 use crate::AssetTier;
 
-/// Path patterns for Tier-1 (Immutable) classification
-const TIER1_PATTERNS: &[&str] = &[
+/// Default path patterns for Tier-1 (Immutable) classification
+pub const DEFAULT_TIER1_PATTERNS: &[&str] = &[
     // Node.js registry deps
     "node_modules/",
     // Rust registry and toolchains
@@ -22,8 +22,8 @@ const TIER1_PATTERNS: &[&str] = &[
     "/usr/share/",
 ];
 
-/// Path patterns for Tier-2 (Mutable) classification  
-const TIER2_PATTERNS: &[&str] = &[
+/// Default path patterns for Tier-2 (Mutable) classification  
+pub const DEFAULT_TIER2_PATTERNS: &[&str] = &[
     // Rust build outputs
     "target/",
     "target/debug/",
@@ -41,7 +41,65 @@ const TIER2_PATTERNS: &[&str] = &[
     "out/",
 ];
 
-/// Classify a path into its appropriate asset tier.
+/// Configurable tier classifier
+/// 
+/// Can be created with custom patterns from config file,
+/// or use default patterns via TierClassifier::default().
+#[derive(Debug, Clone)]
+pub struct TierClassifier {
+    tier1_patterns: Vec<String>,
+    tier2_patterns: Vec<String>,
+}
+
+impl Default for TierClassifier {
+    fn default() -> Self {
+        Self {
+            tier1_patterns: DEFAULT_TIER1_PATTERNS.iter().map(|s| s.to_string()).collect(),
+            tier2_patterns: DEFAULT_TIER2_PATTERNS.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+impl TierClassifier {
+    /// Create a new classifier with custom patterns
+    pub fn new(tier1_patterns: Vec<String>, tier2_patterns: Vec<String>) -> Self {
+        Self { tier1_patterns, tier2_patterns }
+    }
+    
+    /// Classify a path into its appropriate asset tier
+    pub fn classify(&self, path: &str) -> AssetTier {
+        // Normalize path for matching
+        let normalized = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{}", path)
+        };
+
+        // Check Tier-1 patterns first
+        for pattern in &self.tier1_patterns {
+            if normalized.contains(pattern) {
+                return AssetTier::Tier1Immutable;
+            }
+        }
+
+        // Tier-2 patterns are informational - default is Tier2
+        for pattern in &self.tier2_patterns {
+            if normalized.contains(pattern) {
+                return AssetTier::Tier2Mutable;
+            }
+        }
+
+        // Default: Tier-2 (mutable, safer for unclassified files)
+        AssetTier::Tier2Mutable
+    }
+    
+    /// Check if a path is a candidate for Tier-1 immutable storage
+    pub fn is_immutable_candidate(&self, path: &str) -> bool {
+        matches!(self.classify(path), AssetTier::Tier1Immutable)
+    }
+}
+
+/// Classify a path into its appropriate asset tier (using default patterns).
 ///
 /// Classification priority:
 /// 1. Explicit Tier-1 patterns (immutable)
@@ -58,35 +116,12 @@ const TIER2_PATTERNS: &[&str] = &[
 /// assert_eq!(classify_tier("src/main.rs"), AssetTier::Tier2Mutable);
 /// ```
 pub fn classify_tier(path: &str) -> AssetTier {
-    // Normalize path for matching
-    let normalized = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
-    };
-
-    // Check Tier-1 patterns first
-    for pattern in TIER1_PATTERNS {
-        if normalized.contains(pattern) {
-            return AssetTier::Tier1Immutable;
-        }
-    }
-
-    // Tier-2 patterns are informational - default is Tier2
-    // We still check them for explicit classification logging
-    for pattern in TIER2_PATTERNS {
-        if normalized.contains(pattern) {
-            return AssetTier::Tier2Mutable;
-        }
-    }
-
-    // Default: Tier-2 (mutable, safer for unclassified files)
-    AssetTier::Tier2Mutable
+    TierClassifier::default().classify(path)
 }
 
 /// Check if a path is a candidate for Tier-1 immutable storage
 pub fn is_immutable_candidate(path: &str) -> bool {
-    matches!(classify_tier(path), AssetTier::Tier1Immutable)
+    TierClassifier::default().is_immutable_candidate(path)
 }
 
 #[cfg(test)]
