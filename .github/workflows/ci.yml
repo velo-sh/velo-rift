@@ -3,59 +3,176 @@ name: CI
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'LICENSE'
   pull_request:
     branches: [ "main" ]
 
+# Cancel in-progress runs on same ref
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  VELO_ENV: ci
 
 jobs:
+  # ============================================
+  # Fast Checks (Parallel) - Fail Fast
+  # ============================================
+  
   fmt:
-    name: Rustfmt
+    name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Check formatting
-        run: source scripts/ci-common.sh && run_fmt_check
+        run: cargo fmt --check
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Run clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-clippy"
+      - name: Run Clippy
         run: source scripts/ci-common.sh && run_clippy
 
-  test:
-    name: Test
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Run tests
-        run: source scripts/ci-common.sh && run_rust_tests
-
-  # TODO: Add a specific job for LD_PRELOAD integration testing on Linux
-  e2e-test:
-    name: End-to-End Test (Linux)
+  # ============================================
+  # Build (Required for Test Matrix)
+  # ============================================
+  
+  build:
+    name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-build"
+          cache-on-failure: true
+      - name: Build Release
+        run: cargo build --release -p vrift-cli
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrift-binary
+          path: target/release/vrift
+          if-no-files-found: error
+          retention-days: 1
+
+  # ============================================
+  # Rust Test Matrix (Parallel) - Fail Fast
+  # ============================================
+  
+  test-matrix:
+    name: "Test: ${{ matrix.crate }}"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: true
+      matrix:
+        crate:
+          - vrift-cas
+          - vrift-manifest
+          - vrift-lock
+          - vrift-config
+          - vrift-runtime
+          - vrift-cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-test-${{ matrix.crate }}"
+      - name: "Test: ${{ matrix.crate }}"
+        run: |
+          # SSOT: Use ci-common.sh function if crate is excluded
+          if [[ "${{ matrix.crate }}" == "vrift-shim" ]] || [[ "${{ matrix.crate }}" == "vrift-fuse" ]]; then
+            echo "Skipping ${{ matrix.crate }} (platform-specific)"
+          else
+            cargo nextest run -p ${{ matrix.crate }} --lib
+          fi
+
+  # ============================================
+  # E2E Tests (After Build)
+  # ============================================
+  
+  e2e-gc:
+    name: "E2E: GC Test"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-build"
+      - name: Download Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: vrift-binary
+          path: target/release
+      - name: Make executable
+        run: chmod +x target/release/vrift
+      - name: Run GC E2E Test
+        run: python3 scripts/gc_e2e_test.py
+
+  e2e-daemon:
+    name: "E2E: Daemon Test"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-build"
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev sqlite3
-      - name: Run E2E Test Suite
+      - name: Build with FUSE
+        run: cargo build --release -p vrift-cli --features vrift-cli/fuse
+      - name: Run Daemon E2E Test
         run: ./test.sh
+
+  # ============================================
+  # Summary Gate (All Must Pass)
+  # ============================================
+  
+  ci-success:
+    name: CI Success
+    if: always()
+    needs: [fmt, clippy, build, test-matrix, e2e-gc, e2e-daemon]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.fmt.result }}" != "success" ]] || \
+             [[ "${{ needs.clippy.result }}" != "success" ]] || \
+             [[ "${{ needs.build.result }}" != "success" ]] || \
+             [[ "${{ needs.test-matrix.result }}" != "success" ]] || \
+             [[ "${{ needs.e2e-gc.result }}" != "success" ]] || \
+             [[ "${{ needs.e2e-daemon.result }}" != "success" ]]; then
+            echo "One or more jobs failed"
+            exit 1
+          fi
+          echo "✅ All CI checks passed!"
