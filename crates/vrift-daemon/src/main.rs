@@ -43,7 +43,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use vrift_ipc::{bloom_hashes, BLOOM_SIZE};
-use vrift_manifest::Manifest;
+use vrift_manifest::lmdb::{AssetTier, LmdbManifest};
 
 const MAX_IPC_SIZE: usize = 16 * 1024 * 1024; // 16 MB max to prevent DoS
 
@@ -151,24 +151,33 @@ impl BloomFilter {
 struct DaemonState {
     // In-memory index of CAS blobs (Hash -> Size)
     cas_index: Mutex<HashMap<[u8; 32], u64>>,
-    // VFS Manifest
-    manifest: Mutex<Manifest>,
-    manifest_path: String,
+    // VFS Manifest (LMDB-backed for ACID persistence)
+    manifest: std::sync::Mutex<LmdbManifest>,
     bloom: BloomFilter,
 }
 
 async fn start_daemon() -> Result<()> {
     tracing::info!("vriftd: Starting daemon...");
 
-    let manifest_path =
-        std::env::var("VRIFT_MANIFEST").unwrap_or_else(|_| "velo.manifest".to_string());
-    let manifest = Manifest::load(&manifest_path).unwrap_or_else(|_| {
-        tracing::warn!(
-            "Failed to load manifest from {}, creating new.",
-            manifest_path
-        );
-        Manifest::new()
-    });
+    // LMDB manifest path (use .vrift directory or VRIFT_MANIFEST env var for directory path)
+    let manifest_dir = std::env::var("VRIFT_MANIFEST_DIR")
+        .unwrap_or_else(|_| ".vrift/daemon_manifest.lmdb".to_string());
+
+    let manifest = match LmdbManifest::open(&manifest_dir) {
+        Ok(m) => {
+            tracing::info!("Loaded LMDB manifest from {}", manifest_dir);
+            m
+        }
+        Err(e) => {
+            tracing::warn!("Failed to open LMDB manifest at {}: {}", manifest_dir, e);
+            // Create parent directories if needed
+            if let Some(parent) = std::path::Path::new(&manifest_dir).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            LmdbManifest::open(&manifest_dir)
+                .map_err(|e| anyhow::anyhow!("Failed to create LMDB manifest: {}", e))?
+        }
+    };
 
     let socket_path = "/tmp/vrift.sock";
     let path = Path::new(socket_path);
@@ -208,16 +217,21 @@ async fn start_daemon() -> Result<()> {
 
     let bloom = BloomFilter::new(shm_ptr);
     bloom.clear();
-    // Populate with existing manifest
-    for path in manifest.paths() {
-        bloom.add(path);
+    // Populate bloom filter with existing manifest entries
+    if let Ok(entries) = manifest.iter() {
+        for (path, _entry) in entries {
+            bloom.add(&path);
+        }
+        tracing::info!(
+            "vriftd: Loaded {} manifest entries into bloom filter",
+            manifest.len().unwrap_or(0)
+        );
     }
 
     // Initialize shared state
     let state = Arc::new(DaemonState {
         cas_index: Mutex::new(HashMap::new()),
-        manifest: Mutex::new(manifest),
-        manifest_path,
+        manifest: std::sync::Mutex::new(manifest),
         bloom,
     });
 
@@ -363,17 +377,20 @@ async fn handle_request(
             owner,
         } => handle_protect(path, immutable, owner).await,
         VeloRequest::ManifestGet { path } => {
-            let manifest: tokio::sync::MutexGuard<Manifest> = state.manifest.lock().await;
-            VeloResponse::ManifestAck {
-                entry: manifest.get(&path).cloned(),
-            }
+            let manifest = state.manifest.lock().unwrap();
+            let entry = match manifest.get(&path) {
+                Ok(Some(manifest_entry)) => Some(manifest_entry.vnode.clone()),
+                _ => None,
+            };
+            VeloResponse::ManifestAck { entry }
         }
         VeloRequest::ManifestUpsert { path, entry } => {
-            let mut manifest: tokio::sync::MutexGuard<Manifest> = state.manifest.lock().await;
-            manifest.insert(&path, entry);
+            let manifest = state.manifest.lock().unwrap();
+            manifest.insert(&path, entry, AssetTier::Tier2Mutable);
             state.bloom.add(&path);
-            if let Err(e) = manifest.save(&state.manifest_path) {
-                tracing::error!("Failed to save manifest: {}", e);
+            // Commit changes to LMDB (ACID transaction)
+            if let Err(e) = manifest.commit() {
+                tracing::error!("Failed to commit manifest: {}", e);
             }
             VeloResponse::ManifestAck { entry: None }
         }
