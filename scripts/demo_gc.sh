@@ -189,6 +189,40 @@ print_step "7" "Final GC status (clean)"
 "$VRIFT" --the-source-root "$CAS_DIR" gc
 
 # ============================================================================
+# Step 8: SAFETY VERIFICATION - Prove no false-positive deletions!
+# ============================================================================
+
+print_step "8" "Safety Verification - Prove no false-positive deletions"
+
+echo "  Re-ingesting proj2 to verify all blobs still exist..."
+echo ""
+
+# Re-ingest proj2 - if new_blobs = 0, all blobs were preserved
+OUTPUT=$("$VRIFT" --the-source-root "$CAS_DIR" ingest "$DEMO_DIR/proj2/node_modules" -o "$DEMO_DIR/proj2_verify.manifest" 2>&1)
+echo "$OUTPUT"
+
+# Extract new blobs count from output
+NEW_BLOBS=$(echo "$OUTPUT" | grep -o '[0-9,]* blobs' | head -1 | tr -d ',')
+
+echo ""
+echo -e "${CYAN}  ═══════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}  🔒 SAFETY VERIFICATION RESULT${NC}"
+echo -e "${CYAN}  ═══════════════════════════════════════════════════════${NC}"
+echo ""
+
+# Check if 100% dedup (meaning all blobs already exist)
+if echo "$OUTPUT" | grep -q "100.0% DEDUP"; then
+    print_success "ALL BLOBS INTACT - 100% DEDUP on re-ingest!"
+    echo ""
+    echo -e "     ${GREEN}✓ GC only deleted orphans from proj1${NC}"
+    echo -e "     ${GREEN}✓ All proj2 blobs preserved correctly${NC}"
+    echo -e "     ${GREEN}✓ Zero false-positive deletions${NC}"
+else
+    echo -e "${YELLOW}  ⚠️  Some new blobs created - check GC logic${NC}"
+fi
+echo ""
+
+# ============================================================================
 # Summary
 # ============================================================================
 
