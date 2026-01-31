@@ -23,7 +23,7 @@ mod mount;
 mod active;
 pub mod gc;
 
-use vrift_cas::{ingest_phantom, ingest_solid_tier1, ingest_solid_tier2, CasStore};
+use vrift_cas::CasStore;
 use vrift_manifest::lmdb::{AssetTier, LmdbManifest};
 use vrift_manifest::{Manifest, VnodeEntry};
 
@@ -381,12 +381,16 @@ async fn cmd_ingest(
 
     println!("Ingesting {} into CAS...", directory.display());
 
-    // Collect files first for parallel processing
+    // Collect entries and classify them
     let entries: Vec<_> = WalkDir::new(directory)
         .into_iter()
         .filter_map(|e| e.ok())
         .collect();
 
+    // Phase 1: Process directories and symlinks (must be serial for manifest order)
+    // Also collect file paths for parallel processing
+    let mut file_entries: Vec<(PathBuf, String, u64, u32)> = Vec::new(); // (path, manifest_path, mtime, mode)
+    
     for entry in &entries {
         let path = entry.path();
         let relative = path.strip_prefix(directory).unwrap_or(path);
@@ -416,54 +420,8 @@ async fn cmd_ingest(
             manifest.insert(&manifest_path, vnode.clone());
             lmdb_manifest.insert(&manifest_path, vnode, asset_tier);
         } else if metadata.is_file() {
-            // Zero-copy ingest based on mode
-            let result = if is_phantom {
-                ingest_phantom(path, &cas_root)
-            } else if is_tier1 {
-                ingest_solid_tier1(path, &cas_root)
-            } else {
-                ingest_solid_tier2(path, &cas_root)
-            };
-
-            match result {
-                Ok(ingest_result) => {
-                    let vnode = VnodeEntry::new_file(
-                        ingest_result.hash,
-                        ingest_result.size,
-                        mtime,
-                        metadata.mode(),
-                    );
-                    manifest.insert(&manifest_path, vnode.clone());
-                    lmdb_manifest.insert(&manifest_path, vnode, asset_tier);
-
-                    files_ingested += 1;
-                    bytes_ingested += ingest_result.size;
-                    unique_blobs += 1; // For zero-copy, each file creates a CAS entry
-                }
-                Err(e) => {
-                    // Check for cross-device error (EXDEV)
-                    if let vrift_cas::CasError::Io(ref io_err) = e {
-                        if io_err.raw_os_error() == Some(libc::EXDEV) {
-                            // Fallback to traditional copy
-                            let content = fs::read(path)
-                                .with_context(|| format!("Fallback read failed: {}", path.display()))?;
-                            let hash = CasStore::compute_hash(&content);
-                            let size = content.len() as u64;
-                            cas.store(&content)?;
-
-                            let vnode = VnodeEntry::new_file(hash, size, mtime, metadata.mode());
-                            manifest.insert(&manifest_path, vnode.clone());
-                            lmdb_manifest.insert(&manifest_path, vnode, asset_tier);
-
-                            files_ingested += 1;
-                            bytes_ingested += size;
-                            fallback_count += 1;
-                            continue;
-                        }
-                    }
-                    return Err(e).with_context(|| format!("Failed to ingest: {}", path.display()));
-                }
-            }
+            // Collect for parallel processing
+            file_entries.push((path.to_path_buf(), manifest_path, mtime, metadata.mode()));
         } else if metadata.is_symlink() {
             let target = fs::read_link(path)?;
             let target_str = target.to_str().ok_or_else(|| {
@@ -479,6 +437,76 @@ async fn cmd_ingest(
             let vnode = VnodeEntry::new_symlink(hash, content.len() as u64, mtime);
             manifest.insert(&manifest_path, vnode.clone());
             lmdb_manifest.insert(&manifest_path, vnode, asset_tier);
+        }
+    }
+
+    // Phase 2: Parallel file ingest
+    let file_count = file_entries.len();
+    if file_count > 0 {
+        let file_paths: Vec<PathBuf> = file_entries.iter().map(|(p, _, _, _)| p.clone()).collect();
+        
+        // Determine ingest mode
+        let ingest_mode = if is_phantom {
+            vrift_cas::IngestMode::Phantom
+        } else if is_tier1 {
+            vrift_cas::IngestMode::SolidTier1
+        } else {
+            vrift_cas::IngestMode::SolidTier2
+        };
+
+        // Run parallel ingest
+        let ingest_results = vrift_cas::parallel_ingest_with_threads(
+            &file_paths,
+            &cas_root,
+            ingest_mode,
+            Some(thread_count),
+        );
+
+        // Phase 3: Update manifests from results (serial, but fast)
+        for (i, result) in ingest_results.into_iter().enumerate() {
+            let (_, ref manifest_path, mtime, mode) = file_entries[i];
+
+            match result {
+                Ok(ingest_result) => {
+                    let vnode = VnodeEntry::new_file(
+                        ingest_result.hash,
+                        ingest_result.size,
+                        mtime,
+                        mode,
+                    );
+                    manifest.insert(manifest_path, vnode.clone());
+                    lmdb_manifest.insert(manifest_path, vnode, asset_tier);
+
+                    files_ingested += 1;
+                    bytes_ingested += ingest_result.size;
+                    unique_blobs += 1;
+                }
+                Err(e) => {
+                    // Check for cross-device error (EXDEV)
+                    if let vrift_cas::CasError::Io(ref io_err) = e {
+                        if io_err.raw_os_error() == Some(libc::EXDEV) {
+                            // Fallback to traditional copy
+                            let path = &file_entries[i].0;
+                            let content = fs::read(path)
+                                .with_context(|| format!("Fallback read failed: {}", path.display()))?;
+                            let hash = CasStore::compute_hash(&content);
+                            let size = content.len() as u64;
+                            cas.store(&content)?;
+
+                            let vnode = VnodeEntry::new_file(hash, size, mtime, mode);
+                            manifest.insert(manifest_path, vnode.clone());
+                            lmdb_manifest.insert(manifest_path, vnode, asset_tier);
+
+                            files_ingested += 1;
+                            bytes_ingested += size;
+                            fallback_count += 1;
+                            continue;
+                        }
+                    }
+                    let path = &file_entries[i].0;
+                    return Err(e).with_context(|| format!("Failed to ingest: {}", path.display()));
+                }
+            }
         }
     }
 
