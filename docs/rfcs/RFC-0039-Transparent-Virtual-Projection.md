@@ -13,10 +13,10 @@
 | Ingest Lock (flock) | §5.3 | ✅ Done | `lock_with_retry()` |
 | CAS Sharding | §6 | ✅ Done | `blake3/ab/cd/hash_size.ext` |
 | Parallel Ingest | - | ✅ Done | Rayon, ~14,000 files/sec |
-| Break-Before-Write | §5.1.2 | ⏸️ Deferred | Requires VFS intercept |
+| Break-Before-Write | §5.1.2 | 🚧 P1 | Required for Tier-2 safety (no-root) |
 | Live Ingest on close() | §3.2 | ⏸️ Deferred | Requires VFS intercept |
 | Tier-1 chattr +i | §5.1.1 | ✅ Done | Native implementation (macOS/Linux) |
-| Tier-1 chown | §5.1.1 | ⏸️ Deferred | Requires daemon |
+| Tier-1 chown | §5.1.1 | ⏸️ Deferred | Deferred: High friction (requires root) |
 
 ## 2. Context & Objectives
 Velo Rift™ aims to eliminate the friction between "Project Content" and "Disk Storage." This RFC proposes a **Transparent Projection Model** where the VFS layer replaces heavy-duty physical directories (e.g., `node_modules`, `target`, `.venv`) with a dynamic virtual lens. The environment is intended to be **long-lived**, becoming the primary state of the workspace rather than a transient execution context.
@@ -73,12 +73,15 @@ Velo Rift™ provides two modes to balance safety and performance.
 
 ## 5. Atomic Implementation Strategy
 
-To guarantee **absolute safety**, Velo Rift™ enforces two invariants:
+To guarantee **absolute safety**, Velo Rift™ enforces two invariants (The "Iron Law"):
 
 | Invariant | Semantic | Guarantee |
 |-----------|----------|----------|
-| **P0-a** | Hash-Content Match | `CAS[hash].content == hash(content)` always |
+| **P0-a** | Hash-Content Match | `CAS[hash].content == hash(content)` ALWAYS. READ-ONLY. |
 | **P0-b** | Projection-Link Match | `VFS[path]` always returns the correct version |
+
+> [!CAUTION]
+> **Iron Law (P0-a)**: Any modification to a CAS-managed file MUST break the hardlink before writing. Direct modification of an ingested inode is strictly prohibited as it corrupts the global CAS.
 
 Velo adheres to strict atomic syscall sequences and locking protocols to uphold both invariants.
 
@@ -367,7 +370,7 @@ For internal data structures and performance optimizations, see [ARCHITECTURE.md
 | Topic | Priority | Description |
 |-------|----------|-------------|
 | **GC Strategy** | P2 | Orphan CAS entry cleanup via reference counting or mark-sweep |
+| **Bloom Filter** | P1 | High-speed hash existence checks for Ingest/GC |
 | **Multi-Project Sharing** | P2 | Shared Base Layer across projects, per-project Delta Layer |
-| **Performance Benchmarks** | P3 | Define I/O latency targets, throughput goals, memory bounds |
-| **Security Hardening** | P3 | Symlink attack mitigations, permission boundary audits |
+| **Privileged Isolation** | P4 | Optional `chown` to system user (requires root setup) |
 | **Remote CAS** | P3 | Network-backed CAS for distributed teams |
