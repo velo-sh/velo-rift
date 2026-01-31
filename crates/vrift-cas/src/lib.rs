@@ -38,7 +38,9 @@ pub use parallel_ingest::{
     parallel_ingest_with_progress, parallel_ingest_with_threads, IngestMode, ParallelIngestStats,
     MAX_INGEST_THREADS,
 };
-pub use protection::{is_immutable, set_immutable};
+pub use protection::{
+    enforce_cas_invariant, is_immutable, set_immutable, CAS_FORBIDDEN_PERM_MASK, CAS_READ_ONLY_PERM,
+};
 pub use streaming_pipeline::{IngestPipeline, IngestStats, PipelineConfig};
 pub use zero_copy_ingest::{
     ingest_phantom, ingest_solid_tier1, ingest_solid_tier1_dedup, ingest_solid_tier2,

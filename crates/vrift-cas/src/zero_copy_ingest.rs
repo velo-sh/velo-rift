@@ -49,12 +49,23 @@ use crate::{Blake3Hash, CasError, Result};
 /// * Ok(false) if file already existed (dedup)
 /// * Err on all fallback methods failed
 fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
+    // Audit: Check existence first. If it exists and is set to 0444 + uchg,
+    // hard_link will fail with EPERM on many systems.
+    if target.exists() {
+        return Ok(false);
+    }
+
     // Attempt 1: hard_link (most efficient)
     match fs::hard_link(source, target) {
         Ok(()) => return Ok(true), // New file created
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(false), // Already exists
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            // EPERM: likely code-signed bundle, try clonefile
+            // EPERM: likely code-signed bundle OR existing immutable blob
+            // If it's the latter, target.exists() above should have caught it,
+            // but we check again just in case of race conditions.
+            if target.exists() {
+                return Ok(false);
+            }
         }
         Err(e) => return Err(e),
     }
@@ -156,11 +167,15 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     drop(locked_file);
 
     // Replace source with symlink
+    tracing::debug!("Replacing {:?} with symlink to {:?}", source, cas_target);
     fs::remove_file(source)?;
     unix_fs::symlink(&cas_target, source)?;
+    tracing::debug!("Symlink created successfully");
 
     // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection (must do after source removal!)
     if was_new {
+        // RFC-0039 Iron Law: Ensure CAS blob is read-only and NOT executable
+        let _ = crate::protection::enforce_cas_invariant(&cas_target);
         set_immutable_best_effort(&cas_target);
     }
 
@@ -221,6 +236,8 @@ pub fn ingest_solid_tier1_dedup(
 
     // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection (must do after source removal!)
     if is_new {
+        // RFC-0039 Iron Law: Ensure CAS blob is read-only and NOT executable
+        let _ = crate::protection::enforce_cas_invariant(&cas_target);
         set_immutable_best_effort(&cas_target);
     }
 
@@ -252,6 +269,13 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
 
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
+
+    // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-2 protection
+    if was_new {
+        // RFC-0039 Iron Law: Ensure CAS blob is read-only and NOT executable
+        let _ = crate::protection::enforce_cas_invariant(&cas_target);
+        set_immutable_best_effort(&cas_target);
+    }
 
     // Lock guard auto-drops here
     Ok(IngestResult {
@@ -314,6 +338,13 @@ pub fn ingest_solid_tier2_dedup(
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
 
+    // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-2 protection
+    if was_new {
+        // RFC-0039 Iron Law: Ensure CAS blob is read-only and NOT executable
+        let _ = crate::protection::enforce_cas_invariant(&cas_target);
+        set_immutable_best_effort(&cas_target);
+    }
+
     Ok(IngestResult {
         source_path: source.to_owned(),
         hash,
@@ -343,12 +374,40 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
         fs::create_dir_all(parent)?;
     }
 
+    // RFC-0039 Audit: If target already exists and is immutable, rename will fail with EPERM.
+    // We check existence first to handle duplicate ingest safely.
+    if cas_target.exists() {
+        let _ = fs::remove_file(source); // Clean up source since it's already in CAS
+        return Ok(IngestResult {
+            source_path: source.to_owned(),
+            hash,
+            size,
+            was_new: false,
+        });
+    }
+
     // Atomic move (zero-copy!) - handle race condition
     match fs::rename(source, &cas_target) {
-        Ok(()) => {}
+        Ok(()) => {
+            // RFC-0039 Iron Law: Ensure CAS blob is read-only and NOT executable
+            let _ = crate::protection::enforce_cas_invariant(&cas_target);
+        }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // Another thread already created this blob, delete source
             let _ = fs::remove_file(source);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            // Likely existing immutable blob (race condition)
+            if cas_target.exists() {
+                let _ = fs::remove_file(source);
+                return Ok(IngestResult {
+                    source_path: source.to_owned(),
+                    hash,
+                    size,
+                    was_new: false,
+                });
+            }
+            return Err(e.into());
         }
         Err(e) => return Err(e.into()),
     }

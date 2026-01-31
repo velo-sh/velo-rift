@@ -12,6 +12,31 @@
 use std::io;
 use std::path::Path;
 
+/// RFC-0039 Security Invariant: TheSource (CAS) is a pure data warehouse.
+/// Execution bits are strictly forbidden within the CAS storage layer.
+/// This acts as a circuit breaker against direct execution of ingested payloads.
+pub const CAS_READ_ONLY_PERM: u32 = (libc::S_IRUSR | libc::S_IRGRP | libc::S_IROTH) as u32; // 0444
+
+/// The "Forbidden Mask" includes all Write and Execute bits for all users.
+/// We use this to audit and strip permissions.
+pub const CAS_FORBIDDEN_PERM_MASK: u32 = (libc::S_IWUSR
+    | libc::S_IWGRP
+    | libc::S_IWOTH // Write bits
+    | libc::S_IXUSR
+    | libc::S_IXGRP
+    | libc::S_IXOTH) as u32; // Execute bits (The Iron Law)
+
+/// Enforce the security invariant on a CAS blob.
+/// Ensures the file is read-only and NOT executable.
+pub fn enforce_cas_invariant(path: &Path) -> io::Result<()> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    // Apply strict 0444 permissions
+    fs::set_permissions(path, fs::Permissions::from_mode(CAS_READ_ONLY_PERM))?;
+    Ok(())
+}
+
 /// Set or unset the immutable flag on a file.
 ///
 /// On macOS, this sets the `UF_IMMUTABLE` flag (uchg).
