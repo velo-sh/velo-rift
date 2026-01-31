@@ -129,6 +129,40 @@ impl CasStore {
         self.root.join("blake3").join(l1).join(l2).join(&hex)
     }
 
+    /// Find the actual blob file path, supporting both old and new formats.
+    /// 
+    /// Returns the path if found, None otherwise.
+    /// Handles both:
+    /// - Old format: `hash` (no suffix)
+    /// - New format: `hash_size.ext` (with size and optional extension)
+    fn find_blob_path(&self, hash: &Blake3Hash) -> Option<PathBuf> {
+        let base_path = self.blob_path(hash);
+        
+        // Try old format first
+        if base_path.exists() {
+            return Some(base_path);
+        }
+        
+        // Try new format: find matching file in the directory
+        if let Some(parent) = base_path.parent() {
+            if parent.exists() {
+                let hex = Self::hash_to_hex(hash);
+                if let Ok(entries) = fs::read_dir(parent) {
+                    for entry in entries.flatten() {
+                        let filename = entry.file_name();
+                        let filename_str = filename.to_string_lossy();
+                        // Match pattern: <hash>_* or exact <hash>
+                        if filename_str.starts_with(&format!("{}_", hex)) || filename_str == hex {
+                            return Some(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+
     /// Get the path for a self-describing blob (RFC-0039 format).
     /// 
     /// Format: `blake3/ab/cd/hash_size.ext`
@@ -201,12 +235,12 @@ impl CasStore {
     /// Retrieve bytes from the CAS by hash.
     #[instrument(skip(self), level = "debug")]
     pub fn get(&self, hash: &Blake3Hash) -> Result<Vec<u8>> {
-        let path = self.blob_path(hash);
-        if !path.exists() {
-            return Err(CasError::NotFound {
+        let path = match self.find_blob_path(hash) {
+            Some(p) => p,
+            None => return Err(CasError::NotFound {
                 hash: Self::hash_to_hex(hash),
-            });
-        }
+            }),
+        };
 
         let mut file = File::open(&path)?;
         let mut data = Vec::new();
@@ -226,19 +260,21 @@ impl CasStore {
 
     /// Check if a blob exists in the CAS.
     pub fn exists(&self, hash: &Blake3Hash) -> bool {
-        self.blob_path(hash).exists()
+        self.find_blob_path(hash).is_some()
     }
 
     /// Delete a blob from the CAS.
+    /// 
+    /// Handles both old format (hash) and new format (hash_size.ext).
     pub fn delete(&self, hash: &Blake3Hash) -> Result<()> {
-        let path = self.blob_path(hash);
-        if path.exists() {
-            fs::remove_file(path)?;
-            Ok(())
-        } else {
-            Err(CasError::NotFound {
+        match self.find_blob_path(hash) {
+            Some(path) => {
+                fs::remove_file(path)?;
+                Ok(())
+            }
+            None => Err(CasError::NotFound {
                 hash: Self::hash_to_hex(hash),
-            })
+            }),
         }
     }
 
@@ -321,12 +357,12 @@ impl CasStore {
     /// leveraging the page cache for sharing across processes.
     #[instrument(skip(self), level = "debug")]
     pub fn get_mmap(&self, hash: &Blake3Hash) -> Result<memmap2::Mmap> {
-        let path = self.blob_path(hash);
-        if !path.exists() {
-            return Err(CasError::NotFound {
+        let path = match self.find_blob_path(hash) {
+            Some(p) => p,
+            None => return Err(CasError::NotFound {
                 hash: Self::hash_to_hex(hash),
-            });
-        }
+            }),
+        };
 
         let file = File::open(&path)?;
         // Safety: The file is read-only and we're not modifying it
@@ -359,12 +395,7 @@ impl CasStore {
 
     /// Get the filesystem path to a blob (for external mmap or direct access).
     pub fn blob_path_for_hash(&self, hash: &Blake3Hash) -> Option<PathBuf> {
-        let path = self.blob_path(hash);
-        if path.exists() {
-            Some(path)
-        } else {
-            None
-        }
+        self.find_blob_path(hash)
     }
 
     // ========================================================================

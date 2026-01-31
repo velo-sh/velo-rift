@@ -226,7 +226,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             cmd_status(&cli.the_source_root, manifest.as_deref(), session, &dir)
         }
         Commands::Mount(args) => mount::run(args),
-        Commands::Gc(args) => gc::run(args),
+        Commands::Gc(args) => gc::run(&cli.the_source_root, args),
         Commands::Resolve { lockfile } => cmd_resolve(&cli.the_source_root, &lockfile),
         Commands::Daemon { command } => match command {
             DaemonCommands::Status => daemon::check_status().await,

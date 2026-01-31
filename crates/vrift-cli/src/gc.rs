@@ -34,7 +34,7 @@ pub struct GcArgs {
     immediate: bool,
 }
 
-pub fn run(args: GcArgs) -> Result<()> {
+pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
     println!();
     println!("  Velo Rift Garbage Collection (RFC-0041)");
     println!("  ========================================");
@@ -96,32 +96,40 @@ pub fn run(args: GcArgs) -> Result<()> {
     println!("  ✅ Referenced blobs: {}", format_number(keep_set.len() as u64));
 
     // Sweep: Iterate CAS and find orphans
-    let cas = CasStore::default_location()?;
+    let cas = CasStore::new(cas_root)?;
     let mut total_blobs = 0u64;
     let mut orphan_count = 0u64;
     let mut orphan_bytes = 0u64;
     let mut deleted_count = 0u64;
     let mut deleted_bytes = 0u64;
 
-    // Collect orphans first
+
+    // Calculate total CAS size and collect orphans
     let mut orphans = Vec::new();
+    let mut total_bytes = 0u64;
     for hash_res in cas.iter()? {
         let hash = hash_res?;
         total_blobs += 1;
+        let size = cas.get(&hash).map(|b| b.len() as u64).unwrap_or(0);
+        total_bytes += size;
 
         if !keep_set.contains(&hash) {
-            // Get size for reporting
-            let size = cas.get(&hash).map(|b| b.len() as u64).unwrap_or(0);
             orphans.push((hash, size));
             orphan_count += 1;
             orphan_bytes += size;
         }
     }
 
-    println!("  🗄️  Total CAS blobs: {}", format_number(total_blobs));
-    println!("  🗑️  Orphaned blobs: {} ({})",
-        format_number(orphan_count),
-        format_bytes(orphan_bytes));
+    println!();
+    println!("  CAS Statistics:");
+    println!("    📦 Total blobs:   {} ({})", format_number(total_blobs), format_bytes(total_bytes));
+    println!("    ✅ Referenced:    {}", format_number(keep_set.len() as u64));
+    println!("    🗑️  Orphaned:      {} ({})", format_number(orphan_count), format_bytes(orphan_bytes));
+    
+    if orphan_count > 0 && total_bytes > 0 {
+        let reclaim_pct = (orphan_bytes as f64 / total_bytes as f64) * 100.0;
+        println!("    💾 Reclaimable:   {:.1}% of CAS", reclaim_pct);
+    }
 
     // Delete orphans if requested
     if args.delete {
