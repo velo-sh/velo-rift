@@ -74,9 +74,13 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
         fs::create_dir_all(parent)?;
     }
     
-    // Hard link (zero-copy!)
-    if !cas_target.exists() {
-        fs::hard_link(source, &cas_target)?;
+    // Hard link (zero-copy!) - handle EEXIST for parallel dedup
+    match fs::hard_link(source, &cas_target) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Another thread already created this blob - dedup success!
+        }
+        Err(e) => return Err(e.into()),
     }
     
     // Drop the lock guard before modifying source
@@ -111,9 +115,13 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
         fs::create_dir_all(parent)?;
     }
     
-    // Hard link (zero-copy!)
-    if !cas_target.exists() {
-        fs::hard_link(source, &cas_target)?;
+    // Hard link (zero-copy!) - handle EEXIST for parallel dedup
+    match fs::hard_link(source, &cas_target) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Another thread already created this blob - dedup success!
+        }
+        Err(e) => return Err(e.into()),
     }
     
     // Lock guard auto-drops here
@@ -145,12 +153,14 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
         fs::create_dir_all(parent)?;
     }
     
-    // Atomic move (zero-copy!)
-    if !cas_target.exists() {
-        fs::rename(source, &cas_target)?;
-    } else {
-        // Already in CAS, just delete source
-        fs::remove_file(source)?;
+    // Atomic move (zero-copy!) - handle race condition
+    match fs::rename(source, &cas_target) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Another thread already created this blob, delete source
+            let _ = fs::remove_file(source);
+        }
+        Err(e) => return Err(e.into()),
     }
     
     Ok(IngestResult {
