@@ -2046,6 +2046,7 @@ dependencies = [
  "thiserror 1.0.69",
  "toml",
  "tracing",
+ "vrift-manifest",
 ]
 
 [[package]]

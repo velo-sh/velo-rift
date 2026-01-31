@@ -138,7 +138,7 @@ mod tests {
     use super::*;
 
     // ========== Default classify_tier() Tests ==========
-    
+
     #[test]
     fn test_node_modules_tier1() {
         assert_eq!(
@@ -199,18 +199,27 @@ mod tests {
     }
 
     // ========== TierClassifier Custom Pattern Tests ==========
-    
+
     #[test]
     fn test_classifier_with_custom_tier1_patterns() {
         let classifier = TierClassifier::new(
             vec!["vendor/".to_string(), "third_party/".to_string()],
             vec![],
         );
-        
-        assert_eq!(classifier.classify("vendor/jquery.js"), AssetTier::Tier1Immutable);
-        assert_eq!(classifier.classify("third_party/lib.so"), AssetTier::Tier1Immutable);
+
+        assert_eq!(
+            classifier.classify("vendor/jquery.js"),
+            AssetTier::Tier1Immutable
+        );
+        assert_eq!(
+            classifier.classify("third_party/lib.so"),
+            AssetTier::Tier1Immutable
+        );
         // Default patterns not present in custom classifier
-        assert_eq!(classifier.classify("node_modules/foo.js"), AssetTier::Tier2Mutable);
+        assert_eq!(
+            classifier.classify("node_modules/foo.js"),
+            AssetTier::Tier2Mutable
+        );
     }
 
     #[test]
@@ -219,42 +228,58 @@ mod tests {
             vec![],
             vec!["output/".to_string(), "generated/".to_string()],
         );
-        
-        assert_eq!(classifier.classify("output/bundle.js"), AssetTier::Tier2Mutable);
-        assert_eq!(classifier.classify("generated/code.rs"), AssetTier::Tier2Mutable);
+
+        assert_eq!(
+            classifier.classify("output/bundle.js"),
+            AssetTier::Tier2Mutable
+        );
+        assert_eq!(
+            classifier.classify("generated/code.rs"),
+            AssetTier::Tier2Mutable
+        );
     }
 
     #[test]
     fn test_classifier_tier1_takes_precedence() {
         // If a path matches both tier1 and tier2, tier1 wins
-        let classifier = TierClassifier::new(
-            vec!["special/".to_string()],
-            vec!["special/".to_string()],
+        let classifier =
+            TierClassifier::new(vec!["special/".to_string()], vec!["special/".to_string()]);
+
+        assert_eq!(
+            classifier.classify("special/file.txt"),
+            AssetTier::Tier1Immutable
         );
-        
-        assert_eq!(classifier.classify("special/file.txt"), AssetTier::Tier1Immutable);
     }
 
     #[test]
     fn test_classifier_empty_patterns_returns_tier2() {
         let classifier = TierClassifier::new(vec![], vec![]);
-        
+
         // With no patterns, everything defaults to Tier2
         assert_eq!(classifier.classify("anything.txt"), AssetTier::Tier2Mutable);
-        assert_eq!(classifier.classify("node_modules/foo.js"), AssetTier::Tier2Mutable);
+        assert_eq!(
+            classifier.classify("node_modules/foo.js"),
+            AssetTier::Tier2Mutable
+        );
     }
 
     #[test]
     fn test_classifier_default_matches_constants() {
         let classifier = TierClassifier::default();
-        
+
         // Verify default classifier uses the constants
-        assert_eq!(classifier.classify("node_modules/foo.js"), AssetTier::Tier1Immutable);
-        assert_eq!(classifier.classify("target/release/app"), AssetTier::Tier2Mutable);
+        assert_eq!(
+            classifier.classify("node_modules/foo.js"),
+            AssetTier::Tier1Immutable
+        );
+        assert_eq!(
+            classifier.classify("target/release/app"),
+            AssetTier::Tier2Mutable
+        );
     }
 
     // ========== Edge Cases ==========
-    
+
     #[test]
     fn test_absolute_path_classification() {
         assert_eq!(
@@ -290,20 +315,22 @@ mod tests {
 
     #[test]
     fn test_cache_directories_tier2() {
-        assert_eq!(classify_tier("__pycache__/module.pyc"), AssetTier::Tier2Mutable);
+        assert_eq!(
+            classify_tier("__pycache__/module.pyc"),
+            AssetTier::Tier2Mutable
+        );
         assert_eq!(classify_tier(".cache/some_file"), AssetTier::Tier2Mutable);
-        assert_eq!(classify_tier(".pytest_cache/v/cache.json"), AssetTier::Tier2Mutable);
+        assert_eq!(
+            classify_tier(".pytest_cache/v/cache.json"),
+            AssetTier::Tier2Mutable
+        );
     }
 
     #[test]
     fn test_classifier_is_immutable_candidate() {
-        let classifier = TierClassifier::new(
-            vec!["immutable/".to_string()],
-            vec![],
-        );
-        
+        let classifier = TierClassifier::new(vec!["immutable/".to_string()], vec![]);
+
         assert!(classifier.is_immutable_candidate("immutable/file.txt"));
         assert!(!classifier.is_immutable_candidate("mutable/file.txt"));
     }
 }
-

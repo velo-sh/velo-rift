@@ -43,4 +43,7 @@ indicatif = { version = "0.17", features = ["rayon"] }
 default = []
 fuse = ["vrift-fuse/fuse"]
 
-#[dev-dependencies]
+[dev-dependencies]
+tempfile = "3.14"
+toml = "0.8"
+vrift-config = { path = "../vrift-config" }

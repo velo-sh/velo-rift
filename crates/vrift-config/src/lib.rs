@@ -14,9 +14,7 @@ use std::sync::RwLock;
 use tracing::debug;
 
 /// Global config instance
-static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| {
-    RwLock::new(Config::load().unwrap_or_default())
-});
+static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| RwLock::new(Config::load().unwrap_or_default()));
 
 /// Get global config (read-only)
 pub fn config() -> std::sync::RwLockReadGuard<'static, Config> {
@@ -39,7 +37,7 @@ pub enum ConfigError {
 }
 
 /// Main configuration structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub storage: StorageConfig,
@@ -49,23 +47,11 @@ pub struct Config {
     pub daemon: DaemonConfig,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            storage: StorageConfig::default(),
-            ingest: IngestConfig::default(),
-            tiers: TierConfig::default(),
-            security: SecurityConfig::default(),
-            daemon: DaemonConfig::default(),
-        }
-    }
-}
-
 impl Config {
     /// Load config from standard locations
     pub fn load() -> Result<Self, ConfigError> {
         let mut config = Config::default();
-        
+
         // 1. Load global config (~/.vrift/config.toml)
         if let Some(global_path) = Self::global_config_path() {
             if global_path.exists() {
@@ -74,7 +60,7 @@ impl Config {
                 config = toml::from_str(&contents)?;
             }
         }
-        
+
         // 2. Load project config (.vrift/config.toml) - overrides global
         let project_path = Path::new(".vrift/config.toml");
         if project_path.exists() {
@@ -83,18 +69,18 @@ impl Config {
             let project_config: Config = toml::from_str(&contents)?;
             config.merge(project_config);
         }
-        
+
         // 3. Apply environment variable overrides
         config.apply_env_overrides();
-        
+
         Ok(config)
     }
-    
+
     /// Global config path: ~/.vrift/config.toml
     pub fn global_config_path() -> Option<PathBuf> {
         dirs::home_dir().map(|h| h.join(".vrift/config.toml"))
     }
-    
+
     /// Merge another config (project overrides)
     fn merge(&mut self, other: Config) {
         // Only merge non-default values (simplified: just replace)
@@ -109,7 +95,7 @@ impl Config {
             self.security.exclude_patterns = other.security.exclude_patterns;
         }
     }
-    
+
     /// Apply environment variable overrides
     fn apply_env_overrides(&mut self) {
         if let Ok(path) = std::env::var("VR_THE_SOURCE") {
@@ -121,7 +107,7 @@ impl Config {
             }
         }
     }
-    
+
     /// Generate default config TOML string
     pub fn default_toml() -> String {
         toml::to_string_pretty(&Config::default()).unwrap()
@@ -261,32 +247,37 @@ impl Default for DaemonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     // ========== Default Values Tests ==========
-    
+
     #[test]
     fn test_default_config_has_all_sections() {
         let config = Config::default();
-        
+
         // Storage defaults
-        assert_eq!(config.storage.the_source, PathBuf::from("~/.vrift/the_source"));
+        assert_eq!(
+            config.storage.the_source,
+            PathBuf::from("~/.vrift/the_source")
+        );
         assert_eq!(config.storage.default_mode, "solid");
-        
+
         // Ingest defaults
         assert!(config.ingest.threads.is_none());
         assert_eq!(config.ingest.default_tier, "tier2");
-        
+
         // Daemon defaults
         assert!(!config.daemon.enabled);
-        assert_eq!(config.daemon.socket, PathBuf::from("/run/vrift/daemon.sock"));
+        assert_eq!(
+            config.daemon.socket,
+            PathBuf::from("/run/vrift/daemon.sock")
+        );
     }
 
     #[test]
     fn test_default_tier1_patterns_cover_common_deps() {
         let config = Config::default();
         let patterns = &config.tiers.tier1_patterns;
-        
+
         assert!(patterns.iter().any(|p| p.contains("node_modules")));
         assert!(patterns.iter().any(|p| p.contains(".cargo/registry")));
         assert!(patterns.iter().any(|p| p.contains(".rustup")));
@@ -297,7 +288,7 @@ mod tests {
     fn test_default_security_patterns_cover_sensitive_files() {
         let config = Config::default();
         let patterns = &config.security.exclude_patterns;
-        
+
         assert!(patterns.iter().any(|p| p.contains(".env")));
         assert!(patterns.iter().any(|p| p.contains(".key")));
         assert!(patterns.iter().any(|p| p.contains("id_rsa")));
@@ -305,11 +296,11 @@ mod tests {
     }
 
     // ========== TOML Serialization Tests ==========
-    
+
     #[test]
     fn test_default_toml_generation_includes_all_sections() {
         let toml_str = Config::default_toml();
-        
+
         assert!(toml_str.contains("[storage]"));
         assert!(toml_str.contains("[ingest]"));
         assert!(toml_str.contains("[tiers]"));
@@ -322,10 +313,16 @@ mod tests {
         let original = Config::default();
         let toml_str = toml::to_string(&original).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
-        
+
         assert_eq!(original.storage.default_mode, parsed.storage.default_mode);
-        assert_eq!(original.tiers.tier1_patterns.len(), parsed.tiers.tier1_patterns.len());
-        assert_eq!(original.security.exclude_patterns.len(), parsed.security.exclude_patterns.len());
+        assert_eq!(
+            original.tiers.tier1_patterns.len(),
+            parsed.tiers.tier1_patterns.len()
+        );
+        assert_eq!(
+            original.security.exclude_patterns.len(),
+            parsed.security.exclude_patterns.len()
+        );
         assert_eq!(original.daemon.enabled, parsed.daemon.enabled);
     }
 
@@ -336,22 +333,22 @@ mod tests {
 default_mode = "phantom"
 "#;
         let config: Config = toml::from_str(partial_toml).unwrap();
-        
+
         // Specified value
         assert_eq!(config.storage.default_mode, "phantom");
-        
+
         // Default values for unspecified
         assert!(!config.tiers.tier1_patterns.is_empty());
         assert!(config.security.enabled);
     }
 
     // ========== Config Loading Tests ==========
-    
+
     #[test]
     fn test_load_from_file() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        
+
         let custom_config = r#"
 [storage]
 the_source = "/custom/path"
@@ -362,10 +359,10 @@ threads = 8
 default_tier = "tier1"
 "#;
         std::fs::write(&config_path, custom_config).unwrap();
-        
+
         let contents = std::fs::read_to_string(&config_path).unwrap();
         let config: Config = toml::from_str(&contents).unwrap();
-        
+
         assert_eq!(config.storage.the_source, PathBuf::from("/custom/path"));
         assert_eq!(config.storage.default_mode, "phantom");
         assert_eq!(config.ingest.threads, Some(8));
@@ -373,15 +370,15 @@ default_tier = "tier1"
     }
 
     // ========== Config Merge Tests ==========
-    
+
     #[test]
     fn test_merge_replaces_non_empty_patterns() {
         let mut base = Config::default();
         let mut overlay = Config::default();
-        
+
         overlay.tiers.tier1_patterns = vec!["custom/".to_string()];
         base.merge(overlay);
-        
+
         assert_eq!(base.tiers.tier1_patterns, vec!["custom/".to_string()]);
     }
 
@@ -389,72 +386,81 @@ default_tier = "tier1"
     fn test_merge_preserves_base_when_overlay_empty() {
         let mut base = Config::default();
         let original_patterns = base.tiers.tier1_patterns.clone();
-        
+
         let mut overlay = Config::default();
         overlay.tiers.tier1_patterns = vec![];
-        
+
         base.merge(overlay);
-        
+
         // Empty overlay should not replace base patterns
         assert_eq!(base.tiers.tier1_patterns, original_patterns);
     }
 
     // ========== Environment Override Tests ==========
-    
+
     #[test]
     fn test_env_override_the_source() {
         let mut config = Config::default();
-        
+
         std::env::set_var("VR_THE_SOURCE", "/env/override/path");
         config.apply_env_overrides();
         std::env::remove_var("VR_THE_SOURCE");
-        
-        assert_eq!(config.storage.the_source, PathBuf::from("/env/override/path"));
+
+        assert_eq!(
+            config.storage.the_source,
+            PathBuf::from("/env/override/path")
+        );
     }
 
     #[test]
     fn test_env_override_threads() {
         let mut config = Config::default();
-        
+
         std::env::set_var("VRIFT_THREADS", "16");
         config.apply_env_overrides();
         std::env::remove_var("VRIFT_THREADS");
-        
+
         assert_eq!(config.ingest.threads, Some(16));
     }
 
     #[test]
     fn test_env_override_invalid_threads_ignored() {
         let mut config = Config::default();
-        
+
         std::env::set_var("VRIFT_THREADS", "not_a_number");
         config.apply_env_overrides();
         std::env::remove_var("VRIFT_THREADS");
-        
+
         // Invalid value should be ignored, keep default
         assert!(config.ingest.threads.is_none());
     }
 
     // ========== Global Config Path Tests ==========
-    
+
     #[test]
     fn test_global_config_path_exists() {
         let path = Config::global_config_path();
         assert!(path.is_some());
-        
+
         let path = path.unwrap();
         assert!(path.ends_with(".vrift/config.toml"));
     }
 
     // ========== Edge Cases ==========
-    
+
     #[test]
     fn test_empty_config_uses_all_defaults() {
         let config: Config = toml::from_str("").unwrap();
         let default_config = Config::default();
-        
-        assert_eq!(config.storage.default_mode, default_config.storage.default_mode);
-        assert_eq!(config.tiers.tier1_patterns.len(), default_config.tiers.tier1_patterns.len());
+
+        assert_eq!(
+            config.storage.default_mode,
+            default_config.storage.default_mode
+        );
+        assert_eq!(
+            config.tiers.tier1_patterns.len(),
+            default_config.tiers.tier1_patterns.len()
+        );
     }
 
     #[test]
@@ -483,4 +489,3 @@ foo = "bar"
         }
     }
 }
-
