@@ -67,6 +67,12 @@ else
     )
 fi
 
+# Results storage (arrays for each metric)
+declare -a SCENARIO_A_NAMES SCENARIO_A_FILES SCENARIO_A_BLOBS SCENARIO_A_DEDUP SCENARIO_A_SAVED SCENARIO_A_SPEED
+declare -a SCENARIO_B_NAMES SCENARIO_B_FILES SCENARIO_B_BLOBS SCENARIO_B_DEDUP SCENARIO_B_SAVED SCENARIO_B_SPEED
+SCENARIO_A_TIME=0
+SCENARIO_B_TIME=0
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -128,6 +134,17 @@ get_dir_size() {
     du -sk "$1" 2>/dev/null | awk '{print $1 * 1024}'
 }
 
+# Parse vrift output and extract stats
+parse_vrift_output() {
+    local output="$1"
+    # Extract: files, blobs, dedup%, saved, speed
+    FILES=$(echo "$output" | grep -o '[0-9,]* files' | head -1 | tr -d ',' | awk '{print $1}')
+    BLOBS=$(echo "$output" | grep -o '→ [0-9,]* blobs' | head -1 | tr -d ',' | awk '{print $2}')
+    DEDUP=$(echo "$output" | grep -o '[0-9.]*% DEDUP' | head -1 | awk '{print $1}' | tr -d '%')
+    SAVED=$(echo "$output" | grep 'SAVED' | head -1 | sed 's/.*SAVED \([0-9.]*\) \([A-Z]*\).*/\1 \2/')
+    SPEED=$(echo "$output" | grep -o '[0-9]* files/sec' | head -1 | awk '{print $1}')
+}
+
 # ============================================================================
 # Scenario A: Fresh Start (Delete CAS, Small → Large)
 # ============================================================================
@@ -145,27 +162,39 @@ run_scenario_a() {
     mkdir -p "$MANIFEST_DIR"
     
     local total_start=$(date +%s.%N)
-    local i=1
+    local i=0
     
     for entry in "${DATASETS[@]}"; do
         IFS='|' read -r name path <<< "$entry"
         
         echo ""
-        print_section "Project $i: $name"
+        print_section "Project $((i+1)): $name"
         
-        "$VRIFT" ingest "$path" -o "${MANIFEST_DIR}/${name}.manifest"
+        # Run vrift and capture output
+        local output
+        output=$("$VRIFT" ingest "$path" -o "${MANIFEST_DIR}/${name}.manifest" 2>&1)
+        echo "$output"
+        
+        # Parse and store results
+        parse_vrift_output "$output"
+        SCENARIO_A_NAMES[$i]="$name"
+        SCENARIO_A_FILES[$i]="${FILES:-0}"
+        SCENARIO_A_BLOBS[$i]="${BLOBS:-0}"
+        SCENARIO_A_DEDUP[$i]="${DEDUP:-0}"
+        SCENARIO_A_SAVED[$i]="${SAVED:-0}"
+        SCENARIO_A_SPEED[$i]="${SPEED:-0}"
         
         ((i++))
     done
     
     local total_end=$(date +%s.%N)
-    local total_time=$(echo "$total_end - $total_start" | bc)
+    SCENARIO_A_TIME=$(printf "%.1f" "$(echo "$total_end - $total_start" | bc)")
     
     echo ""
     print_section "Scenario A Summary"
     local cas_size=$(get_dir_size "$CAS_DIR")
     echo -e "   ${BOLD}CAS Size:${NC} $(format_bytes $cas_size)"
-    echo -e "   ${BOLD}Total Time:${NC} ${total_time}s"
+    echo -e "   ${BOLD}Total Time:${NC} ${SCENARIO_A_TIME}s"
 }
 
 # ============================================================================
@@ -176,43 +205,108 @@ run_scenario_b() {
     print_header "🔄 Scenario B: Re-Run (Preserved CAS)"
     
     # Clean manifests only, keep CAS
-    rm -rf "$MANIFEST_DIR"
+    rm -rf "$MANIFEST_DIR" 2>/dev/null || true
     mkdir -p "$MANIFEST_DIR"
     
     local total_start=$(date +%s.%N)
-    local i=1
+    local i=0
     
     for entry in "${DATASETS[@]}"; do
         IFS='|' read -r name path <<< "$entry"
         
         echo ""
-        print_section "Project $i: $name (re-run)"
+        print_section "Project $((i+1)): $name (re-run)"
         
-        "$VRIFT" ingest "$path" -o "${MANIFEST_DIR}/${name}_rerun.manifest"
+        # Run vrift and capture output
+        local output
+        output=$("$VRIFT" ingest "$path" -o "${MANIFEST_DIR}/${name}_rerun.manifest" 2>&1)
+        echo "$output"
+        
+        # Parse and store results
+        parse_vrift_output "$output"
+        SCENARIO_B_NAMES[$i]="$name"
+        SCENARIO_B_FILES[$i]="${FILES:-0}"
+        SCENARIO_B_BLOBS[$i]="${BLOBS:-0}"
+        SCENARIO_B_DEDUP[$i]="${DEDUP:-0}"
+        SCENARIO_B_SAVED[$i]="${SAVED:-0}"
+        SCENARIO_B_SPEED[$i]="${SPEED:-0}"
         
         ((i++))
     done
     
     local total_end=$(date +%s.%N)
-    local total_time=$(echo "$total_end - $total_start" | bc)
+    SCENARIO_B_TIME=$(printf "%.1f" "$(echo "$total_end - $total_start" | bc)")
     
     echo ""
     print_section "Scenario B Summary"
     local cas_size=$(get_dir_size "$CAS_DIR")
     echo -e "   ${BOLD}CAS Size:${NC} $(format_bytes $cas_size) (unchanged - all dedup!)"
-    echo -e "   ${BOLD}Total Time:${NC} ${total_time}s"
+    echo -e "   ${BOLD}Total Time:${NC} ${SCENARIO_B_TIME}s"
+}
+
+# ============================================================================
+# Final Results Summary
+# ============================================================================
+
+print_final_results() {
+    print_header "📊 Final Benchmark Results"
     
-    # Store for final summary
-    SCENARIO_B_TIME=$total_time
+    local cas_size=$(get_dir_size "$CAS_DIR")
+    
+    # Scenario A Table
+    if ! $RERUN_ONLY; then
+        echo -e "${BOLD}Scenario A: Fresh Start${NC} (${SCENARIO_A_TIME}s total)"
+        echo ""
+        echo "  ┌──────────┬─────────┬─────────┬──────────┬────────────┬───────────┐"
+        echo "  │ Project  │ Files   │ Blobs   │ Dedup %  │ Saved      │ Speed     │"
+        echo "  ├──────────┼─────────┼─────────┼──────────┼────────────┼───────────┤"
+        
+        for i in "${!SCENARIO_A_NAMES[@]}"; do
+            printf "  │ %-8s │ %7s │ %7s │ %6s%% │ %-10s │ %6s/s  │\n" \
+                "${SCENARIO_A_NAMES[$i]}" \
+                "${SCENARIO_A_FILES[$i]}" \
+                "${SCENARIO_A_BLOBS[$i]}" \
+                "${SCENARIO_A_DEDUP[$i]}" \
+                "${SCENARIO_A_SAVED[$i]}" \
+                "${SCENARIO_A_SPEED[$i]}"
+        done
+        echo "  └──────────┴─────────┴─────────┴──────────┴────────────┴───────────┘"
+        echo ""
+    fi
+    
+    # Scenario B Table
+    if ! $FRESH_ONLY; then
+        echo -e "${BOLD}Scenario B: Re-Run (Warm CAS)${NC} (${SCENARIO_B_TIME}s total)"
+        echo ""
+        echo "  ┌──────────┬─────────┬─────────┬──────────┬────────────┬───────────┐"
+        echo "  │ Project  │ Files   │ Blobs   │ Dedup %  │ Saved      │ Speed     │"
+        echo "  ├──────────┼─────────┼─────────┼──────────┼────────────┼───────────┤"
+        
+        for i in "${!SCENARIO_B_NAMES[@]}"; do
+            printf "  │ %-8s │ %7s │ %7s │ %6s%% │ %-10s │ %6s/s  │\n" \
+                "${SCENARIO_B_NAMES[$i]}" \
+                "${SCENARIO_B_FILES[$i]}" \
+                "${SCENARIO_B_BLOBS[$i]}" \
+                "${SCENARIO_B_DEDUP[$i]}" \
+                "${SCENARIO_B_SAVED[$i]}" \
+                "${SCENARIO_B_SPEED[$i]}"
+        done
+        echo "  └──────────┴─────────┴─────────┴──────────┴────────────┴───────────┘"
+        echo ""
+    fi
+    
+    # Overall Summary
+    echo -e "${BOLD}Overall:${NC}"
+    echo -e "  • CAS Size: $(format_bytes $cas_size)"
+    if ! $RERUN_ONLY && ! $FRESH_ONLY; then
+        echo -e "  • Speedup (B vs A): ${GREEN}$(echo "scale=1; $SCENARIO_A_TIME / $SCENARIO_B_TIME" | bc 2>/dev/null || echo "N/A")x faster${NC}"
+    fi
+    echo ""
 }
 
 # ============================================================================
 # Main
 # ============================================================================
-
-# Global vars for summary
-SCENARIO_A_TIME=0
-SCENARIO_B_TIME=0
 
 main() {
     print_header "🎯 VRift Cross-Project Deduplication Demo"
@@ -221,7 +315,6 @@ main() {
     
     if ! $RERUN_ONLY; then
         run_scenario_a
-        SCENARIO_A_TIME=$(echo "$total_end - $total_start" | bc 2>/dev/null || echo "0")
     fi
     
     # Pause between scenarios
@@ -237,28 +330,8 @@ main() {
         run_scenario_b
     fi
     
-    # Final Results Summary
-    print_header "📊 Final Benchmark Results"
-    
-    local cas_size=$(get_dir_size "$CAS_DIR")
-    local total_files=0
-    for entry in "${DATASETS[@]}"; do
-        IFS='|' read -r name path <<< "$entry"
-        local count=$(find "$path" -type f 2>/dev/null | wc -l | tr -d ' ')
-        total_files=$((total_files + count))
-    done
-    
-    echo -e "${BOLD}Summary:${NC}"
-    echo ""
-    echo "  ┌────────────────┬─────────────────────────────────────┐"
-    echo "  │ Metric         │ Value                               │"
-    echo "  ├────────────────┼─────────────────────────────────────┤"
-    printf "  │ %-14s │ %-35s │\n" "Total Files" "$(printf "%'d" $total_files)"
-    printf "  │ %-14s │ %-35s │\n" "CAS Size" "$(format_bytes $cas_size)"
-    printf "  │ %-14s │ %-35s │\n" "Scenario A" "Fresh start, progressive dedup"
-    printf "  │ %-14s │ %-35s │\n" "Scenario B" "Re-run, 100% dedup from warm CAS"
-    echo "  └────────────────┴─────────────────────────────────────┘"
-    echo ""
+    # Final Results
+    print_final_results
     
     print_header "✅ Demo Complete!"
     
