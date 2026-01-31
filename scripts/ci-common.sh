@@ -470,6 +470,37 @@ run_ruff_check() {
 }
 
 # =============================================================================
+# SSOT: E2E Tests (Python-based integration tests)
+# =============================================================================
+run_e2e_tests() {
+    local tier="${1:-quick}"
+    
+    log_step "Running E2E tests (tier: $tier)..."
+    
+    # Ensure release binary is built
+    if [[ ! -f "target/release/vrift" ]]; then
+        log_warn "Release binary not found, building..."
+        cargo build --release -p vrift-cli
+    fi
+    
+    # GC E2E Test (always run, ~30s, no npm required)
+    log_step "Running GC E2E test..."
+    python3 scripts/gc_e2e_test.py
+    log_success "GC E2E test passed"
+    
+    # Full E2E Test (only in "full" tier, requires npm)
+    if [[ "$tier" == "full" ]] || [[ "$tier" == "e2e-full" ]]; then
+        if command -v npm &>/dev/null; then
+            log_step "Running full E2E test (with npm datasets)..."
+            python3 scripts/e2e_test.py --shared
+            log_success "Full E2E test passed"
+        else
+            log_warn "npm not found, skipping full E2E test"
+        fi
+    fi
+}
+
+# =============================================================================
 # Full CI Pipeline
 # =============================================================================
 run_full_ci() {
@@ -510,6 +541,16 @@ run_full_ci() {
     echo "==================== Phase 4: Lint ===================="
     run_clippy
     run_fmt_check
+    
+    echo ""
+    echo "==================== Phase 5: E2E Tests ===================="
+    # E2E tests run after lint to catch integration issues
+    # Uses "quick" tier by default (GC test only), "full" for npm-based tests
+    if [[ "$tier" != "quick" ]]; then
+        run_e2e_tests "quick"
+    else
+        log_info "Skipping E2E tests (--quick mode)"
+    fi
     
     echo ""
     echo "=========================================="

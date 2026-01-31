@@ -552,7 +552,6 @@ impl CasStore {
     /// Set immutable flag on Linux (chattr +i).
     #[cfg(target_os = "linux")]
     fn set_immutable_flag(path: &Path) -> Result<()> {
-        use std::os::unix::io::AsRawFd;
         use std::process::Command;
 
         // Try using chattr command (requires root)
