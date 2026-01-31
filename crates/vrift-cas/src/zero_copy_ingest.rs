@@ -62,9 +62,8 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     let metadata = file.metadata()?;
     let size = metadata.len();
     
-    // Acquire shared lock via Flock guard (auto-unlocks on drop)
-    let locked_file = Flock::lock(file, FlockArg::LockShared)
-        .map_err(|(_, e)| CasError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    // Acquire shared lock with retry (prevents blocking on busy files)
+    let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
     
     // Stream hash (no full read) - deref Flock to get underlying File
     let hash = stream_hash(&*locked_file)?;
@@ -100,9 +99,8 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
     let metadata = file.metadata()?;
     let size = metadata.len();
     
-    // Acquire shared lock via Flock guard (auto-unlocks on drop)
-    let locked_file = Flock::lock(file, FlockArg::LockShared)
-        .map_err(|(_, e)| CasError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    // Acquire shared lock with retry (prevents blocking on busy files)
+    let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
     
     // Stream hash - deref Flock to get underlying File
     let hash = stream_hash(&*locked_file)?;
@@ -132,9 +130,8 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
     let metadata = file.metadata()?;
     let size = metadata.len();
     
-    // Acquire shared lock via Flock guard (auto-unlocks on drop)
-    let locked_file = Flock::lock(file, FlockArg::LockShared)
-        .map_err(|(_, e)| CasError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    // Acquire shared lock with retry (prevents blocking on busy files)
+    let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
     
     // Stream hash - deref Flock to get underlying File
     let hash = stream_hash(&*locked_file)?;
@@ -166,6 +163,57 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Lock retry configuration
+const MAX_LOCK_RETRIES: u32 = 5;
+const INITIAL_RETRY_DELAY_MS: u64 = 10;
+
+/// Acquire flock with retry and exponential backoff
+///
+/// Prevents blocking when files are temporarily locked by other processes.
+/// Uses non-blocking lock attempts with exponential backoff delays.
+fn lock_with_retry(mut file: File, lock_type: FlockArg) -> Result<Flock<File>> {
+    let mut delay_ms = INITIAL_RETRY_DELAY_MS;
+    
+    for attempt in 0..MAX_LOCK_RETRIES {
+        // Try non-blocking lock first
+        let lock_arg = match lock_type {
+            FlockArg::LockShared => FlockArg::LockSharedNonblock,
+            FlockArg::LockExclusive => FlockArg::LockExclusiveNonblock,
+            other => other,
+        };
+        
+        match Flock::lock(file, lock_arg) {
+            Ok(guard) => return Ok(guard),
+            Err((returned_file, err)) => {
+                // Check if it's EWOULDBLOCK (lock unavailable)
+                if err == nix::errno::Errno::EWOULDBLOCK && attempt < MAX_LOCK_RETRIES - 1 {
+                    // Wait with exponential backoff before retry
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    delay_ms *= 2;
+                    file = returned_file;
+                    continue;
+                }
+                
+                // Last attempt: try blocking lock
+                if attempt == MAX_LOCK_RETRIES - 1 {
+                    return Flock::lock(returned_file, lock_type)
+                        .map_err(|(_, e)| CasError::Io(std::io::Error::new(
+                            std::io::ErrorKind::WouldBlock,
+                            format!("Failed to acquire lock after {} retries: {}", MAX_LOCK_RETRIES, e)
+                        )));
+                }
+                
+                return Err(CasError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    err.to_string()
+                )));
+            }
+        }
+    }
+    
+    unreachable!()
+}
 
 /// Stream hash using mmap (no full read into memory)
 fn stream_hash<F: AsRawFd>(file: &F) -> Result<Blake3Hash> {

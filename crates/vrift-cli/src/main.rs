@@ -60,6 +60,10 @@ enum Commands {
         #[arg(long, default_value = "true")]
         parallel: bool,
 
+        /// Number of parallel threads (default: min(cpu/2, 4), preserves system resources)
+        #[arg(short = 'j', long)]
+        threads: Option<usize>,
+
         /// Ingest mode: solid (hard_link, preserves source) or phantom (rename, moves to CAS)
         #[arg(long, default_value = "solid")]
         mode: String,
@@ -202,9 +206,10 @@ async fn async_main(cli: Cli) -> Result<()> {
             output,
             prefix,
             parallel,
+            threads,
             mode,
             tier,
-        } => cmd_ingest(&cli.cas_root, &directory, &output, prefix.as_deref(), parallel, &mode, &tier).await,
+        } => cmd_ingest(&cli.cas_root, &directory, &output, prefix.as_deref(), parallel, threads, &mode, &tier).await,
         Commands::Run {
             manifest,
             command,
@@ -303,6 +308,7 @@ async fn cmd_ingest(
     output: &Path,
     prefix: Option<&str>,
     _parallel: bool,
+    threads: Option<usize>,
     mode: &str,
     tier: &str,
 ) -> Result<()> {
@@ -322,6 +328,9 @@ async fn cmd_ingest(
     } else {
         AssetTier::Tier2Mutable
     };
+
+    // Calculate thread count
+    let thread_count = threads.unwrap_or_else(vrift_cas::default_thread_count);
 
     // Resolve CAS root (expand ~)
     let cas_root = if cas_root.starts_with("~") {
@@ -353,6 +362,7 @@ async fn cmd_ingest(
     };
     println!("Zero-Copy Ingest: {} mode", mode_str);
     println!("CAS Root: {}", cas_root.display());
+    println!("Threads:  {} (use -j to adjust)", thread_count);
 
     // Determine path prefix
     let base_prefix = prefix.unwrap_or_else(|| {
@@ -785,7 +795,7 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
 
     // Initial ingest
     println!("\n[Initial Scan]");
-    cmd_ingest(cas_root, directory, output, None, true, "solid", "tier2").await?;
+    cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2").await?;
 
     // Create a channel to receive the events.
     let (tx, rx) = channel();
@@ -817,7 +827,7 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
                         // Simple debounce
                         if last_ingest.elapsed() > debounce_duration {
                             println!("\n[Change Detected] Re-ingesting...");
-                            if let Err(e) = cmd_ingest(cas_root, directory, output, None, true, "solid", "tier2").await {
+                            if let Err(e) = cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2").await {
                                 eprintln!("Ingest failed: {}", e);
                             }
                             last_ingest = std::time::Instant::now();
