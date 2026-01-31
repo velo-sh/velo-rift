@@ -100,6 +100,33 @@ pub async fn notify_blob(hash: [u8; 32], size: u64) -> Result<()> {
     Ok(())
 }
 
+pub async fn protect_file(
+    path: std::path::PathBuf,
+    immutable: bool,
+    owner: Option<String>,
+) -> Result<()> {
+    match connect().await {
+        Ok(mut stream) => {
+            let req = VeloRequest::Protect {
+                path: path.to_string_lossy().to_string(),
+                immutable,
+                owner,
+            };
+            send_request(&mut stream, req).await?;
+            match read_response(&mut stream).await? {
+                VeloResponse::ProtectAck => Ok(()),
+                VeloResponse::Error(e) => anyhow::bail!("Daemon protection failed: {}", e),
+                _ => anyhow::bail!("Unexpected response from daemon"),
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Daemon not available for protection: {}", e);
+            // Non-critical if daemon not running (just less protection)
+            Ok(())
+        }
+    }
+}
+
 async fn connect() -> Result<UnixStream> {
     match UnixStream::connect(SOCKET_PATH).await {
         Ok(stream) => Ok(stream),

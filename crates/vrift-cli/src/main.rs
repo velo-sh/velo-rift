@@ -807,6 +807,19 @@ async fn cmd_ingest(
                     if ingest_result.was_new {
                         unique_blobs += 1;
                         new_bytes += ingest_result.size; // Track actual new storage
+
+                        // RFC-0039 §5.1.1: If Tier-1, request daemon to strengthen protection (chown + immutable)
+                        if is_tier1 {
+                            if let Some(blob_path) = cas.blob_path_for_hash(&ingest_result.hash) {
+                                // Default daemon user is 'vrift'. If not set up, it will log warning and continue.
+                                let _ = daemon::protect_file(
+                                    blob_path,
+                                    true,
+                                    Some("vrift".to_string()),
+                                )
+                                .await;
+                            }
+                        }
                     }
                 }
                 Err(e) => {

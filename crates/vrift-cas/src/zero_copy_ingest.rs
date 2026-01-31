@@ -152,17 +152,17 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
 
-    // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection
-    if was_new {
-        set_immutable_best_effort(&cas_target);
-    }
-
     // Drop the lock guard before modifying source
     drop(locked_file);
 
     // Replace source with symlink
     fs::remove_file(source)?;
     unix_fs::symlink(&cas_target, source)?;
+
+    // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection (must do after source removal!)
+    if was_new {
+        set_immutable_best_effort(&cas_target);
+    }
 
     Ok(IngestResult {
         source_path: source.to_owned(),
@@ -210,9 +210,6 @@ pub fn ingest_solid_tier1_dedup(
 
         // Tiered link: hard_link → clonefile → copy (RFC-0040)
         link_or_clone_or_copy(source, &cas_target)?;
-
-        // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection
-        set_immutable_best_effort(&cas_target);
     }
 
     // Drop the lock guard before modifying source
@@ -221,6 +218,11 @@ pub fn ingest_solid_tier1_dedup(
     // Always replace source with symlink (even if CAS blob already existed)
     fs::remove_file(source)?;
     unix_fs::symlink(&cas_target, source)?;
+
+    // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection (must do after source removal!)
+    if is_new {
+        set_immutable_best_effort(&cas_target);
+    }
 
     Ok(IngestResult {
         source_path: source.to_owned(),

@@ -170,7 +170,43 @@ async fn handle_request(req: VeloRequest, state: &DaemonState) -> VeloResponse {
                 VeloResponse::CasNotFound
             }
         }
+        VeloRequest::Protect {
+            path,
+            immutable,
+            owner,
+        } => handle_protect(path, immutable, owner).await,
     }
+}
+
+async fn handle_protect(path_str: String, immutable: bool, owner: Option<String>) -> VeloResponse {
+    let path = Path::new(&path_str);
+    if !path.exists() {
+        return VeloResponse::Error(format!("Path not found: {}", path_str));
+    }
+
+    // 1. Set immutable flag via vrift-cas::protection
+    if let Err(e) = vrift_cas::protection::set_immutable(path, immutable) {
+        tracing::warn!("Failed to set immutable flag on {}: {}", path_str, e);
+        // We continue anyway, as ownership might still work
+    }
+
+    // 2. Set ownership if requested (Requires root/CAP_CHOWN if daemon is privileged)
+    if let Some(user) = owner {
+        #[cfg(unix)]
+        {
+            use nix::unistd::{chown, User};
+            if let Ok(Some(u)) = User::from_name(&user) {
+                if let Err(e) = chown(path, Some(u.uid), Some(u.gid)) {
+                    tracing::error!("Failed to chown {} to {}: {}", path_str, user, e);
+                    return VeloResponse::Error(format!("chown failed: {}", e));
+                }
+            } else {
+                return VeloResponse::Error(format!("User not found: {}", user));
+            }
+        }
+    }
+
+    VeloResponse::ProtectAck
 }
 
 async fn handle_spawn(

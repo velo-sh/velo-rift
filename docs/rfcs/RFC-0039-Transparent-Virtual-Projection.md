@@ -15,7 +15,7 @@
 | Parallel Ingest | - | ✅ Done | Rayon, ~14,000 files/sec |
 | Break-Before-Write | §5.1.2 | ⏸️ Deferred | Requires VFS intercept |
 | Live Ingest on close() | §3.2 | ⏸️ Deferred | Requires VFS intercept |
-| Tier-1 chattr +i | §5.1.1 | ⏸️ Deferred | P1 feature |
+| Tier-1 chattr +i | §5.1.1 | ✅ Done | Native implementation (macOS/Linux) |
 | Tier-1 chown | §5.1.1 | ⏸️ Deferred | Requires daemon |
 
 ## 2. Context & Objectives

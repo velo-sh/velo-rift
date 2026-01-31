@@ -18,6 +18,11 @@ pub enum VeloRequest {
     CasGet {
         hash: [u8; 32],
     },
+    Protect {
+        path: String,
+        immutable: bool,
+        owner: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +33,7 @@ pub enum VeloResponse {
     CasAck,
     CasFound { size: u64 },
     CasNotFound,
+    ProtectAck,
     Error(String),
 }
 
