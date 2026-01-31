@@ -228,9 +228,9 @@ main() {
     if ! $FRESH_ONLY && ! $RERUN_ONLY; then
         echo ""
         echo -e "${BOLD}${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${BOLD}${YELLOW}   ⏸  Scenario A Complete. Press ENTER to start Scenario B...${NC}"
+        echo -e "${BOLD}${YELLOW}   ⏸  Scenario A Complete. Starting Scenario B in 3 seconds...${NC}"
         echo -e "${BOLD}${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        read -r
+        sleep 3
     fi
     
     if ! $FRESH_ONLY; then
