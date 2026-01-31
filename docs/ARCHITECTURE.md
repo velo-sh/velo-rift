@@ -626,6 +626,95 @@ fn startup_recovery() -> Result<()> {
 | Manifest corrupted | Parse error | Restore from backup |
 | CAS entry missing | Hash lookup fails | Remove from Manifest, warn user |
 
+### 9.9 Manifest Registry & Garbage Collection (RFC-0041)
+
+Multi-project environments share a global CAS. This creates management challenges:
+- Which blobs belong to which projects?
+- How to safely delete orphaned blobs?
+- How to handle deleted project directories?
+
+#### 9.9.1 Manifest Registry
+
+Central tracking of all registered manifests:
+
+```
+~/.vrift/registry/
+├── manifests.json           # Active manifest list (SSOT)
+├── manifests/
+│   └── <uuid>.manifest      # Cached copies for offline GC
+├── orphans.json             # Pending orphan blobs (with timestamps)
+└── .lock                    # flock for concurrent access
+```
+
+**manifests.json Schema**:
+```json
+{
+  "version": 1,
+  "manifests": {
+    "<uuid>": {
+      "source_path": "/path/to/.vrift.manifest",
+      "source_path_hash": "blake3:...",
+      "project_root": "/path/to/project",
+      "registered_at": "2026-01-31T12:00:00Z",
+      "last_verified": "2026-01-31T18:00:00Z",
+      "status": "active"  // or "stale"
+    }
+  }
+}
+```
+
+#### 9.9.2 Garbage Collection Algorithm
+
+**Two-Phase Mark-and-Sweep**:
+
+```
+Phase 1: Mark (vrift gc)
+  1. Acquire exclusive flock on ~/.vrift/registry/.lock
+  2. Load all registered manifests
+  3. Build reference set: all blob hashes in all manifests
+  4. Walk CAS directory, identify unreferenced blobs
+  5. Record orphans with timestamp in orphans.json
+  6. Release lock
+
+Phase 2: Sweep (vrift gc --delete)
+  1. Load orphans.json
+  2. Filter: only orphans older than GRACE_PERIOD (default: 1 hour)
+  3. Re-verify: confirm each blob still orphan (handle race condition)
+  4. Delete confirmed orphans
+  5. Log deletions to ~/.vrift/gc.log
+```
+
+**Grace Period**: Prevents TOCTOU race where a new `ingest` references a blob between mark and sweep.
+
+#### 9.9.3 Stale Manifest Detection
+
+When `source_path` no longer exists:
+
+1. GC marks manifest as `status: "stale"`
+2. Stale manifests **still protect their blobs** (safe default)
+3. User must explicitly run `vrift gc --prune-stale` to remove
+4. After pruning, blobs become orphans for next GC cycle
+
+#### 9.9.4 Concurrency Control
+
+**File-based locking (flock)**:
+
+| Operation | Lock Type | Timeout |
+|-----------|-----------|---------|
+| `vrift ingest` | Exclusive | 30s (configurable) |
+| `vrift gc` | Exclusive | 30s |
+| `vrift status` | Shared (read-only) | 5s |
+
+**Atomic Registry Writes**:
+```rust
+fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+    let tmp = path.with_extension(".tmp");
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path)?;  // POSIX atomic
+    Ok(())
+}
+```
+
 ---
 
 ## 10. Python-Specific Optimizations

@@ -67,22 +67,99 @@ vrift run --isolate --base busybox.manifest --manifest app.manifest -- /bin/sh
 
 ## 📊 Step 4: Maintenance & Optimization
 
-### Monitor Savings
-Velo Rift™ provides global deduplication. See how much disk space you're saving across all projects:
+### CAS Status & Monitoring
+
+See global deduplication savings and project breakdown:
+
 ```bash
 vrift status
 ```
 
-### Garbage Collection
-Cleanup blobs that are no longer referenced by any manifest:
-```bash
-# Perform a dry run first
-vrift gc
-# Actually delete orphaned data
-vrift gc --delete
+**Example Output**:
+```
+VRift CAS Status:
+
+  CAS Location: ~/.vrift/the_source
+  Total Size:   1.48 GB
+  Total Blobs:  115,363
+
+  Registered Projects:
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Project        │ Files    │ Unique Blobs │ Shared │ Size       │
+  ├─────────────────────────────────────────────────────────────────┤
+  │ project1       │ 16,647   │ 13,783       │ 0      │ 222 MB     │
+  │ project2       │ 23,948   │ 6,816        │ 6,967  │ +122 MB    │
+  │ project3       │ 61,703   │ 30,947       │ 13,829 │ +365 MB    │
+  └─────────────────────────────────────────────────────────────────┘
+
+  Orphaned Blobs: 0 (run `vrift gc` to check)
 ```
 
----
+### Garbage Collection
+
+Clean up orphaned blobs that are no longer referenced by any manifest:
+
+```bash
+# Dry run (default): show what would be deleted
+vrift gc
+
+# Actually delete orphaned blobs
+vrift gc --delete
+
+# Delete only orphans older than 2 hours (safest)
+vrift gc --delete --older-than 2h
+
+# Prune stale manifests (projects that were deleted)
+vrift gc --prune-stale
+```
+
+### Health Check
+
+Diagnose potential issues with the CAS and registry:
+
+```bash
+vrift doctor
+```
+
+**Example Output**:
+```
+VRift Doctor Report:
+
+  ✅ Registry: valid (3 manifests)
+  ⚠️  Stale manifests: 1 (run gc --prune-stale)
+  ✅ CAS permissions: OK
+  ✅ Disk space: 45 GB available
+  ✅ Lock: not held
+
+  Recommendations:
+  - Run `vrift gc --prune-stale` to clean stale manifests
+```
+
+### Registry Management
+
+Rebuild registry if corrupted or manifests lost:
+
+```bash
+# Rebuild registry from cached manifests
+vrift registry --rebuild
+```
+
+### Full CAS Reset (Destructive)
+
+For complete cleanup (e.g., fresh testing environment):
+
+```bash
+# Interactive confirmation required
+vrift clean --all --force
+
+# With permission fix (for hard-linked files)
+vrift clean --all --force --fix-perms
+
+# Non-interactive (for CI/CD)
+vrift clean --all --force --yes
+```
+
+> ⚠️ **Warning**: `vrift clean --all` deletes the entire CAS. This is irreversible.
 
 ## 🧠 Under the Hood: Principles
 
