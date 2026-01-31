@@ -257,12 +257,12 @@ print_final_results() {
     if ! $RERUN_ONLY; then
         echo -e "${BOLD}Scenario A: Fresh Start${NC} (${SCENARIO_A_TIME}s total)"
         echo ""
-        echo "  ┌──────────┬─────────┬─────────┬──────────┬────────────┬───────────┐"
+        echo "  ┌──────────┬─────────┬───────────┬──────────┬────────────┬───────────┐"
         echo "  │ Project  │ Files   │ New Blobs │ Dedup %  │ Saved      │ Speed     │"
-        echo "  ├──────────┼─────────┼─────────┼──────────┼────────────┼───────────┤"
+        echo "  ├──────────┼─────────┼───────────┼──────────┼────────────┼───────────┤"
         
         for i in "${!SCENARIO_A_NAMES[@]}"; do
-            printf "  │ %-8s │ %7s │ %7s │ %6s%% │ %-10s │ %6s/s  │\n" \
+            printf "  │ %-8s │ %7s │ %9s │ %6s%% │ %-10s │ %6s/s  │\n" \
                 "${SCENARIO_A_NAMES[$i]}" \
                 "${SCENARIO_A_FILES[$i]}" \
                 "${SCENARIO_A_BLOBS[$i]}" \
@@ -270,7 +270,7 @@ print_final_results() {
                 "${SCENARIO_A_SAVED[$i]}" \
                 "${SCENARIO_A_SPEED[$i]}"
         done
-        echo "  └──────────┴─────────┴─────────┴──────────┴────────────┴───────────┘"
+        echo "  └──────────┴─────────┴───────────┴──────────┴────────────┴───────────┘"
         echo ""
     fi
     
@@ -278,12 +278,12 @@ print_final_results() {
     if ! $FRESH_ONLY; then
         echo -e "${BOLD}Scenario B: Re-Run (Warm CAS)${NC} (${SCENARIO_B_TIME}s total)"
         echo ""
-        echo "  ┌──────────┬─────────┬─────────┬──────────┬────────────┬───────────┐"
+        echo "  ┌──────────┬─────────┬───────────┬──────────┬────────────┬───────────┐"
         echo "  │ Project  │ Files   │ New Blobs │ Dedup %  │ Saved      │ Speed     │"
-        echo "  ├──────────┼─────────┼─────────┼──────────┼────────────┼───────────┤"
+        echo "  ├──────────┼─────────┼───────────┼──────────┼────────────┼───────────┤"
         
         for i in "${!SCENARIO_B_NAMES[@]}"; do
-            printf "  │ %-8s │ %7s │ %7s │ %6s%% │ %-10s │ %6s/s  │\n" \
+            printf "  │ %-8s │ %7s │ %9s │ %6s%% │ %-10s │ %6s/s  │\n" \
                 "${SCENARIO_B_NAMES[$i]}" \
                 "${SCENARIO_B_FILES[$i]}" \
                 "${SCENARIO_B_BLOBS[$i]}" \
@@ -291,7 +291,7 @@ print_final_results() {
                 "${SCENARIO_B_SAVED[$i]}" \
                 "${SCENARIO_B_SPEED[$i]}"
         done
-        echo "  └──────────┴─────────┴─────────┴──────────┴────────────┴───────────┘"
+        echo "  └──────────┴─────────┴───────────┴──────────┴────────────┴───────────┘"
         echo ""
     fi
     
