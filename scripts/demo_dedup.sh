@@ -135,10 +135,13 @@ get_dir_size() {
 run_scenario_a() {
     print_header "🚀 Scenario A: Fresh Start (Extra-Small → Large)"
     
-    # Clean CAS
+    # Clean CAS (may need sudo due to hard-linked files)
     print_section "Cleaning CAS..."
-    rm -rf "$CAS_DIR"
-    rm -rf "$MANIFEST_DIR"
+    if ! rm -rf "$CAS_DIR" 2>/dev/null; then
+        echo -e "${YELLOW}   ⚠️  Cannot clean CAS (permission denied). Using existing CAS.${NC}"
+        echo -e "${YELLOW}   To force clean: sudo rm -rf $CAS_DIR${NC}"
+    fi
+    rm -rf "$MANIFEST_DIR" 2>/dev/null || true
     mkdir -p "$MANIFEST_DIR"
     
     local total_start=$(date +%s.%N)
