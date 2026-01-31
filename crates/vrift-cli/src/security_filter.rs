@@ -65,7 +65,6 @@ impl SecurityFilter {
     }
 
     /// Create a security filter with custom patterns from config
-    #[allow(dead_code)] // Will be used when CLI integrates config
     pub fn with_config(config: &vrift_config::SecurityConfig) -> Self {
         Self {
             enabled: config.enabled,
@@ -79,7 +78,6 @@ impl SecurityFilter {
     }
 
     /// Create from the global config
-    #[allow(dead_code)] // Will be used when CLI integrates config
     pub fn from_global_config() -> Self {
         let config = vrift_config::config();
         Self::with_config(&config.security)

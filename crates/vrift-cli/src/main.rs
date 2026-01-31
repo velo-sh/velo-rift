@@ -209,6 +209,13 @@ enum ConfigCommands {
 
     /// Show configuration file path
     Path,
+
+    /// Validate configuration file syntax
+    Validate {
+        /// Path to config file (default: auto-detect)
+        #[arg(value_name = "FILE")]
+        file: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -393,6 +400,57 @@ fn cmd_config(command: ConfigCommands) -> Result<()> {
 
             Ok(())
         }
+        ConfigCommands::Validate { file } => {
+            let config_path = if let Some(path) = file {
+                path
+            } else {
+                // Auto-detect: prefer project config, fall back to global
+                let project = PathBuf::from(".vrift/config.toml");
+                if project.exists() {
+                    project
+                } else if let Some(global) = vrift_config::Config::global_config_path() {
+                    if global.exists() {
+                        global
+                    } else {
+                        anyhow::bail!(
+                            "No config file found. Run 'vrift config init' to create one."
+                        );
+                    }
+                } else {
+                    anyhow::bail!("No config file found. Run 'vrift config init' to create one.");
+                }
+            };
+
+            if !config_path.exists() {
+                anyhow::bail!("Config file not found: {}", config_path.display());
+            }
+
+            println!("Validating: {}", config_path.display());
+            let contents = std::fs::read_to_string(&config_path)?;
+
+            match toml::from_str::<vrift_config::Config>(&contents) {
+                Ok(config) => {
+                    println!("✓ Syntax: Valid TOML");
+                    println!("✓ Schema: All fields recognized");
+                    println!();
+                    println!("Summary:");
+                    println!("  - Tier1 patterns: {}", config.tiers.tier1_patterns.len());
+                    println!("  - Tier2 patterns: {}", config.tiers.tier2_patterns.len());
+                    println!(
+                        "  - Security patterns: {}",
+                        config.security.exclude_patterns.len()
+                    );
+                    println!("  - Default mode: {}", config.storage.default_mode);
+                    Ok(())
+                }
+                Err(e) => {
+                    println!("✗ Validation failed!");
+                    println!();
+                    println!("Error: {}", e);
+                    anyhow::bail!("Config validation failed");
+                }
+            }
+        }
     }
 }
 
@@ -535,7 +593,12 @@ async fn cmd_ingest(
     println!("   Threads: {}", thread_count);
 
     // Security filter status (RFC-0042)
-    let mut security_filter = security_filter::SecurityFilter::new(security_filter_enabled);
+    // Use config patterns when enabled, otherwise completely disabled
+    let mut security_filter = if security_filter_enabled {
+        security_filter::SecurityFilter::from_global_config()
+    } else {
+        security_filter::SecurityFilter::new(false)
+    };
     if !security_filter_enabled {
         println!();
         println!("   \u{26a0}\u{fe0f}  SECURITY FILTER DISABLED (--no-security-filter)");

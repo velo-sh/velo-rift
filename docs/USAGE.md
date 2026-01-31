@@ -239,6 +239,79 @@ A `vrift.manifest` uniquely defines an entire environment. If the manifest hash 
 
 ---
 
+## ⚙️ Configuration Management
+
+Velo Rift™ uses a layered configuration system with TOML files and environment variable overrides.
+
+### Config Commands
+
+```bash
+# Initialize a local config file (.vrift/config.toml)
+vrift config init
+
+# Initialize global config (~/.vrift/config.toml)
+vrift config init --global
+
+# Show current effective configuration
+vrift config show
+
+# Show config file locations
+vrift config path
+
+# Validate config file syntax
+vrift config validate
+vrift config validate /path/to/config.toml  # validate specific file
+```
+
+### Configuration Hierarchy
+
+Configuration is loaded in order (later overrides earlier):
+
+1. **Built-in defaults** → Sensible defaults for all settings
+2. **Global config** → `~/.vrift/config.toml`
+3. **Project config** → `.vrift/config.toml` (in current directory)
+4. **Environment variables** → `VR_*` and `VRIFT_*` prefixes
+
+### Config File Locations
+
+| Location | Path | Scope |
+|----------|------|-------|
+| Global | `~/.vrift/config.toml` | User-wide defaults |
+| Project | `.vrift/config.toml` | Per-project overrides |
+
+### Environment Variable Overrides
+
+| Variable | Config Key | Example |
+|----------|------------|---------|
+| `VR_THE_SOURCE` | `storage.the_source` | `/data/shared-cas` |
+| `VRIFT_THREADS` | `ingest.threads` | `8` |
+
+### Example Config File
+
+```toml
+[storage]
+the_source = "~/.vrift/the_source"
+default_mode = "solid"  # or "phantom"
+
+[ingest]
+threads = 4
+default_tier = "tier2"  # or "tier1"
+
+[tiers]
+tier1_patterns = ["node_modules", ".cargo/registry", "target/release"]
+tier2_patterns = ["src", "lib", "tests"]
+
+[security]
+enabled = true
+exclude_patterns = [".env", "*.key", ".aws"]
+
+[daemon]
+enabled = false
+socket_path = "/run/vrift/daemon.sock"
+```
+
+---
+
 ## 📦 TheSource™ (CAS) Configuration
 
 Velo Rift stores all deduplicated content in a **Content-Addressable Store (CAS)** called **TheSource™**.
