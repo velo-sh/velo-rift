@@ -60,8 +60,12 @@ EOF
 
 # 3. Test Daemon Auto-Start & Ingest
 echo "[*] Testing Daemon Auto-Start & Ingest..."
-# Note: we don't start daemon manually. CLI should do it.
+# Note: Ingest Solid Tier-2 doesn't use the daemon currently.
 vrift ingest "$DATA_DIR" --output "$MANIFEST"
+
+# Trigger daemon auto-start via a command that requires it
+echo "[*] Triggering daemon auto-start via status check..."
+vrift daemon status || true
 
 # Wait for socket (up to 5 seconds)
 MAX_RETRIES=10
