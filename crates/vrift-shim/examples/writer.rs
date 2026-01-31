@@ -6,10 +6,10 @@ fn main() {
     }
     let path = &args[1];
     let content = &args[2];
-    
+
     println!("Process ID: {}", std::process::id());
     println!("Attempting to write to: {}", path);
-    
+
     match std::fs::write(path, content) {
         Ok(_) => println!("Successfully wrote to {}", path),
         Err(e) => {
