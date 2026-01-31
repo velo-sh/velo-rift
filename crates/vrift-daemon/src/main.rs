@@ -108,13 +108,13 @@ async fn start_daemon() -> Result<()> {
 async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
     loop {
         let mut len_buf = [0u8; 4];
-        if let Err(_) = stream.read_exact(&mut len_buf).await {
+        if stream.read_exact(&mut len_buf).await.is_err() {
             return;
         }
         let len = u32::from_le_bytes(len_buf) as usize;
 
         let mut buf = vec![0u8; len];
-        if let Err(_) = stream.read_exact(&mut buf).await {
+        if stream.read_exact(&mut buf).await.is_err() {
             return;
         }
 
@@ -132,10 +132,10 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
         };
 
         let resp_len = (resp_bytes.len() as u32).to_le_bytes();
-        if let Err(_) = stream.write_all(&resp_len).await {
+        if stream.write_all(&resp_len).await.is_err() {
             return;
         }
-        if let Err(_) = stream.write_all(&resp_bytes).await {
+        if stream.write_all(&resp_bytes).await.is_err() {
             return;
         }
     }
@@ -235,18 +235,16 @@ async fn scan_cas_root(state: &DaemonState) -> Result<()> {
     let mut index = state.cas_index.lock().await;
     
     // Using blocking iterator
-    for hash_res in cas.iter()? {
-        if let Ok(hash) = hash_res {
-             // For size, we currently don't store it in the filename, so we might need to stat.
-             // Statting every file is expensive.
-             // For MVP, if we don't have size efficiently, we can put 0 or Stat content.
-             // Optimized Velo stores [hash_prefix]/[hash] and we can trust it exists.
-             if let Some(path) = cas.blob_path_for_hash(&hash) {
-                 if let Ok(metadata) = std::fs::metadata(path) {
-                     index.insert(hash, metadata.len());
-                 }
+    for hash in (cas.iter()?).flatten() {
+         // For size, we currently don't store it in the filename, so we might need to stat.
+         // Statting every file is expensive.
+         // For MVP, if we don't have size efficiently, we can put 0 or Stat content.
+         // Optimized Velo stores [hash_prefix]/[hash] and we can trust it exists.
+         if let Some(path) = cas.blob_path_for_hash(&hash) {
+             if let Ok(metadata) = std::fs::metadata(path) {
+                 index.insert(hash, metadata.len());
              }
-        }
+         }
     }
     
     Ok(())

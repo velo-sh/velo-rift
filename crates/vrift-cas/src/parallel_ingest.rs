@@ -44,7 +44,7 @@ pub const MAX_INGEST_THREADS: usize = 4;
 
 /// Calculate default thread count: min(cpu_cores / 2, MAX_INGEST_THREADS)
 pub fn default_thread_count() -> usize {
-    (num_cpus::get() / 2).max(1).min(MAX_INGEST_THREADS)
+    (num_cpus::get() / 2).clamp(1, MAX_INGEST_THREADS)
 }
 
 /// Create a thread pool with specified thread count

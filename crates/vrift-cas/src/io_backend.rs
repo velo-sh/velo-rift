@@ -238,7 +238,7 @@ pub fn create_backend() -> Box<dyn IngestBackend> {
     #[cfg(target_os = "macos")]
     {
         tracing::info!("Using GCD-style backend for macOS");
-        return Box::new(gcd::GcdBackend::new());
+        Box::new(gcd::GcdBackend::new())
     }
 
     #[cfg(not(any(

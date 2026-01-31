@@ -379,8 +379,7 @@ fn lock_with_retry(mut file: File, lock_type: FlockArg) -> Result<Flock<File>> {
                         )));
                 }
                 
-                return Err(CasError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(CasError::Io(std::io::Error::other(
                     err.to_string()
                 )));
             }

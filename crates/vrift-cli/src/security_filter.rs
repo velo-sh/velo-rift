@@ -150,6 +150,7 @@ impl SecurityFilter {
     }
 
     /// Get list of excluded file names
+    #[allow(dead_code)]
     pub fn excluded_files(&self) -> &[String] {
         &self.excluded_files
     }
@@ -160,6 +161,7 @@ impl SecurityFilter {
     }
 
     /// Whether the filter is enabled
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -168,7 +170,6 @@ impl SecurityFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_env_files() {

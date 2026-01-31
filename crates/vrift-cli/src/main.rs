@@ -317,6 +317,7 @@ fn cmd_resolve(cas_root: &Path, lockfile: &Path) -> Result<()> {
 }
 
 /// Ingest a directory into the CAS using zero-copy operations (RFC-0039)
+#[allow(clippy::too_many_arguments)]
 async fn cmd_ingest(
     cas_root: &Path,
     directory: &Path,
@@ -422,9 +423,9 @@ async fn cmd_ingest(
     let entries: Vec<_> = WalkDir::new(directory)
         .into_iter()
         .filter_map(|e| {
-            if let Ok(ref entry) = e {
+            if e.is_ok() {
                 entry_count += 1;
-                if entry_count % 5000 == 0 {
+                if entry_count.is_multiple_of(5000) {
                     scan_spinner.set_message(format!("{} entries", entry_count));
                 }
             }
@@ -691,7 +692,7 @@ async fn cmd_ingest(
     // Pretty output with colors
     println!();
     println!("{}{}╔════════════════════════════════════════╗{}", BOLD, GREEN, RESET);
-    println!("{}{}║  ✅ VRift Complete in {:.2}s          {}{}", BOLD, GREEN, elapsed_secs, "║", RESET);
+    println!("{}{}║  ✅ VRift Complete in {:.2}s          ║{}", BOLD, GREEN, elapsed_secs, RESET);
     println!("{}{}╚════════════════════════════════════════╝{}", BOLD, GREEN, RESET);
     println!();
     

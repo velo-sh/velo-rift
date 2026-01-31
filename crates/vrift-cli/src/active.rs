@@ -89,7 +89,7 @@ impl VriftDir {
         
         // Create manifest.lmdb directory (LMDB needs a directory)
         fs::create_dir_all(self.manifest_path())
-            .with_context(|| format!("Failed to create manifest directory"))?;
+            .context("Failed to create manifest directory")?;
         
         Ok(())
     }
@@ -559,9 +559,11 @@ mod tests {
 
     #[test]
     fn test_recovery_report_all_valid() {
-        let mut report = RecoveryReport::default();
-        report.total_entries = 5;
-        report.valid_entries = 5;
+        let mut report = RecoveryReport {
+            total_entries: 5,
+            valid_entries: 5,
+            ..Default::default()
+        };
         
         assert!(report.all_valid(), "All entries should be valid");
         

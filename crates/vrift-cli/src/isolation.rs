@@ -15,14 +15,14 @@ use nix::{
 };
 
 /// Run a command in an isolated environment
+#[allow(unused_variables)]
 pub fn run_isolated(
-    _command: &[String],
-    _manifest_path: &Path,
-    _cas_root: &Path,
-    _base_manifest_path: Option<&Path>,
+    command: &[String],
+    manifest_path: &Path,
+    cas_root: &Path,
+    base_manifest_path: Option<&Path>,
 ) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
-    #[allow(unused_variables)]
     {
         // On non-Linux platforms, just warn and fall back to normal execution
         eprintln!("⚠️  Isolation is only fully supported on Linux.");

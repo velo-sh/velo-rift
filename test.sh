@@ -13,7 +13,7 @@ else
         BUILD_ARGS="--release"
         if [ "$(uname -s)" == "Linux" ]; then
              echo "[*] Enabling FUSE feature for Linux build..."
-             BUILD_ARGS="$BUILD_ARGS --features velo-cli/fuse"
+             BUILD_ARGS="$BUILD_ARGS --features vrift-cli/fuse"
         fi
         cargo build $BUILD_ARGS
     else

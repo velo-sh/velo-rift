@@ -75,7 +75,7 @@ pub async fn check_blob(hash: [u8; 32]) -> Result<bool> {
     match connect().await {
         Ok(mut stream) => {
             let req = VeloRequest::CasGet { hash };
-            if let Err(_) = send_request(&mut stream, req).await {
+            if send_request(&mut stream, req).await.is_err() {
                 return Ok(false); // Connection broke during send
             }
             match read_response(&mut stream).await {

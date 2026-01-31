@@ -19,7 +19,7 @@ use tempfile::TempDir;
 #[test]
 #[cfg(target_os = "macos")]
 fn test_eperm_fallback_to_copy() {
-    use vrift_cas::{ingest_solid_tier2, CasStore};
+    use vrift_cas::ingest_solid_tier2;
     
     let temp_dir = TempDir::new().unwrap();
     let cas_dir = temp_dir.path().join("cas");

@@ -170,11 +170,11 @@ impl WatchFirstScanner {
                 let _ = watch_tx.send(event);
             }
         })
-        .map_err(|e| CasError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        .map_err(|e| CasError::Io(std::io::Error::other(e)))?;
 
         watcher
             .watch(&self.root, RecursiveMode::Recursive)
-            .map_err(|e| CasError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| CasError::Io(std::io::Error::other(e)))?;
 
         tracing::info!("Watch started, beginning directory scan");
 
@@ -277,8 +277,7 @@ impl WorkerPool {
         if mtime_before != mtime_after {
             // File modified during read - discard
             let _ = fs::remove_file(&temp_path);
-            return Err(CasError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(CasError::Io(std::io::Error::other(
                 format!("File modified during read: {}", path.display()),
             )));
         }

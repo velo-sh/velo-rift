@@ -173,7 +173,7 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
                     .unwrap()
                     .progress_chars("█▓░"),
             );
-            pb.set_message(format!("0 B reclaimed"));
+            pb.set_message("0 B reclaimed".to_string());
 
             for (hash, size) in orphans {
                 match cas.delete(&hash) {
