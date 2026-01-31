@@ -45,13 +45,14 @@ use crate::{Blake3Hash, CasError, Result};
 /// * `target` - Target path in CAS
 ///
 /// # Returns
-/// * Ok(()) on success
+/// * Ok(true) if a new file was created
+/// * Ok(false) if file already existed (dedup)
 /// * Err on all fallback methods failed
-fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<()> {
+fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
     // Attempt 1: hard_link (most efficient)
     match fs::hard_link(source, target) {
-        Ok(()) => return Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+        Ok(()) => return Ok(true),  // New file created
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(false),  // Already exists
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
             // EPERM: likely code-signed bundle, try clonefile
         }
@@ -60,7 +61,7 @@ fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<()> {
     
     // Attempt 2: clonefile (CoW on APFS)
     match reflink_copy::reflink(source, target) {
-        Ok(()) => return Ok(()),
+        Ok(()) => return Ok(true),  // New file created
         Err(_) => {
             // clonefile not supported or failed, fall back to copy
         }
@@ -68,7 +69,7 @@ fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<()> {
     
     // Attempt 3: full copy (last resort)
     fs::copy(source, target)?;
-    Ok(())
+    Ok(true)  // New file created
 }
 
 // ============================================================================
@@ -133,7 +134,7 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     }
     
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
-    link_or_clone_or_copy(source, &cas_target)?;
+    let was_new = link_or_clone_or_copy(source, &cas_target)?;
     
     // Drop the lock guard before modifying source
     drop(locked_file);
@@ -146,7 +147,7 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
         source_path: source.to_owned(),
         hash,
         size,
-        was_new: true, // Always new for tier1 (no dedup check)
+        was_new,
     })
 }
 
@@ -224,14 +225,14 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
     }
     
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
-    link_or_clone_or_copy(source, &cas_target)?;
+    let was_new = link_or_clone_or_copy(source, &cas_target)?;
     
     // Lock guard auto-drops here
     Ok(IngestResult {
         source_path: source.to_owned(),
         hash,
         size,
-        was_new: true, // Always new for tier2 (no dedup check)
+        was_new,
     })
 }
 
@@ -285,13 +286,13 @@ pub fn ingest_solid_tier2_dedup(
     }
     
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
-    link_or_clone_or_copy(source, &cas_target)?;
+    let was_new = link_or_clone_or_copy(source, &cas_target)?;
     
     Ok(IngestResult {
         source_path: source.to_owned(),
         hash,
         size,
-        was_new: true, // New blob created
+        was_new,
     })
 }
 

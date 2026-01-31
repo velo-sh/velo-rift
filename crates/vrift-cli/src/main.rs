@@ -430,9 +430,17 @@ async fn cmd_ingest(
 
             let content = target_str.as_bytes();
             let hash = CasStore::compute_hash(content);
+            
+            // Check if blob exists before storing (for accurate unique count)
+            let blob_exists = cas.blob_path_for_hash(&hash).is_some();
 
             // Store symlink target string as a blob in CAS
             cas.store(content)?;
+            
+            // Count as unique if this blob was new
+            if !blob_exists {
+                unique_blobs += 1;
+            }
 
             let vnode = VnodeEntry::new_symlink(hash, content.len() as u64, mtime);
             manifest.insert(&manifest_path, vnode.clone());
