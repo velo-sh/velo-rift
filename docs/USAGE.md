@@ -96,3 +96,71 @@ Velo Rift chooses the best way to "project" the virtual world based on your OS:
 
 ### 3. Absolute Determinism
 A `vrift.manifest` uniquely defines an entire environment. If the manifest hash is the same, the execution outcome is guaranteed to be reproducible.
+
+---
+
+## 📦 TheSource™ (CAS) Configuration
+
+Velo Rift stores all deduplicated content in a **Content-Addressable Store (CAS)** called **TheSource™**.
+
+### Global Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--the-source-root` | `~/.vrift/the_source` | Global CAS directory |
+| `--mode` | `solid` | Ingest mode: `solid` (hard_link) or `phantom` (rename) |
+| `--tier` | `tier2` | Asset tier: `tier1` (immutable, symlink) or `tier2` (mutable, keep original) |
+| `VR_THE_SOURCE` | (env var) | Override CAS path via environment variable |
+
+### Default Behavior
+
+By default, all projects share a **global CAS** for maximum deduplication:
+
+```bash
+# All projects use the same CAS
+vrift ingest node_modules -o manifest.bin
+# → CAS stored in: ~/.vrift/the_source/blake3/
+
+# Second project with shared dependencies
+cd ../another-project
+vrift ingest node_modules -o manifest.bin
+# → Shared files are deduplicated automatically!
+```
+
+### Custom CAS Location
+
+Override the CAS location for isolated testing or CI/CD:
+
+```bash
+# Specify custom CAS root
+vrift --the-source-root /tmp/test-cas ingest node_modules -o manifest.bin
+
+# Or use environment variable
+export VR_THE_SOURCE=/data/shared-cas
+vrift ingest node_modules -o manifest.bin
+```
+
+### Recommended Usage by Scenario
+
+| Scenario | CAS Location | Purpose |
+|----------|--------------|---------|
+| **Development** | `~/.vrift/the_source` (default) | Global dedup across all local projects |
+| **CI/CD Pipeline** | `--the-source-root $CI_CACHE` | Ephemeral per-job, or shared cache for speed |
+| **E2E Testing** | `mktemp -d` | Isolated test environment, avoid pollution |
+| **Multi-tenant** | Per-user/team directory | Isolation between users/teams |
+
+### CAS Directory Structure
+
+```
+~/.vrift/the_source/
+└── blake3/                    # Hash algorithm directory
+    ├── ab/                    # First 2 chars of hash (sharding)
+    │   └── cd/                # Next 2 chars of hash
+    │       ├── abcd1234...efgh_1024.bin    # blob: hash_size.bin
+    │       └── abcd5678...ijkl_2048.bin
+    └── ef/
+        └── 12/
+            └── ef123456...mnop_512.bin
+```
+
+Each blob is named with its full BLAKE3 hash and file size, ensuring content-addressable integrity.
