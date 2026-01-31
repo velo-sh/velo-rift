@@ -258,7 +258,7 @@ print_final_results() {
         echo -e "${BOLD}Scenario A: Fresh Start${NC} (${SCENARIO_A_TIME}s total)"
         echo ""
         echo "  ┌──────────┬─────────┬─────────┬──────────┬────────────┬───────────┐"
-        echo "  │ Project  │ Files   │ Blobs   │ Dedup %  │ Saved      │ Speed     │"
+        echo "  │ Project  │ Files   │ New Blobs │ Dedup %  │ Saved      │ Speed     │"
         echo "  ├──────────┼─────────┼─────────┼──────────┼────────────┼───────────┤"
         
         for i in "${!SCENARIO_A_NAMES[@]}"; do
@@ -279,7 +279,7 @@ print_final_results() {
         echo -e "${BOLD}Scenario B: Re-Run (Warm CAS)${NC} (${SCENARIO_B_TIME}s total)"
         echo ""
         echo "  ┌──────────┬─────────┬─────────┬──────────┬────────────┬───────────┐"
-        echo "  │ Project  │ Files   │ Blobs   │ Dedup %  │ Saved      │ Speed     │"
+        echo "  │ Project  │ Files   │ New Blobs │ Dedup %  │ Saved      │ Speed     │"
         echo "  ├──────────┼─────────┼─────────┼──────────┼────────────┼───────────┤"
         
         for i in "${!SCENARIO_B_NAMES[@]}"; do
