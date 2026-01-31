@@ -26,6 +26,7 @@ mod mount;
 mod active;
 pub mod gc;
 pub mod registry;
+mod security_filter;
 
 use vrift_cas::CasStore;
 use vrift_manifest::lmdb::{AssetTier, LmdbManifest};
@@ -75,6 +76,14 @@ enum Commands {
         /// Asset tier for solid mode: tier1 (immutable, symlink) or tier2 (mutable, keep original)
         #[arg(long, default_value = "tier2")]
         tier: String,
+
+        /// Disable security filter (allow sensitive files like .env, *.key)
+        #[arg(long)]
+        no_security_filter: bool,
+
+        /// Show files excluded by security filter
+        #[arg(long)]
+        show_excluded: bool,
     },
 
     /// Execute a command with VeloVFS virtualization
@@ -213,7 +222,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             threads,
             mode,
             tier,
-        } => cmd_ingest(&cli.the_source_root, &directory, &output, prefix.as_deref(), parallel, threads, &mode, &tier).await,
+            no_security_filter,
+            show_excluded,
+        } => cmd_ingest(&cli.the_source_root, &directory, &output, prefix.as_deref(), parallel, threads, &mode, &tier, !no_security_filter, show_excluded).await,
         Commands::Run {
             manifest,
             command,
@@ -315,6 +326,8 @@ async fn cmd_ingest(
     threads: Option<usize>,
     mode: &str,
     tier: &str,
+    security_filter_enabled: bool,
+    show_excluded: bool,
 ) -> Result<()> {
     // Validate input directory
     if !directory.exists() {
@@ -381,10 +394,20 @@ async fn cmd_ingest(
     let mut fallback_count = 0u64;
 
     // Print header
-    println!("\n⚡ VRift Ingest");
+    println!("\n\u{26a1} VRift Ingest");
     println!("   Mode:    {} ", mode_str);
     println!("   CAS:     {}", cas_root.display());
     println!("   Threads: {}", thread_count);
+    
+    // Security filter status (RFC-0042)
+    let mut security_filter = security_filter::SecurityFilter::new(security_filter_enabled);
+    if !security_filter_enabled {
+        println!();
+        println!("   \u{26a0}\u{fe0f}  SECURITY FILTER DISABLED (--no-security-filter)");
+        println!("   \u{26a0}\u{fe0f}  Sensitive files (.env, *.key, etc.) WILL be ingested!");
+    } else {
+        println!("   \u{1f6e1}\u{fe0f}  Security: Filter ACTIVE");
+    }
 
     // Collect entries with spinner feedback
     let scan_spinner = ProgressBar::new_spinner();
@@ -420,6 +443,17 @@ async fn cmd_ingest(
 
         // Skip .vrift directory
         if relative.starts_with(".vrift") {
+            continue;
+        }
+
+        // Security filter check (RFC-0042)
+        if let Some(reason) = security_filter.should_exclude(path) {
+            security_filter.record_exclusion(path);
+            if show_excluded {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    println!("   \u{1f6e1}\u{fe0f}  Excluded: {} ({})", name, reason);
+                }
+            }
             continue;
         }
 
@@ -689,6 +723,15 @@ async fn cmd_ingest(
     println!("   📄 Manifest: {}", output.display());
     if fallback_count > 0 {
         println!("   {}⚠️  {} cross-device fallbacks{}", YELLOW, fallback_count, RESET);
+    }
+    
+    // Security filter summary (RFC-0042)
+    let excluded_count = security_filter.excluded_count();
+    if excluded_count > 0 {
+        println!("   {}🛡️  {} sensitive files excluded{}", CYAN, excluded_count, RESET);
+        if !show_excluded {
+            println!("       (use --show-excluded for details)");
+        }
     }
     println!();
 
@@ -983,7 +1026,7 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
 
     // Initial ingest
     println!("\n[Initial Scan]");
-    cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2").await?;
+    cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2", true, false).await?;
 
     // Create a channel to receive the events.
     let (tx, rx) = channel();
@@ -1015,7 +1058,7 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
                         // Simple debounce
                         if last_ingest.elapsed() > debounce_duration {
                             println!("\n[Change Detected] Re-ingesting...");
-                            if let Err(e) = cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2").await {
+                            if let Err(e) = cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2", true, false).await {
                                 eprintln!("Ingest failed: {}", e);
                             }
                             last_ingest = std::time::Instant::now();

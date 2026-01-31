@@ -64,3 +64,6 @@ ci_run_*.txt
 tests/qa/ai_bench_workspace/
 tests/qa/ai_dropin_workspace/
 .DS_Store
+
+# VRift cache directories (RFC-0042)
+**/.vrift/
