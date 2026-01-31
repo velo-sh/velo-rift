@@ -40,10 +40,11 @@ jobs:
         run: |
           cd /tmp/bench-test
           CAS=$(mktemp -d)
+          VRIFT="${{ github.workspace }}/target/release/vrift"
           
           # Time the ingest
           START=$(date +%s.%N)
-          ./target/release/vrift --cas-root "$CAS" ingest /tmp/bench-test -o /tmp/manifest.bin
+          "$VRIFT" --cas-root "$CAS" ingest /tmp/bench-test -o /tmp/manifest.bin
           END=$(date +%s.%N)
           
           TIME=$(echo "$END - $START" | bc)
@@ -53,7 +54,6 @@ jobs:
           echo "files=$FILES" >> $GITHUB_OUTPUT
           echo "time=$TIME" >> $GITHUB_OUTPUT
           echo "throughput=$THROUGHPUT" >> $GITHUB_OUTPUT
-        working-directory: ${{ github.workspace }}
       
       - name: Report results
         run: |
