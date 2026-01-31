@@ -508,52 +508,65 @@ run_full_ci() {
     local skip_build="${SKIP_BUILD:-false}"
     local venv_path=".venv"
     
-    # Step 0: Detect paths from Tier
-    local test_paths=$(parse_tier_to_paths "$tier")
-    
     echo ""
     echo "==================== Phase 1: Setup ===================="
     check_env_fast
     setup_python_env "$venv_path"
     
     # SSOT: Force ABI Alignment
-    export PYO3_PYTHON=$(uv python find)
-    log_info "ABI Alignment: PYO3_PYTHON=$PYO3_PYTHON"
+    if command -v uv &>/dev/null; then
+        export PYO3_PYTHON=$(uv python find)
+        log_info "ABI Alignment: PYO3_PYTHON=$PYO3_PYTHON"
+    fi
     
     echo ""
     echo "==================== Phase 2: Build ===================="
-    if [[ "$skip_build" == "true" ]] && [[ -f "target/release/velo" ]]; then
+    # Check for release binary (both names supported during transition)
+    if [[ "$skip_build" == "true" ]] && ([[ -f "target/release/vrift" ]] || [[ -f "target/release/velo" ]]); then
         log_success "Reusing existing binary (SKIP_BUILD=true)"
     else
-        build_rust release
+        # We build vrift-cli specifically to ensure all features (FUSE etc) are handled
+        cargo build --release -p vrift-cli
     fi
     
     echo ""
-    echo "==================== Phase Pre-Flight: Diagnostics ===================="
-    run_pre_flight
+    echo "==================== Phase 3: Execution ===================="
     
-    echo ""
-    echo "==================== Phase 3: Test ===================="
-    run_rust_tests
-    run_python_tests "$venv_path" "$test_paths"
+    # Load tier definitions
+    source "$_CI_COMMON_DIR/test-suites.conf"
     
-    echo ""
-    echo "==================== Phase 4: Lint ===================="
-    run_clippy
-    run_fmt_check
+    local tier_tests=()
+    case "$tier" in
+        0) tier_tests=("${TIER0_TESTS[@]}") ;;
+        1) tier_tests=("${TIER1_TESTS[@]}") ;;
+        2) tier_tests=("${TIER2_TESTS[@]}") ;;
+        3) tier_tests=("${TIER3_TESTS[@]}") ;;
+        *) 
+            log_info "Running custom test path: $tier"
+            run_python_tests "$venv_path" "$tier"
+            return
+            ;;
+    esac
     
-    echo ""
-    echo "==================== Phase 5: E2E Tests ===================="
-    # E2E tests run after lint to catch integration issues
-    # Uses "quick" tier by default (GC test only), "full" for npm-based tests
-    if [[ "$tier" != "quick" ]]; then
-        run_e2e_tests "quick"
-    else
-        log_info "Skipping E2E tests (--quick mode)"
-    fi
+    log_step "Running Tier $tier (${#tier_tests[@]} tasks)..."
+    for task in "${tier_tests[@]}"; do
+        echo ""
+        log_step "TASK: $task"
+        if [[ "$task" == python* ]] || [[ "$task" == ./* ]]; then
+            # Run as shell command
+            eval "$task"
+        elif [[ "$task" == cargo* ]]; then
+            # Run cargo command
+            eval "$task"
+        else
+            # Default to pytest
+            run_python_tests "$venv_path" "$task"
+        fi
+        log_success "Task Passed: $task"
+    done
     
     echo ""
     echo "=========================================="
-    log_success "ALL CI CHECKS PASSED (Tier: $tier)!"
+    log_success "ALL TIER $tier CHECKS PASSED!"
     echo "=========================================="
 }

@@ -218,7 +218,8 @@ if echo "$OUTPUT" | grep -q "100.0% DEDUP"; then
     echo -e "     ${GREEN}✓ All proj2 blobs preserved correctly${NC}"
     echo -e "     ${GREEN}✓ Zero false-positive deletions${NC}"
 else
-    echo -e "${YELLOW}  ⚠️  Some new blobs created - check GC logic${NC}"
+    echo -e "${RED}  ❌ SAFETY VIOLATION: Some new blobs created - check GC logic${NC}"
+    exit 1
 fi
 echo ""
 

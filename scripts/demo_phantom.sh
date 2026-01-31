@@ -69,6 +69,9 @@ print_error() {
 }
 
 pause() {
+    if [[ -n "${CI:-}" ]] || [[ "${NON_INTERACTIVE:-}" == "true" ]]; then
+        return
+    fi
     echo ""
     echo -e "${MAGENTA}   [Press Enter to continue...]${NC}"
     read -r
@@ -386,6 +389,10 @@ print_summary() {
     echo "  └─────────────────────────────────────────────────────────────────┘"
     echo ""
     
+    if [[ "$alpha_empty" != "0" ]] || [[ "$beta_empty" != "0" ]] || [[ ! -d "$CAS_DIR" ]] || [[ ! -f "$DEMO_DIR/project-alpha/manifest.vrift" ]] || [[ ! -f "$DEMO_DIR/project-beta/manifest.vrift" ]]; then
+        print_error "DEMO FAILED: One or more checkpoints failed!"
+        exit 1
+    fi
     echo -e "${BOLD}Demo Location:${NC} $DEMO_DIR"
     echo -e "${BOLD}CAS Location:${NC} $CAS_DIR"
     echo ""

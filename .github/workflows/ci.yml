@@ -132,7 +132,7 @@ jobs:
         run: python3 scripts/gc_e2e_test.py
 
   e2e-daemon:
-    name: "E2E: Daemon Test"
+    name: "E2E: Integration Test"
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -149,6 +149,24 @@ jobs:
       - name: Run Daemon E2E Test
         run: ./scripts/v-integration.sh
 
+  e2e-extended:
+    name: "E2E: Extended Tests (Demos)"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-build"
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Build Release
+        run: cargo build --release -p vrift-cli
+      - name: Run Tier 2 Demos
+        run: ./scripts/v-ci --tier 2 --local
+
   # ============================================
   # Summary Gate (All Must Pass)
   # ============================================
@@ -156,7 +174,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always()
-    needs: [fmt, clippy, build, test-matrix, e2e-gc, e2e-daemon]
+    needs: [fmt, clippy, build, test-matrix, e2e-gc, e2e-daemon, e2e-extended]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs
@@ -166,7 +184,8 @@ jobs:
              [[ "${{ needs.build.result }}" != "success" ]] || \
              [[ "${{ needs.test-matrix.result }}" != "success" ]] || \
              [[ "${{ needs.e2e-gc.result }}" != "success" ]] || \
-             [[ "${{ needs.e2e-daemon.result }}" != "success" ]]; then
+             [[ "${{ needs.e2e-daemon.result }}" != "success" ]] || \
+             [[ "${{ needs.e2e-extended.result }}" != "success" ]]; then
             echo "One or more jobs failed"
             exit 1
           fi
