@@ -32,6 +32,9 @@ serde_json = "1.0"
 rayon = "1.11.0"
 libc = "0.2"
 dirs = "5"
+fs2 = "0.4"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
 indicatif = { version = "0.17", features = ["rayon"] }
 
 [features]

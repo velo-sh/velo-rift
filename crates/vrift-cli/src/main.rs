@@ -25,6 +25,7 @@ mod daemon;
 mod mount;
 mod active;
 pub mod gc;
+pub mod registry;
 
 use vrift_cas::CasStore;
 use vrift_manifest::lmdb::{AssetTier, LmdbManifest};
@@ -615,6 +616,18 @@ async fn cmd_ingest(
     manifest
         .save(output)
         .with_context(|| format!("Failed to save manifest to {}", output.display()))?;
+
+    // Auto-register in global manifest registry (RFC-0041)
+    let output_abs = output.canonicalize().unwrap_or_else(|_| output.to_path_buf());
+    let directory_abs = directory.canonicalize().unwrap_or_else(|_| directory.to_path_buf());
+    
+    if let Ok(_lock) = registry::ManifestRegistry::acquire_lock() {
+        if let Ok(mut reg) = registry::ManifestRegistry::load_or_create() {
+            if let Ok(_uuid) = reg.register_manifest(&output_abs, &directory_abs) {
+                let _ = reg.save();
+            }
+        }
+    }
 
     let _stats = manifest.stats();
     let dedup_ratio = if files_ingested > 0 {

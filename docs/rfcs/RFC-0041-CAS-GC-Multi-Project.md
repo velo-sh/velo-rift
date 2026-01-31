@@ -460,12 +460,12 @@ All destructive operations logged to `~/.vrift/gc.log`:
 ## Implementation Phases
 
 ### Phase 1: Basic GC (MVP)
-- [ ] Implement manifest registry (`~/.vrift/registry/manifests.json`)
-- [ ] File-based locking (`flock`) for concurrent operations
-- [ ] Atomic JSON writes (write-rename pattern)
-- [ ] `vrift ingest` auto-registers manifests
-- [ ] `vrift gc` scans and reports orphans
-- [ ] `vrift gc --delete` removes orphans (with grace period)
+- [x] Implement manifest registry (`~/.vrift/registry/manifests.json`)
+- [x] File-based locking (`flock`) for concurrent operations
+- [x] Atomic JSON writes (write-rename pattern)
+- [x] `vrift ingest` auto-registers manifests
+- [x] `vrift gc` scans and reports orphans
+- [x] `vrift gc --delete` removes orphans (with grace period)
 
 ### Phase 2: Project Management
 - [ ] `vrift clean --unregister <project>`
