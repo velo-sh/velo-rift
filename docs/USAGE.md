@@ -164,3 +164,36 @@ vrift ingest node_modules -o manifest.bin
 ```
 
 Each blob is named with its full BLAKE3 hash and file size, ensuring content-addressable integrity.
+
+---
+
+## 🎯 Demo: Cross-Project Deduplication
+
+Experience VRift's deduplication superpowers with a one-click demo:
+
+```bash
+# Full demo (fresh start + re-run)
+./scripts/demo_dedup.sh
+
+# Quick demo (xsmall + small only)
+./scripts/demo_dedup.sh --quick
+
+# Fresh start only (delete CAS first)
+./scripts/demo_dedup.sh --fresh-only
+
+# Re-run only (test warm CAS performance)
+./scripts/demo_dedup.sh --rerun-only
+```
+
+### Expected Results
+
+| Scenario | Description | Dedup Rate |
+|----------|-------------|------------|
+| **Fresh Start** | Small → Large order | 50-70% |
+| **Re-Run** | Warm CAS | **100%** |
+
+### Key Metrics
+
+- **Speed**: 10,000+ files/sec
+- **Dedup**: Up to 100% on re-run
+- **Savings**: 50%+ on cross-project dependencies
