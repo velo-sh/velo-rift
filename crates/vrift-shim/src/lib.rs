@@ -304,9 +304,6 @@ unsafe fn close_impl(fd: c_int, real_close: CloseFn) -> c_int {
 }
 
 // ============================================================================
-// Platform Tiers
-// ============================================================================
-
 #[cfg(target_os = "linux")]
 static REAL_OPEN: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 #[cfg(target_os = "linux")]
@@ -315,7 +312,7 @@ static REAL_WRITE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static REAL_CLOSE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 #[cfg(target_os = "linux")]
-macro_rules! get_real_linux {
+macro_rules! get_real {
     ($storage:ident, $name:literal, $t:ty) => {{
         let p = $storage.load(Ordering::Acquire);
         if !p.is_null() {
@@ -334,37 +331,40 @@ macro_rules! get_real_linux {
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn open(p: *const c_char, f: c_int, m: mode_t) -> c_int {
-    open_impl(p, f, m, get_real_linux!(REAL_OPEN, "open", OpenFn))
+    open_impl(p, f, m, get_real!(REAL_OPEN, "open", OpenFn))
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn write(fd: c_int, b: *const c_void, c: size_t) -> ssize_t {
-    write_impl(fd, b, c, get_real_linux!(REAL_WRITE, "write", WriteFn))
+    write_impl(fd, b, c, get_real!(REAL_WRITE, "write", WriteFn))
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
-    close_impl(fd, get_real_linux!(REAL_CLOSE, "close", CloseFn))
+    close_impl(fd, get_real!(REAL_CLOSE, "close", CloseFn))
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_int {
-    open_impl(p, f, m, open)
+    let real = std::mem::transmute::<*const (), OpenFn>(IT_OPEN.old_func);
+    open_impl(p, f, m, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn write_shim(fd: c_int, b: *const c_void, c: size_t) -> ssize_t {
-    write_impl(fd, b, c, write)
+    let real = std::mem::transmute::<*const (), WriteFn>(IT_WRITE.old_func);
+    write_impl(fd, b, c, real)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
-    close_impl(fd, close)
+    let real = std::mem::transmute::<*const (), CloseFn>(IT_CLOSE.old_func);
+    close_impl(fd, real)
 }
 
 // Constructor
