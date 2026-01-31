@@ -74,12 +74,14 @@ enum Commands {
         threads: Option<usize>,
 
         /// Ingest mode: solid (hard_link, preserves source) or phantom (rename, moves to CAS)
-        #[arg(long, default_value = "solid")]
-        mode: String,
+        /// Default from config: storage.default_mode
+        #[arg(long)]
+        mode: Option<String>,
 
         /// Asset tier for solid mode: tier1 (immutable, symlink) or tier2 (mutable, keep original)
-        #[arg(long, default_value = "tier2")]
-        tier: String,
+        /// Default from config: ingest.default_tier
+        #[arg(long)]
+        tier: Option<String>,
 
         /// Disable security filter (allow sensitive files like .env, *.key)
         #[arg(long)]
@@ -260,6 +262,16 @@ async fn async_main(cli: Cli) -> Result<()> {
             no_security_filter,
             show_excluded,
         } => {
+            // Apply config defaults for mode and tier
+            // Note: Extract values in block so MutexGuard is dropped before await
+            let (mode, tier) = {
+                let config = vrift_config::config();
+                (
+                    mode.unwrap_or_else(|| config.storage.default_mode.clone()),
+                    tier.unwrap_or_else(|| config.ingest.default_tier.clone()),
+                )
+            };
+
             cmd_ingest(
                 &cli.the_source_root,
                 &directory,
