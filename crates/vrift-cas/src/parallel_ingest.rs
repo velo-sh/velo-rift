@@ -31,8 +31,8 @@ use rayon::prelude::*;
 use rayon::ThreadPool;
 
 use crate::{
-    ingest_phantom, ingest_solid_tier1, ingest_solid_tier2, ingest_solid_tier2_dedup, IngestResult,
-    Result,
+    ingest_phantom, ingest_solid_tier1, ingest_solid_tier1_dedup, ingest_solid_tier2,
+    ingest_solid_tier2_dedup, IngestResult, Result,
 };
 
 // ============================================================================
@@ -167,7 +167,7 @@ pub fn parallel_ingest_with_threads(
     let pool = create_thread_pool(threads);
     
     // In-memory dedup set for tracking seen hashes
-    // Only used for SolidTier2 which is the common case
+    // Used for both SolidTier1 and SolidTier2
     let seen_hashes: DashSet<String> = DashSet::new();
     
     pool.install(|| {
@@ -175,8 +175,8 @@ pub fn parallel_ingest_with_threads(
             .par_iter()
             .map(|path| {
                 match mode {
-                    IngestMode::SolidTier1 => ingest_solid_tier1(path, cas_root),
-                    // Use dedup-aware version for Tier2 (default mode)
+                    // Use dedup-aware versions to skip redundant hard_link calls
+                    IngestMode::SolidTier1 => ingest_solid_tier1_dedup(path, cas_root, &seen_hashes),
                     IngestMode::SolidTier2 => ingest_solid_tier2_dedup(path, cas_root, &seen_hashes),
                     IngestMode::Phantom => ingest_phantom(path, cas_root),
                 }

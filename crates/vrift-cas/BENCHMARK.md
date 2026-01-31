@@ -62,30 +62,58 @@ The new `zero_copy_ingest.rs` uses:
 
 ---
 
-## Real-World Benchmark: node_modules (139K files)
+## Real-World Benchmark: Tiered Datasets
 
 **Date**: 2026-01-31  
-**Test Data**: Next.js + React project with ~150 dependencies  
-**Script**: `scripts/benchmark_node_modules.sh`
+**Commit**: `c6864a9`  
+**Script**: `scripts/benchmark_parallel.sh`
 
-| Metric | Value |
-|--------|-------|
-| **Files** | 139,587 |
-| **Directories** | 14,154 |
-| **Total Size** | 995 MB |
-| **Ingest Time** | 54 seconds |
-| **Throughput** | **~2,585 files/sec** |
-| **Mode** | Solid Tier-2 (hard_link) |
+### Test Datasets
 
-### Verification
+All datasets share common dependencies for dedup testing:
 
-```
-$ stat /tmp/vrift-demo/node_modules/lodash/package.json
-  inode: 378565806, links: 2  # hard_link confirmed
+| Dataset | Description | Files | Size |
+|---------|-------------|-------|------|
+| **Small** | Basic Next.js + React | 16,647 | 271MB |
+| **Medium** | +i18n, echarts, sentry | 23,948 | 415MB |
+| **Large** | +Web3, AWS SDK, Redis | 61,703 | 684MB |
+| **XLarge** | Real production project | 138,201 | 1.4GB |
+
+### Performance Results (4 threads, DashSet dedup)
+
+| Dataset | Time | Throughput |
+|---------|------|------------|
+| Small | 2.57s | **6,464 files/s** |
+| Medium | 3.67s | **6,530 files/s** |
+| Large | 10.30s | **5,993 files/s** |
+| XLarge | 28.0s | **4,936 files/s** |
+
+### Parallel Speedup
+
+| Threads | Time (12K files) | Speedup |
+|---------|------------------|---------|
+| 1 | 3.93s | 1.0x |
+| 4 | 1.65s | **2.4x** |
+
+### Optimizations Applied
+
+1. **Rayon Parallel Ingest**: Multi-threaded file processing
+2. **DashSet In-Memory Dedup**: Skip redundant hard_link for same-hash files
+3. **TOCTOU Fix**: Handle EEXIST gracefully in race conditions
+
+### Running Benchmarks
+
+```bash
+# Run all datasets
+./scripts/benchmark_parallel.sh --size all
+
+# Run specific size
+./scripts/benchmark_parallel.sh --size large
 ```
 
 ### Notes
 
-- Excludes `puppeteer/.local-chromium` (macOS code-signed bundle)
+- XLarge based on real `velo-rift-node_modules_package.json`
+- puppeteer excluded (macOS EPERM on Chromium code signing)
 - LMDB manifest committed to `.vrift/manifest.lmdb`
-- Time is pure ingest (excludes npm download time)
+

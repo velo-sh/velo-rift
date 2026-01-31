@@ -103,6 +103,64 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     })
 }
 
+/// Ingest Solid Mode Tier-1 with in-memory deduplication
+///
+/// Uses DashSet to skip hard_link when CAS blob already exists,
+/// but still performs symlink replacement for each source file.
+///
+/// # Arguments
+///
+/// * `source` - Path to file to ingest
+/// * `cas_root` - CAS storage root  
+/// * `seen_hashes` - Concurrent set of already-processed hashes
+pub fn ingest_solid_tier1_dedup(
+    source: &Path,
+    cas_root: &Path,
+    seen_hashes: &DashSet<String>,
+) -> Result<IngestResult> {
+    let file = File::open(source)?;
+    let metadata = file.metadata()?;
+    let size = metadata.len();
+    
+    // Acquire shared lock with retry
+    let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
+    
+    // Stream hash
+    let hash = stream_hash(&*locked_file)?;
+    let hash_key = hex::encode(hash);
+    let cas_target = cas_path(cas_root, &hash, size);
+    
+    // In-memory dedup: only create hard_link if first time seeing this hash
+    let is_new = seen_hashes.insert(hash_key);
+    
+    if is_new {
+        // Create CAS directory if needed
+        if let Some(parent) = cas_target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        
+        // Hard link (zero-copy!)
+        match fs::hard_link(source, &cas_target) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    
+    // Drop the lock guard before modifying source
+    drop(locked_file);
+    
+    // Always replace source with symlink (even if CAS blob already existed)
+    fs::remove_file(source)?;
+    unix_fs::symlink(&cas_target, source)?;
+    
+    Ok(IngestResult {
+        source_path: source.to_owned(),
+        hash,
+        size,
+    })
+}
+
 /// Ingest Solid Mode Tier-2 (Mutable): hard_link only (keep original)
 pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult> {
     let file = File::open(source)?;
