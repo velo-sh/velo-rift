@@ -44,7 +44,7 @@ jobs:
           
           # Time the ingest
           START=$(date +%s.%N)
-          "$VRIFT" --cas-root "$CAS" ingest /tmp/bench-test -o /tmp/manifest.bin
+          "$VRIFT" --the-source-root "$CAS" ingest /tmp/bench-test -o /tmp/manifest.bin
           END=$(date +%s.%N)
           
           TIME=$(echo "$END - $START" | bc)
