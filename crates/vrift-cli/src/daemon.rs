@@ -88,7 +88,6 @@ pub async fn check_blob(hash: [u8; 32]) -> Result<bool> {
     }
 }
 
-#[allow(dead_code)]
 pub async fn notify_blob(hash: [u8; 32], size: u64) -> Result<()> {
     // Fire and forget (optional) or wait for ack
     if let Ok(mut stream) = connect().await {

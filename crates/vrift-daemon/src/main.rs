@@ -45,6 +45,76 @@ use tokio::sync::Mutex;
 use vrift_ipc::{bloom_hashes, BLOOM_SIZE};
 use vrift_manifest::Manifest;
 
+const MAX_IPC_SIZE: usize = 16 * 1024 * 1024; // 16 MB max to prevent DoS
+
+#[derive(Debug, Clone, Copy)]
+struct PeerCredentials {
+    uid: u32,
+    #[allow(dead_code)]
+    gid: u32,
+}
+
+impl PeerCredentials {
+    #[cfg(target_os = "linux")]
+    fn from_stream(stream: &UnixStream) -> Option<Self> {
+        use std::os::unix::io::AsRawFd;
+        let fd = stream.as_raw_fd();
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let ret = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                &mut cred as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        if ret == 0 {
+            Some(Self {
+                uid: cred.uid,
+                gid: cred.gid,
+            })
+        } else {
+            None
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn from_stream(stream: &UnixStream) -> Option<Self> {
+        use std::os::unix::io::AsRawFd;
+        let fd = stream.as_raw_fd();
+        #[repr(C)]
+        struct XuCred {
+            cr_version: u32,
+            cr_uid: u32,
+            cr_ngroups: i16,
+            cr_groups: [u32; 16],
+        }
+        let mut cred: XuCred = unsafe { std::mem::zeroed() };
+        cred.cr_version = 0; // XUCRED_VERSION
+        let mut len = std::mem::size_of::<XuCred>() as libc::socklen_t;
+        const LOCAL_PEERCRED: libc::c_int = 1;
+        let ret = unsafe {
+            libc::getsockopt(
+                fd,
+                0, // SOL_LOCAL = 0 on macOS
+                LOCAL_PEERCRED,
+                &mut cred as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        if ret == 0 {
+            Some(Self {
+                uid: cred.cr_uid,
+                gid: cred.cr_groups[0],
+            })
+        } else {
+            None
+        }
+    }
+}
+
 struct BloomFilter {
     shm_ptr: *mut u8,
 }
@@ -192,6 +262,9 @@ async fn start_daemon() -> Result<()> {
 }
 
 async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
+    let peer_creds = PeerCredentials::from_stream(&stream);
+    let daemon_uid = unsafe { libc::getuid() };
+
     loop {
         let mut len_buf = [0u8; 4];
         if stream.read_exact(&mut len_buf).await.is_err() {
@@ -199,13 +272,19 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
         }
         let len = u32::from_le_bytes(len_buf) as usize;
 
+        // DoS protection: cap message size
+        if len > MAX_IPC_SIZE {
+            tracing::warn!("IPC message too large: {} bytes, rejecting", len);
+            return;
+        }
+
         let mut buf = vec![0u8; len];
         if stream.read_exact(&mut buf).await.is_err() {
             return;
         }
 
         let response = match bincode::deserialize::<VeloRequest>(&buf) {
-            Ok(req) => handle_request(req, &state).await,
+            Ok(req) => handle_request(req, &state, peer_creds, daemon_uid).await,
             Err(e) => VeloResponse::Error(format!("Invalid request: {}", e)),
         };
 
@@ -227,7 +306,12 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
     }
 }
 
-async fn handle_request(req: VeloRequest, state: &DaemonState) -> VeloResponse {
+async fn handle_request(
+    req: VeloRequest,
+    state: &DaemonState,
+    peer_creds: Option<PeerCredentials>,
+    daemon_uid: u32,
+) -> VeloResponse {
     tracing::debug!("Received request: {:?}", req);
     match req {
         VeloRequest::Handshake { client_version } => {
@@ -242,7 +326,24 @@ async fn handle_request(req: VeloRequest, state: &DaemonState) -> VeloResponse {
                 status: format!("Operational (Indexed: {} blobs)", count),
             }
         }
-        VeloRequest::Spawn { command, env, cwd } => handle_spawn(command, env, cwd).await,
+        VeloRequest::Spawn { command, env, cwd } => {
+            // Security: Only allow same-UID or root to spawn
+            if let Some(creds) = peer_creds {
+                if creds.uid != daemon_uid && creds.uid != 0 {
+                    tracing::warn!(
+                        "Spawn denied: peer UID {} != daemon UID {}",
+                        creds.uid,
+                        daemon_uid
+                    );
+                    return VeloResponse::Error("Permission denied: UID mismatch".to_string());
+                }
+            } else {
+                return VeloResponse::Error(
+                    "Permission denied: unable to verify peer credentials".to_string(),
+                );
+            }
+            handle_spawn(command, env, cwd).await
+        }
         VeloRequest::CasInsert { hash, size } => {
             let mut index = state.cas_index.lock().await;
             index.insert(hash, size);
@@ -280,14 +381,30 @@ async fn handle_request(req: VeloRequest, state: &DaemonState) -> VeloResponse {
 }
 
 async fn handle_protect(path_str: String, immutable: bool, owner: Option<String>) -> VeloResponse {
+    // Security: Path sandboxing - reject suspicious paths
+    if path_str.contains("..") || path_str.contains('\0') {
+        return VeloResponse::Error("Invalid path: path traversal detected".to_string());
+    }
+
     let path = Path::new(&path_str);
-    if !path.exists() {
-        return VeloResponse::Error(format!("Path not found: {}", path_str));
+
+    // Canonicalize to resolve symlinks and validate existence
+    let canonical = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return VeloResponse::Error(format!("Path not found: {}", path_str)),
+    };
+
+    // Additional check: ensure canonicalized path doesn't escape expected directories
+    let canonical_str = canonical.to_string_lossy();
+    if canonical_str.contains("..") {
+        return VeloResponse::Error(
+            "Invalid path: canonicalized path contains traversal".to_string(),
+        );
     }
 
     // 1. Set immutable flag via vrift-cas::protection
-    if let Err(e) = vrift_cas::protection::set_immutable(path, immutable) {
-        tracing::warn!("Failed to set immutable flag on {}: {}", path_str, e);
+    if let Err(e) = vrift_cas::protection::set_immutable(&canonical, immutable) {
+        tracing::warn!("Failed to set immutable flag on {}: {}", canonical_str, e);
         // We continue anyway, as ownership might still work
     }
 
@@ -297,8 +414,8 @@ async fn handle_protect(path_str: String, immutable: bool, owner: Option<String>
         {
             use nix::unistd::{chown, User};
             if let Ok(Some(u)) = User::from_name(&user) {
-                if let Err(e) = chown(path, Some(u.uid), Some(u.gid)) {
-                    tracing::error!("Failed to chown {} to {}: {}", path_str, user, e);
+                if let Err(e) = chown(&canonical, Some(u.uid), Some(u.gid)) {
+                    tracing::error!("Failed to chown {} to {}: {}", canonical_str, user, e);
                     return VeloResponse::Error(format!("chown failed: {}", e));
                 }
             } else {

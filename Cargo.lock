@@ -1973,6 +1973,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "clap",
+ "libc",
  "nix 0.28.0",
  "serde",
  "thiserror",
