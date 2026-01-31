@@ -36,13 +36,18 @@ run_benchmark() {
     
     echo -e "\n${YELLOW}━━━ $name ━━━${NC}"
     
-    rm -rf "$work_dir"
     mkdir -p "$work_dir"
-    cp "$package_json" "$work_dir/package.json"
     
-    echo "Installing dependencies..."
-    cd "$work_dir"
-    npm install --silent --legacy-peer-deps 2>/dev/null || npm install --silent 2>/dev/null
+    # Only reinstall if package.json changed or node_modules missing
+    if [[ ! -d "$work_dir/node_modules" ]] || ! diff -q "$package_json" "$work_dir/package.json" >/dev/null 2>&1; then
+        cp "$package_json" "$work_dir/package.json"
+        echo "Installing dependencies..."
+        cd "$work_dir"
+        npm install --silent --legacy-peer-deps 2>/dev/null || npm install --silent 2>/dev/null
+    else
+        echo "(Using cached node_modules)"
+        cd "$work_dir"
+    fi
     
     FILE_COUNT=$(find node_modules -type f 2>/dev/null | wc -l | tr -d ' ')
     DIR_COUNT=$(find node_modules -type d 2>/dev/null | wc -l | tr -d ' ')
