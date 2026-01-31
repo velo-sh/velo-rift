@@ -428,11 +428,19 @@ mod tests {
         let hash2 = [0x22u8; 32];
 
         // Insert and commit
-        manifest.insert("/file.txt", VnodeEntry::new_file(hash1, 100, 0, 0o644), AssetTier::Tier2Mutable);
+        manifest.insert(
+            "/file.txt",
+            VnodeEntry::new_file(hash1, 100, 0, 0o644),
+            AssetTier::Tier2Mutable,
+        );
         manifest.commit().unwrap();
 
         // Override in delta
-        manifest.insert("/file.txt", VnodeEntry::new_file(hash2, 200, 0, 0o644), AssetTier::Tier2Mutable);
+        manifest.insert(
+            "/file.txt",
+            VnodeEntry::new_file(hash2, 200, 0, 0o644),
+            AssetTier::Tier2Mutable,
+        );
 
         // Should see delta version
         let retrieved = manifest.get("/file.txt").unwrap().unwrap();
@@ -446,7 +454,11 @@ mod tests {
         let manifest = LmdbManifest::open(temp.path().join("manifest")).unwrap();
 
         let hash = [0xFFu8; 32];
-        manifest.insert("/to_delete.txt", VnodeEntry::new_file(hash, 50, 0, 0o644), AssetTier::Tier2Mutable);
+        manifest.insert(
+            "/to_delete.txt",
+            VnodeEntry::new_file(hash, 50, 0, 0o644),
+            AssetTier::Tier2Mutable,
+        );
         manifest.commit().unwrap();
 
         manifest.remove("/to_delete.txt");

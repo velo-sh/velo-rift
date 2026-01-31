@@ -51,25 +51,25 @@ use crate::{Blake3Hash, CasError, Result};
 fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
     // Attempt 1: hard_link (most efficient)
     match fs::hard_link(source, target) {
-        Ok(()) => return Ok(true),  // New file created
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(false),  // Already exists
+        Ok(()) => return Ok(true), // New file created
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(false), // Already exists
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
             // EPERM: likely code-signed bundle, try clonefile
         }
         Err(e) => return Err(e),
     }
-    
+
     // Attempt 2: clonefile (CoW on APFS)
     match reflink_copy::reflink(source, target) {
-        Ok(()) => return Ok(true),  // New file created
+        Ok(()) => return Ok(true), // New file created
         Err(_) => {
             // clonefile not supported or failed, fall back to copy
         }
     }
-    
+
     // Attempt 3: full copy (last resort)
     fs::copy(source, target)?;
-    Ok(true)  // New file created
+    Ok(true) // New file created
 }
 
 // ============================================================================
@@ -77,10 +77,10 @@ fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
 // ============================================================================
 
 /// Set immutable flag on CAS blob for maximum Tier-1 protection.
-/// 
+///
 /// - Linux: `chattr +i` (requires root or CAP_LINUX_IMMUTABLE)
 /// - macOS: `chflags uchg` (user immutable flag)
-/// 
+///
 /// This is best-effort: silently fails if permissions are insufficient.
 #[cfg(target_os = "linux")]
 fn set_immutable_on_cas(path: &Path) {
@@ -147,34 +147,34 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     let file = File::open(source)?;
     let metadata = file.metadata()?;
     let size = metadata.len();
-    
+
     // Acquire shared lock with retry (prevents blocking on busy files)
     let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
-    
+
     // Stream hash (no full read) - deref Flock to get underlying File
     let hash = stream_hash(&*locked_file)?;
     let cas_target = cas_path(cas_root, &hash, size);
-    
+
     // Create CAS directory if needed
     if let Some(parent) = cas_target.parent() {
         fs::create_dir_all(parent)?;
     }
-    
+
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
-    
+
     // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection
     if was_new {
         set_immutable_on_cas(&cas_target);
     }
-    
+
     // Drop the lock guard before modifying source
     drop(locked_file);
-    
+
     // Replace source with symlink
     fs::remove_file(source)?;
     unix_fs::symlink(&cas_target, source)?;
-    
+
     Ok(IngestResult {
         source_path: source.to_owned(),
         hash,
@@ -201,38 +201,38 @@ pub fn ingest_solid_tier1_dedup(
     let file = File::open(source)?;
     let metadata = file.metadata()?;
     let size = metadata.len();
-    
+
     // Acquire shared lock with retry
     let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
-    
+
     // Stream hash
     let hash = stream_hash(&*locked_file)?;
     let hash_key = hex::encode(hash);
     let cas_target = cas_path(cas_root, &hash, size);
-    
+
     // In-memory dedup: only create hard_link if first time seeing this hash
     let is_new = seen_hashes.insert(hash_key);
-    
+
     if is_new {
         // Create CAS directory if needed
         if let Some(parent) = cas_target.parent() {
             fs::create_dir_all(parent)?;
         }
-        
+
         // Tiered link: hard_link → clonefile → copy (RFC-0040)
         link_or_clone_or_copy(source, &cas_target)?;
-        
+
         // RFC-0039 §5.1.1: Set immutable flag for maximum Tier-1 protection
         set_immutable_on_cas(&cas_target);
     }
-    
+
     // Drop the lock guard before modifying source
     drop(locked_file);
-    
+
     // Always replace source with symlink (even if CAS blob already existed)
     fs::remove_file(source)?;
     unix_fs::symlink(&cas_target, source)?;
-    
+
     Ok(IngestResult {
         source_path: source.to_owned(),
         hash,
@@ -246,22 +246,22 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
     let file = File::open(source)?;
     let metadata = file.metadata()?;
     let size = metadata.len();
-    
+
     // Acquire shared lock with retry (prevents blocking on busy files)
     let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
-    
+
     // Stream hash - deref Flock to get underlying File
     let hash = stream_hash(&*locked_file)?;
     let cas_target = cas_path(cas_root, &hash, size);
-    
+
     // Create CAS directory if needed
     if let Some(parent) = cas_target.parent() {
         fs::create_dir_all(parent)?;
     }
-    
+
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
-    
+
     // Lock guard auto-drops here
     Ok(IngestResult {
         source_path: source.to_owned(),
@@ -294,14 +294,14 @@ pub fn ingest_solid_tier2_dedup(
     let file = File::open(source)?;
     let metadata = file.metadata()?;
     let size = metadata.len();
-    
+
     // Acquire shared lock with retry
     let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
-    
+
     // Stream hash
     let hash = stream_hash(&*locked_file)?;
     let hash_key = hex::encode(hash);
-    
+
     // In-memory dedup: if hash already seen, skip filesystem write
     if !seen_hashes.insert(hash_key) {
         // Already processed by another thread - skip hard_link entirely
@@ -312,17 +312,17 @@ pub fn ingest_solid_tier2_dedup(
             was_new: false, // Duplicate - already processed
         });
     }
-    
+
     let cas_target = cas_path(cas_root, &hash, size);
-    
+
     // Create CAS directory if needed
     if let Some(parent) = cas_target.parent() {
         fs::create_dir_all(parent)?;
     }
-    
+
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
-    
+
     Ok(IngestResult {
         source_path: source.to_owned(),
         hash,
@@ -336,22 +336,22 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
     let file = File::open(source)?;
     let metadata = file.metadata()?;
     let size = metadata.len();
-    
+
     // Acquire shared lock with retry (prevents blocking on busy files)
     let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
-    
+
     // Stream hash - deref Flock to get underlying File
     let hash = stream_hash(&*locked_file)?;
     let cas_target = cas_path(cas_root, &hash, size);
-    
+
     // Drop lock guard before rename
     drop(locked_file);
-    
+
     // Create CAS directory if needed
     if let Some(parent) = cas_target.parent() {
         fs::create_dir_all(parent)?;
     }
-    
+
     // Atomic move (zero-copy!) - handle race condition
     match fs::rename(source, &cas_target) {
         Ok(()) => {}
@@ -361,7 +361,7 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
         }
         Err(e) => return Err(e.into()),
     }
-    
+
     Ok(IngestResult {
         source_path: source.to_owned(),
         hash,
@@ -384,7 +384,7 @@ const INITIAL_RETRY_DELAY_MS: u64 = 10;
 /// Uses non-blocking lock attempts with exponential backoff delays.
 fn lock_with_retry(mut file: File, lock_type: FlockArg) -> Result<Flock<File>> {
     let mut delay_ms = INITIAL_RETRY_DELAY_MS;
-    
+
     for attempt in 0..MAX_LOCK_RETRIES {
         // Try non-blocking lock first
         let lock_arg = match lock_type {
@@ -392,7 +392,7 @@ fn lock_with_retry(mut file: File, lock_type: FlockArg) -> Result<Flock<File>> {
             FlockArg::LockExclusive => FlockArg::LockExclusiveNonblock,
             other => other,
         };
-        
+
         match Flock::lock(file, lock_arg) {
             Ok(guard) => return Ok(guard),
             Err((returned_file, err)) => {
@@ -404,23 +404,25 @@ fn lock_with_retry(mut file: File, lock_type: FlockArg) -> Result<Flock<File>> {
                     file = returned_file;
                     continue;
                 }
-                
+
                 // Last attempt: try blocking lock
                 if attempt == MAX_LOCK_RETRIES - 1 {
-                    return Flock::lock(returned_file, lock_type)
-                        .map_err(|(_, e)| CasError::Io(std::io::Error::new(
+                    return Flock::lock(returned_file, lock_type).map_err(|(_, e)| {
+                        CasError::Io(std::io::Error::new(
                             std::io::ErrorKind::WouldBlock,
-                            format!("Failed to acquire lock after {} retries: {}", MAX_LOCK_RETRIES, e)
-                        )));
+                            format!(
+                                "Failed to acquire lock after {} retries: {}",
+                                MAX_LOCK_RETRIES, e
+                            ),
+                        ))
+                    });
                 }
-                
-                return Err(CasError::Io(std::io::Error::other(
-                    err.to_string()
-                )));
+
+                return Err(CasError::Io(std::io::Error::other(err.to_string())));
             }
         }
     }
-    
+
     unreachable!()
 }
 
@@ -449,33 +451,33 @@ fn cas_path(cas_root: &Path, hash: &Blake3Hash, size: u64) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::io::Write;
+    use tempfile::TempDir;
 
     fn setup() -> (TempDir, TempDir, PathBuf) {
         let source_dir = TempDir::new().unwrap();
         let cas_dir = TempDir::new().unwrap();
-        
+
         let test_file = source_dir.path().join("test.txt");
         let mut f = File::create(&test_file).unwrap();
         f.write_all(b"Hello, zero-copy!").unwrap();
-        
+
         (source_dir, cas_dir, test_file)
     }
 
     #[test]
     fn test_solid_tier2_zero_copy() {
         let (_source_dir, cas_dir, test_file) = setup();
-        
+
         let result = ingest_solid_tier2(&test_file, cas_dir.path()).unwrap();
-        
+
         // Original still exists (Tier-2 keeps it)
         assert!(test_file.exists());
-        
+
         // CAS has the file
         let cas_file = cas_path(cas_dir.path(), &result.hash, result.size);
         assert!(cas_file.exists());
-        
+
         // Same content
         assert_eq!(fs::read(&test_file).unwrap(), fs::read(&cas_file).unwrap());
     }
@@ -484,12 +486,12 @@ mod tests {
     fn test_phantom_zero_copy() {
         let (_source_dir, cas_dir, test_file) = setup();
         let original_content = fs::read(&test_file).unwrap();
-        
+
         let result = ingest_phantom(&test_file, cas_dir.path()).unwrap();
-        
+
         // Original is gone (moved)
         assert!(!test_file.exists());
-        
+
         // CAS has the file
         let cas_file = cas_path(cas_dir.path(), &result.hash, result.size);
         assert!(cas_file.exists());

@@ -54,7 +54,7 @@ impl LinkFarm {
     }
 
     /// Populate the target directory with hard links based on one or more manifests.
-    /// 
+    ///
     /// If multiple manifests are provided, they are applied in order. Files in later
     /// manifests will overwrite those in earlier ones at the same path.
     pub fn populate(&self, manifests: &[Manifest], target: &Path) -> Result<()> {
@@ -103,8 +103,8 @@ impl LinkFarm {
                     // Apply metadata (mode, mtime)
                     use std::os::unix::fs::PermissionsExt;
                     fs::set_permissions(&dest_path, fs::Permissions::from_mode(entry.mode))?;
-                    
-                    // Note: Setting mtime requires filetime or similar, 
+
+                    // Note: Setting mtime requires filetime or similar,
                     // skipping for MVP unless we add dependency.
                     // But permissions are CRITICAL for execution.
                 } else if entry.is_symlink() {
@@ -114,8 +114,9 @@ impl LinkFarm {
                         .get(&entry.content_hash)
                         .map_err(RuntimeError::Cas)?;
 
-                    let target_path_str = String::from_utf8(target_bytes)
-                        .map_err(|_| RuntimeError::Overlay("Invalid UTF-8 in symlink target".into()))?;
+                    let target_path_str = String::from_utf8(target_bytes).map_err(|_| {
+                        RuntimeError::Overlay("Invalid UTF-8 in symlink target".into())
+                    })?;
 
                     // Remove existing file if present
                     if dest_path.exists() {

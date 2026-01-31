@@ -277,9 +277,10 @@ impl WorkerPool {
         if mtime_before != mtime_after {
             // File modified during read - discard
             let _ = fs::remove_file(&temp_path);
-            return Err(CasError::Io(std::io::Error::other(
-                format!("File modified during read: {}", path.display()),
-            )));
+            return Err(CasError::Io(std::io::Error::other(format!(
+                "File modified during read: {}",
+                path.display()
+            ))));
         }
 
         Ok(Some(ProcessedFile {
@@ -484,8 +485,7 @@ impl IngestPipeline {
         // Spawn scanner
         let scanner_root = root.to_owned();
         let scanner = WatchFirstScanner::new(scanner_root, path_tx);
-        let scanner_handle: JoinHandle<Result<u64>> =
-            thread::spawn(move || scanner.run());
+        let scanner_handle: JoinHandle<Result<u64>> = thread::spawn(move || scanner.run());
 
         // Create worker pool
         let pool = Arc::new(WorkerPool::new(self.config.clone(), cas_root.to_owned()));

@@ -14,9 +14,7 @@ use std::sync::RwLock;
 use tracing::debug;
 
 /// Global config instance
-static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| {
-    RwLock::new(Config::load().unwrap_or_default())
-});
+static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| RwLock::new(Config::load().unwrap_or_default()));
 
 /// Get global config (read-only)
 pub fn config() -> std::sync::RwLockReadGuard<'static, Config> {
@@ -65,7 +63,7 @@ impl Config {
     /// Load config from standard locations
     pub fn load() -> Result<Self, ConfigError> {
         let mut config = Config::default();
-        
+
         // 1. Load global config (~/.vrift/config.toml)
         if let Some(global_path) = Self::global_config_path() {
             if global_path.exists() {
@@ -74,7 +72,7 @@ impl Config {
                 config = toml::from_str(&contents)?;
             }
         }
-        
+
         // 2. Load project config (.vrift/config.toml) - overrides global
         let project_path = Path::new(".vrift/config.toml");
         if project_path.exists() {
@@ -83,18 +81,18 @@ impl Config {
             let project_config: Config = toml::from_str(&contents)?;
             config.merge(project_config);
         }
-        
+
         // 3. Apply environment variable overrides
         config.apply_env_overrides();
-        
+
         Ok(config)
     }
-    
+
     /// Global config path: ~/.vrift/config.toml
     pub fn global_config_path() -> Option<PathBuf> {
         dirs::home_dir().map(|h| h.join(".vrift/config.toml"))
     }
-    
+
     /// Merge another config (project overrides)
     fn merge(&mut self, other: Config) {
         // Only merge non-default values (simplified: just replace)
@@ -109,7 +107,7 @@ impl Config {
             self.security.exclude_patterns = other.security.exclude_patterns;
         }
     }
-    
+
     /// Apply environment variable overrides
     fn apply_env_overrides(&mut self) {
         if let Ok(path) = std::env::var("VR_THE_SOURCE") {
@@ -121,7 +119,7 @@ impl Config {
             }
         }
     }
-    
+
     /// Generate default config TOML string
     pub fn default_toml() -> String {
         toml::to_string_pretty(&Config::default()).unwrap()
@@ -282,6 +280,9 @@ mod tests {
         let config = Config::default();
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
-        assert_eq!(config.tiers.tier1_patterns.len(), parsed.tiers.tier1_patterns.len());
+        assert_eq!(
+            config.tiers.tier1_patterns.len(),
+            parsed.tiers.tier1_patterns.len()
+        );
     }
 }

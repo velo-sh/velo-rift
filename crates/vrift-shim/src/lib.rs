@@ -413,11 +413,8 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: size_t) -> 
             // existing content is wasted work
             if !vfd.o_trunc {
                 // Copy existing content to temp file
-                let written = libc::write(
-                    temp_fd,
-                    vfd.mmap.as_ptr() as *const c_void,
-                    vfd.mmap.len(),
-                );
+                let written =
+                    libc::write(temp_fd, vfd.mmap.as_ptr() as *const c_void, vfd.mmap.len());
 
                 if written != vfd.mmap.len() as ssize_t {
                     error!("Failed to copy content for BBW");
@@ -425,7 +422,10 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: size_t) -> 
                     return -1;
                 }
             } else {
-                debug!("O_TRUNC fast-path: skipping {} bytes content copy", vfd.mmap.len());
+                debug!(
+                    "O_TRUNC fast-path: skipping {} bytes content copy",
+                    vfd.mmap.len()
+                );
             }
 
             // Seek to the current position

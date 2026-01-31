@@ -129,14 +129,13 @@ fn run_isolated_linux(
 fn write_id_map(path: &str, real_id: u32, inside_id: u32, count: u32) -> Result<()> {
     // Special case for setgroups: usually we write "deny"
     if path.ends_with("setgroups") {
-         std::fs::write(path, "deny")
+        std::fs::write(path, "deny")
             .with_context(|| format!("Failed to write deny to {}", path))?;
-         return Ok(());
+        return Ok(());
     }
 
     let content = format!("{} {} {}", inside_id, real_id, count);
-    std::fs::write(path, content)
-        .with_context(|| format!("Failed to write id map to {}", path))?;
+    std::fs::write(path, content).with_context(|| format!("Failed to write id map to {}", path))?;
     Ok(())
 }
 
@@ -194,35 +193,36 @@ fn setup_mounts(
     // 3. Mount OverlayFS
     println!("   [Isolation] Mounting OverlayFS...");
     let overlay = OverlayManager::new(lower_dir.clone(), upper_dir, work_dir, merged_dir.clone());
-    
+
     // Fallback logic variables
     let mut use_overlay = true;
     let root_for_pivot = if let Err(e) = overlay.mount() {
         println!("   [Isolation] ⚠️ OverlayFS mount failed: {}", e);
         println!("   [Isolation] ⚠️ Falling back to Read-Only Bind Mount (No CoW).");
-        
+
         // Fallback: Use lower_dir as root, but make it Read-Only to protect CAS hardlinks.
         use_overlay = false;
-        
+
         // To pivot_root, 'new_root' must be a mount point.
         // Bind mount lower_dir to itself.
         // We use nix::mount::mount directly.
         use nix::mount::{mount, MsFlags};
-        
+
         mount(
             Some(&lower_dir),
             &lower_dir,
             None::<&str>,
             MsFlags::MS_BIND,
             None::<&str>,
-        ).context("Failed to bind mount lower_dir for fallback")?;
-        
+        )
+        .context("Failed to bind mount lower_dir for fallback")?;
+
         // We will maintain it RW for a moment to create .old_root, then remount RO?
-        // Actually, we can create .old_root before remounting RO logic if we want, 
-        // but typically we can just create it now since we are still outside the namespace restriction effectively 
+        // Actually, we can create .old_root before remounting RO logic if we want,
+        // but typically we can just create it now since we are still outside the namespace restriction effectively
         // (or rather we are root inside it).
-        
-        lower_dir 
+
+        lower_dir
     } else {
         merged_dir
     };
@@ -236,18 +236,19 @@ fn setup_mounts(
     println!("   [Isolation] Pivot Root -> . (old=.old_root)");
     NamespaceManager::pivot_root(Path::new("."), Path::new(".old_root"))
         .context("Failed to pivot_root")?;
-        
+
     // If fallback, remount root as Read-Only NOW
     if !use_overlay {
         use nix::mount::{mount, MsFlags};
-         println!("   [Isolation] Remounting root Read-Only...");
-         mount(
+        println!("   [Isolation] Remounting root Read-Only...");
+        mount(
             Some(""),
             Path::new("/"),
             None::<&str>,
             MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
             None::<&str>,
-        ).context("Failed to remount root Read-Only")?;
+        )
+        .context("Failed to remount root Read-Only")?;
     }
 
     // 5. Mount Pseudo-FS (/proc, /sys, /dev) in the new root

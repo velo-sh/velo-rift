@@ -13,7 +13,7 @@
 pub mod lmdb;
 pub mod tier;
 
-pub use lmdb::{AssetTier, LmdbManifest, ManifestEntry, LmdbError, LmdbResult};
+pub use lmdb::{AssetTier, LmdbError, LmdbManifest, LmdbResult, ManifestEntry};
 pub use tier::{classify_tier, TierClassifier, DEFAULT_TIER1_PATTERNS, DEFAULT_TIER2_PATTERNS};
 
 use std::collections::HashMap;

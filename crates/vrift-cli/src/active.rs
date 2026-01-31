@@ -15,16 +15,16 @@ use tracing::{debug, info};
 pub struct Session {
     /// Session creation timestamp (Unix epoch)
     pub created_at: u64,
-    
+
     /// Operational mode
     pub mode: ProjectionMode,
-    
+
     /// ABI context for binary compatibility
     pub abi_context: AbiContext,
-    
+
     /// Project root directory (absolute path)
     pub project_root: PathBuf,
-    
+
     /// Whether the session is active
     pub active: bool,
 }
@@ -35,7 +35,7 @@ pub enum ProjectionMode {
     /// Physical files remain in project (safe rollback)
     #[default]
     Solid,
-    
+
     /// Pure virtual projection (requires restoration)
     Phantom,
 }
@@ -54,13 +54,13 @@ impl std::fmt::Display for ProjectionMode {
 pub struct AbiContext {
     /// Target triple (e.g., "x86_64-unknown-linux-gnu")
     pub target_triple: String,
-    
+
     /// Detected toolchain version
     pub toolchain_version: Option<String>,
-    
+
     /// Python version if applicable
     pub python_version: Option<String>,
-    
+
     /// Node.js version if applicable
     pub node_version: Option<String>,
 }
@@ -74,66 +74,62 @@ pub struct VriftDir {
 impl VriftDir {
     /// Standard directory name
     pub const DIR_NAME: &'static str = ".vrift";
-    
+
     /// Create a VriftDir for the given project root
     pub fn new(project_root: &Path) -> Self {
         Self {
             root: project_root.join(Self::DIR_NAME),
         }
     }
-    
+
     /// Create the directory structure if it doesn't exist
     pub fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.root)
             .with_context(|| format!("Failed to create {}", self.root.display()))?;
-        
+
         // Create manifest.lmdb directory (LMDB needs a directory)
-        fs::create_dir_all(self.manifest_path())
-            .context("Failed to create manifest directory")?;
-        
+        fs::create_dir_all(self.manifest_path()).context("Failed to create manifest directory")?;
+
         Ok(())
     }
-    
+
     /// Path to session.json
     pub fn session_path(&self) -> PathBuf {
         self.root.join("session.json")
     }
-    
+
     /// Path to manifest.lmdb (directory)
     pub fn manifest_path(&self) -> PathBuf {
         self.root.join("manifest.lmdb")
     }
-    
+
     /// Check if a session exists
     pub fn has_session(&self) -> bool {
         self.session_path().exists()
     }
-    
+
     /// Load existing session
     pub fn load_session(&self) -> Result<Session> {
         let content = fs::read_to_string(self.session_path())
             .with_context(|| "Failed to read session.json")?;
-        let session: Session = serde_json::from_str(&content)
-            .with_context(|| "Failed to parse session.json")?;
+        let session: Session =
+            serde_json::from_str(&content).with_context(|| "Failed to parse session.json")?;
         Ok(session)
     }
-    
+
     /// Save session
     pub fn save_session(&self, session: &Session) -> Result<()> {
-        let content = serde_json::to_string_pretty(session)
-            .with_context(|| "Failed to serialize session")?;
-        fs::write(self.session_path(), content)
-            .with_context(|| "Failed to write session.json")?;
+        let content =
+            serde_json::to_string_pretty(session).with_context(|| "Failed to serialize session")?;
+        fs::write(self.session_path(), content).with_context(|| "Failed to write session.json")?;
         Ok(())
     }
 }
 
 /// Detect ABI context from the current environment
 pub fn detect_abi_context() -> AbiContext {
-    let target_triple = std::env::consts::ARCH.to_string()
-        + "-"
-        + std::env::consts::OS;
-    
+    let target_triple = std::env::consts::ARCH.to_string() + "-" + std::env::consts::OS;
+
     AbiContext {
         target_triple,
         toolchain_version: detect_rust_version(),
@@ -171,14 +167,15 @@ fn detect_node_version() -> Option<String> {
 
 /// Activate Velo projection for a project directory
 pub fn activate(project_root: &Path, mode: ProjectionMode) -> Result<Session> {
-    let project_root = project_root.canonicalize()
+    let project_root = project_root
+        .canonicalize()
         .with_context(|| format!("Invalid project path: {}", project_root.display()))?;
-    
+
     let vrift = VriftDir::new(&project_root);
-    
+
     // Create directory structure
     vrift.ensure()?;
-    
+
     // Check for existing session
     if vrift.has_session() {
         let existing = vrift.load_session()?;
@@ -187,11 +184,11 @@ pub fn activate(project_root: &Path, mode: ProjectionMode) -> Result<Session> {
             return Ok(existing);
         }
     }
-    
+
     // Detect ABI context
     let abi_context = detect_abi_context();
     debug!(?abi_context, "Detected ABI context");
-    
+
     // Create new session
     let session = Session {
         created_at: std::time::SystemTime::now()
@@ -203,34 +200,35 @@ pub fn activate(project_root: &Path, mode: ProjectionMode) -> Result<Session> {
         project_root: project_root.clone(),
         active: true,
     };
-    
+
     // Save session
     vrift.save_session(&session)?;
-    
-    info!("Velo is active in [{}] mode. {}", 
+
+    info!(
+        "Velo is active in [{}] mode. {}",
         mode,
         match mode {
             ProjectionMode::Solid => "Physical files are safe.",
             ProjectionMode::Phantom => "Project is now purely virtual.",
         }
     );
-    
+
     Ok(session)
 }
 
 /// Deactivate Velo projection
 pub fn deactivate(project_root: &Path) -> Result<()> {
     let vrift = VriftDir::new(project_root);
-    
+
     if !vrift.has_session() {
         info!("No active Velo session found");
         return Ok(());
     }
-    
+
     let mut session = vrift.load_session()?;
     session.active = false;
     vrift.save_session(&session)?;
-    
+
     info!("Velo projection deactivated");
     Ok(())
 }
@@ -277,19 +275,19 @@ pub enum ValidationStatus {
 #[allow(dead_code)]
 pub fn startup_recovery(project_root: &Path, cas_root: &Path) -> Result<RecoveryReport> {
     let vrift = VriftDir::new(project_root);
-    
+
     if !vrift.has_session() {
         debug!("No session found, nothing to recover");
         return Ok(RecoveryReport::default());
     }
-    
+
     let session = vrift.load_session()?;
     info!(
         mode = %session.mode,
         created = session.created_at,
         "Recovering session"
     );
-    
+
     // Load manifest if exists
     let manifest_path = vrift.manifest_path();
     if !manifest_path.exists() {
@@ -300,17 +298,17 @@ pub fn startup_recovery(project_root: &Path, cas_root: &Path) -> Result<Recovery
             ..Default::default()
         });
     }
-    
+
     // Validate projections
     let validation_results = validate_projections(project_root, cas_root, &manifest_path)?;
-    
+
     let mut report = RecoveryReport {
         session_found: true,
         manifest_loaded: true,
         total_entries: validation_results.len(),
         ..Default::default()
     };
-    
+
     for result in &validation_results {
         match &result.status {
             ValidationStatus::Valid => report.valid_entries += 1,
@@ -320,7 +318,7 @@ pub fn startup_recovery(project_root: &Path, cas_root: &Path) -> Result<Recovery
             ValidationStatus::NotProjected => report.not_projected += 1,
         }
     }
-    
+
     // Auto-repair if needed
     if report.needs_repair() {
         info!(
@@ -331,7 +329,7 @@ pub fn startup_recovery(project_root: &Path, cas_root: &Path) -> Result<Recovery
         let repaired = auto_repair(&validation_results, cas_root)?;
         report.repaired_entries = repaired;
     }
-    
+
     Ok(report)
 }
 
@@ -356,7 +354,7 @@ impl RecoveryReport {
     pub fn needs_repair(&self) -> bool {
         self.broken_symlinks > 0 || self.inode_mismatches > 0
     }
-    
+
     /// Check if all entries are valid
     pub fn all_valid(&self) -> bool {
         self.valid_entries == self.total_entries
@@ -372,20 +370,20 @@ fn validate_projections(
     // Note: Full implementation would iterate manifest entries
     // For now, we validate the CAS directory structure
     let results = Vec::new();
-    
+
     // Check CAS root exists
     if !cas_root.exists() {
         debug!(path = %cas_root.display(), "CAS root does not exist");
         return Ok(results);
     }
-    
+
     // In full implementation:
     // 1. Open LMDB manifest
     // 2. Iterate all entries
     // 3. For each entry, check if projection is valid:
     //    - Tier-1: verify symlink points to correct CAS blob
     //    - Tier-2: verify hardlink inode matches CAS blob
-    
+
     debug!("Projection validation complete");
     Ok(results)
 }
@@ -393,12 +391,12 @@ fn validate_projections(
 /// Auto-repair broken projections
 fn auto_repair(results: &[ValidationResult], cas_root: &Path) -> Result<usize> {
     let mut repaired = 0;
-    
+
     for result in results {
         if result.status == ValidationStatus::Valid {
             continue;
         }
-        
+
         match &result.status {
             ValidationStatus::BrokenSymlink(expected_hash) => {
                 // Re-create symlink to CAS blob
@@ -407,7 +405,7 @@ fn auto_repair(results: &[ValidationResult], cas_root: &Path) -> Result<usize> {
                     .join(&expected_hash[..2])
                     .join(&expected_hash[2..4])
                     .join(expected_hash);
-                
+
                 if cas_blob.exists() {
                     // Remove broken symlink and recreate
                     let _ = fs::remove_file(&result.path);
@@ -427,7 +425,7 @@ fn auto_repair(results: &[ValidationResult], cas_root: &Path) -> Result<usize> {
             _ => {}
         }
     }
-    
+
     Ok(repaired)
 }
 
@@ -440,9 +438,9 @@ mod tests {
     fn test_vrift_dir_structure() {
         let temp = TempDir::new().unwrap();
         let vrift = VriftDir::new(temp.path());
-        
+
         vrift.ensure().unwrap();
-        
+
         assert!(vrift.root.exists());
         assert!(vrift.manifest_path().exists());
     }
@@ -452,7 +450,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let vrift = VriftDir::new(temp.path());
         vrift.ensure().unwrap();
-        
+
         let session = Session {
             created_at: 1706448000,
             mode: ProjectionMode::Solid,
@@ -460,10 +458,10 @@ mod tests {
             project_root: temp.path().to_path_buf(),
             active: true,
         };
-        
+
         vrift.save_session(&session).unwrap();
         let loaded = vrift.load_session().unwrap();
-        
+
         assert_eq!(loaded.mode, ProjectionMode::Solid);
         assert!(loaded.active);
     }
@@ -481,34 +479,36 @@ mod tests {
     #[test]
     fn test_activate_creates_session() {
         let temp = TempDir::new().unwrap();
-        
+
         let session = activate(temp.path(), ProjectionMode::Solid).unwrap();
-        
+
         assert!(session.active);
         assert_eq!(session.mode, ProjectionMode::Solid);
-        assert_eq!(session.project_root.canonicalize().unwrap(), 
-                   temp.path().canonicalize().unwrap());
+        assert_eq!(
+            session.project_root.canonicalize().unwrap(),
+            temp.path().canonicalize().unwrap()
+        );
     }
 
     #[test]
     fn test_activate_phantom_mode() {
         let temp = TempDir::new().unwrap();
-        
+
         let session = activate(temp.path(), ProjectionMode::Phantom).unwrap();
-        
+
         assert_eq!(session.mode, ProjectionMode::Phantom);
     }
 
     #[test]
     fn test_deactivate_sets_inactive() {
         let temp = TempDir::new().unwrap();
-        
+
         // First activate
         activate(temp.path(), ProjectionMode::Solid).unwrap();
-        
+
         // Then deactivate
         deactivate(temp.path()).unwrap();
-        
+
         // Verify session is inactive
         let vrift = VriftDir::new(temp.path());
         let session = vrift.load_session().unwrap();
@@ -519,10 +519,10 @@ mod tests {
     fn test_startup_recovery_no_session() {
         let temp = TempDir::new().unwrap();
         let cas_dir = TempDir::new().unwrap();
-        
+
         // No session exists - recovery should return default
         let report = startup_recovery(temp.path(), cas_dir.path()).unwrap();
-        
+
         assert!(!report.session_found);
         assert!(!report.manifest_loaded);
         assert_eq!(report.total_entries, 0);
@@ -532,13 +532,13 @@ mod tests {
     fn test_startup_recovery_with_session() {
         let temp = TempDir::new().unwrap();
         let cas_dir = TempDir::new().unwrap();
-        
+
         // Create a session first
         activate(temp.path(), ProjectionMode::Solid).unwrap();
-        
+
         // Run recovery
         let report = startup_recovery(temp.path(), cas_dir.path()).unwrap();
-        
+
         assert!(report.session_found);
         // Manifest may or may not be loaded depending on if LMDB was created
     }
@@ -546,15 +546,24 @@ mod tests {
     #[test]
     fn test_recovery_report_needs_repair() {
         let mut report = RecoveryReport::default();
-        
-        assert!(!report.needs_repair(), "Empty report should not need repair");
-        
+
+        assert!(
+            !report.needs_repair(),
+            "Empty report should not need repair"
+        );
+
         report.broken_symlinks = 1;
-        assert!(report.needs_repair(), "Report with broken symlinks needs repair");
-        
+        assert!(
+            report.needs_repair(),
+            "Report with broken symlinks needs repair"
+        );
+
         report.broken_symlinks = 0;
         report.inode_mismatches = 1;
-        assert!(report.needs_repair(), "Report with inode mismatches needs repair");
+        assert!(
+            report.needs_repair(),
+            "Report with inode mismatches needs repair"
+        );
     }
 
     #[test]
@@ -564,9 +573,9 @@ mod tests {
             valid_entries: 5,
             ..Default::default()
         };
-        
+
         assert!(report.all_valid(), "All entries should be valid");
-        
+
         report.valid_entries = 3;
         assert!(!report.all_valid(), "Not all entries are valid");
     }
@@ -587,11 +596,10 @@ mod tests {
     #[test]
     fn test_abi_context_detection() {
         let ctx = detect_abi_context();
-        
+
         // Should at least have target triple
         assert!(!ctx.target_triple.is_empty());
         // Platform should be part of target
         assert!(ctx.target_triple.contains(std::env::consts::OS));
     }
 }
-

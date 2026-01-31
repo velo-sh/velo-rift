@@ -19,11 +19,8 @@ use crate::{Blake3Hash, CasStore, Result};
 /// for the current platform.
 pub trait IngestBackend: Send + Sync {
     /// Store multiple files to CAS in batch, returning their hashes
-    fn store_files_batch(
-        &self,
-        cas: Arc<CasStore>,
-        paths: Vec<PathBuf>,
-    ) -> Result<Vec<Blake3Hash>>;
+    fn store_files_batch(&self, cas: Arc<CasStore>, paths: Vec<PathBuf>)
+        -> Result<Vec<Blake3Hash>>;
 
     /// Get the backend name for logging/debugging
     fn name(&self) -> &'static str;
@@ -67,33 +64,33 @@ mod uring {
             // Run the async io_uring operations in a tokio-uring runtime
             tokio_uring::start(async move {
                 let mut hashes = Vec::with_capacity(paths.len());
-                
+
                 // Process in chunks to limit memory usage
                 for chunk in paths.chunks(self.concurrency) {
                     let mut handles = Vec::with_capacity(chunk.len());
-                    
+
                     for path in chunk {
                         let cas_clone = cas.clone();
                         let path_clone = path.clone();
-                        
+
                         // Spawn async task for each file
                         let handle = tokio_uring::spawn(async move {
                             // Read file using io_uring
                             let file = UringFile::open(&path_clone).await?;
                             let meta = fs::metadata(&path_clone)?;
                             let size = meta.len() as usize;
-                            
+
                             // Allocate buffer and read
                             let buf = vec![0u8; size];
                             let (res, buf) = file.read_at(buf, 0).await;
                             res?;
-                            
+
                             // Store in CAS (sync operation, but file read was async)
                             cas_clone.store(&buf)
                         });
                         handles.push(handle);
                     }
-                    
+
                     // Collect results from this chunk
                     for handle in handles {
                         let hash = handle.await.map_err(|e| {
@@ -105,7 +102,7 @@ mod uring {
                         hashes.push(hash);
                     }
                 }
-                
+
                 Ok(hashes)
             })
         }
@@ -147,10 +144,8 @@ mod gcd {
         ) -> Result<Vec<Blake3Hash>> {
             // Use Rayon for parallel processing
             // The CasStore.store() is already thread-safe with unique temp files
-            let results: Vec<Result<Blake3Hash>> = paths
-                .par_iter()
-                .map(|path| cas.store_file(path))
-                .collect();
+            let results: Vec<Result<Blake3Hash>> =
+                paths.par_iter().map(|path| cas.store_file(path)).collect();
 
             // Collect results, propagating first error
             let mut hashes = Vec::with_capacity(results.len());
@@ -192,10 +187,8 @@ mod rayon_fallback {
             cas: Arc<CasStore>,
             paths: Vec<PathBuf>,
         ) -> Result<Vec<Blake3Hash>> {
-            let results: Vec<Result<Blake3Hash>> = paths
-                .par_iter()
-                .map(|path| cas.store_file(path))
-                .collect();
+            let results: Vec<Result<Blake3Hash>> =
+                paths.par_iter().map(|path| cas.store_file(path)).collect();
 
             let mut hashes = Vec::with_capacity(results.len());
             for result in results {
@@ -241,10 +234,7 @@ pub fn create_backend() -> Box<dyn IngestBackend> {
         Box::new(gcd::GcdBackend::new())
     }
 
-    #[cfg(not(any(
-        all(target_os = "linux", feature = "io_uring"),
-        target_os = "macos"
-    )))]
+    #[cfg(not(any(all(target_os = "linux", feature = "io_uring"), target_os = "macos")))]
     {
         tracing::info!("Using Rayon fallback backend");
         Box::new(rayon_fallback::RayonBackend::new())
@@ -269,9 +259,9 @@ pub fn macos_backend() -> impl IngestBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs::File;
     use std::io::Write;
+    use tempfile::TempDir;
 
     #[test]
     fn test_backend_creation() {
@@ -304,7 +294,7 @@ mod tests {
         let hashes = backend.store_files_batch(cas.clone(), paths).unwrap();
 
         assert_eq!(hashes.len(), 10);
-        
+
         // Verify all blobs exist
         let stats = cas.stats().unwrap();
         assert_eq!(stats.blob_count, 10);
@@ -321,7 +311,7 @@ mod tests {
         for i in 0..10 {
             let path = src_dir.join(format!("file_{}.txt", i));
             let mut f = File::create(&path).unwrap();
-            writeln!(f, "same content").unwrap();  // All same
+            writeln!(f, "same content").unwrap(); // All same
         }
 
         let cas = Arc::new(CasStore::new(&cas_dir).unwrap());

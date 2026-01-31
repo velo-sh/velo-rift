@@ -20,11 +20,11 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
-mod isolation;
-mod daemon;
-mod mount;
 mod active;
+mod daemon;
 pub mod gc;
+mod isolation;
+mod mount;
 pub mod registry;
 mod security_filter;
 
@@ -38,7 +38,11 @@ use vrift_manifest::{Manifest, VnodeEntry};
 #[command(version, about, long_about = None)]
 struct Cli {
     /// TheSource™ storage root directory (global CAS)
-    #[arg(long = "the-source-root", env = "VR_THE_SOURCE", default_value = "~/.vrift/the_source")]
+    #[arg(
+        long = "the-source-root",
+        env = "VR_THE_SOURCE",
+        default_value = "~/.vrift/the_source"
+    )]
     the_source_root: PathBuf,
 
     #[command(subcommand)]
@@ -192,15 +196,15 @@ enum ConfigCommands {
         /// Create global config (~/.vrift/config.toml)
         #[arg(long)]
         global: bool,
-        
+
         /// Overwrite existing config
         #[arg(long)]
         force: bool,
     },
-    
+
     /// Show current configuration
     Show,
-    
+
     /// Show configuration file path
     Path,
 }
@@ -223,10 +227,15 @@ fn main() -> Result<()> {
     } = &cli.command
     {
         if *isolate {
-             // Validate inputs early
-             // We can't use cmd_run directly because it might want async eventually, 
-             // but current cmd_run for isolation calls isolation::run_isolated which is sync.
-             return isolation::run_isolated(command, manifest, &cli.the_source_root, base.as_deref());
+            // Validate inputs early
+            // We can't use cmd_run directly because it might want async eventually,
+            // but current cmd_run for isolation calls isolation::run_isolated which is sync.
+            return isolation::run_isolated(
+                command,
+                manifest,
+                &cli.the_source_root,
+                base.as_deref(),
+            );
         }
     }
 
@@ -250,15 +259,40 @@ async fn async_main(cli: Cli) -> Result<()> {
             tier,
             no_security_filter,
             show_excluded,
-        } => cmd_ingest(&cli.the_source_root, &directory, &output, prefix.as_deref(), parallel, threads, &mode, &tier, !no_security_filter, show_excluded).await,
+        } => {
+            cmd_ingest(
+                &cli.the_source_root,
+                &directory,
+                &output,
+                prefix.as_deref(),
+                parallel,
+                threads,
+                &mode,
+                &tier,
+                !no_security_filter,
+                show_excluded,
+            )
+            .await
+        }
         Commands::Run {
             manifest,
             command,
             isolate,
             base,
             daemon,
-        } => cmd_run(&cli.the_source_root, &manifest, &command, isolate, base.as_deref(), daemon), // isolate is false here
-        Commands::Status { manifest, session, directory } => {
+        } => cmd_run(
+            &cli.the_source_root,
+            &manifest,
+            &command,
+            isolate,
+            base.as_deref(),
+            daemon,
+        ), // isolate is false here
+        Commands::Status {
+            manifest,
+            session,
+            directory,
+        } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
             cmd_status(&cli.the_source_root, manifest.as_deref(), session, &dir)
         }
@@ -268,7 +302,9 @@ async fn async_main(cli: Cli) -> Result<()> {
         Commands::Daemon { command } => match command {
             DaemonCommands::Status => daemon::check_status().await,
         },
-        Commands::Watch { directory, output } => cmd_watch(&cli.the_source_root, &directory, &output).await,
+        Commands::Watch { directory, output } => {
+            cmd_watch(&cli.the_source_root, &directory, &output).await
+        }
         Commands::Active { phantom, directory } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
             let mode = if phantom {
@@ -297,23 +333,23 @@ fn cmd_config(command: ConfigCommands) -> Result<()> {
             } else {
                 PathBuf::from(".vrift/config.toml")
             };
-            
+
             if config_path.exists() && !force {
                 anyhow::bail!(
-                    "Config file already exists: {}\nUse --force to overwrite", 
+                    "Config file already exists: {}\nUse --force to overwrite",
                     config_path.display()
                 );
             }
-            
+
             // Create parent directory if needed
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            
+
             // Generate default config
             let default_config = vrift_config::Config::default_toml();
             std::fs::write(&config_path, default_config)?;
-            
+
             println!("Created config file: {}", config_path.display());
             Ok(())
         }
@@ -328,18 +364,25 @@ fn cmd_config(command: ConfigCommands) -> Result<()> {
             // Show which config files are being used
             if let Some(global_path) = vrift_config::Config::global_config_path() {
                 let exists = global_path.exists();
-                println!("Global: {} {}", global_path.display(), if exists { "[exists]" } else { "[not found]" });
+                println!(
+                    "Global: {} {}",
+                    global_path.display(),
+                    if exists { "[exists]" } else { "[not found]" }
+                );
             }
-            
+
             let project_path = PathBuf::from(".vrift/config.toml");
             let exists = project_path.exists();
-            println!("Project: {} {}", project_path.display(), if exists { "[exists]" } else { "[not found]" });
-            
+            println!(
+                "Project: {} {}",
+                project_path.display(),
+                if exists { "[exists]" } else { "[not found]" }
+            );
+
             Ok(())
         }
     }
 }
-
 
 fn cmd_resolve(cas_root: &Path, lockfile: &Path) -> Result<()> {
     if !lockfile.exists() {
@@ -470,7 +513,7 @@ async fn cmd_ingest(
     let mut files_ingested = 0u64;
     let mut bytes_ingested = 0u64;
     let mut unique_blobs = 0u64;
-    let mut new_bytes = 0u64;  // Track bytes from NEW blobs only
+    let mut new_bytes = 0u64; // Track bytes from NEW blobs only
     let mut fallback_count = 0u64;
 
     // Print header
@@ -478,7 +521,7 @@ async fn cmd_ingest(
     println!("   Mode:    {} ", mode_str);
     println!("   CAS:     {}", cas_root.display());
     println!("   Threads: {}", thread_count);
-    
+
     // Security filter status (RFC-0042)
     let mut security_filter = security_filter::SecurityFilter::new(security_filter_enabled);
     if !security_filter_enabled {
@@ -494,10 +537,10 @@ async fn cmd_ingest(
     scan_spinner.set_style(
         ProgressStyle::default_spinner()
             .template("   {spinner:.cyan} Scanning files... {msg}")
-            .unwrap()
+            .unwrap(),
     );
     scan_spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    
+
     let mut entry_count = 0u64;
     let entries: Vec<_> = WalkDir::new(directory)
         .into_iter()
@@ -516,7 +559,7 @@ async fn cmd_ingest(
     // Phase 1: Process directories and symlinks (must be serial for manifest order)
     // Also collect file paths for parallel processing
     let mut file_entries: Vec<(PathBuf, String, u64, u32)> = Vec::new(); // (path, manifest_path, mtime, mode)
-    
+
     for entry in &entries {
         let path = entry.path();
         let relative = path.strip_prefix(directory).unwrap_or(path);
@@ -561,19 +604,19 @@ async fn cmd_ingest(
             file_entries.push((path.to_path_buf(), manifest_path, mtime, metadata.mode()));
         } else if metadata.is_symlink() {
             let target = fs::read_link(path)?;
-            let target_str = target.to_str().ok_or_else(|| {
-                anyhow::anyhow!("Non-UTF8 symlink target: {}", path.display())
-            })?;
+            let target_str = target
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("Non-UTF8 symlink target: {}", path.display()))?;
 
             let content = target_str.as_bytes();
             let hash = CasStore::compute_hash(content);
-            
+
             // Check if blob exists before storing (for accurate unique count)
             let blob_exists = cas.blob_path_for_hash(&hash).is_some();
 
             // Store symlink target string as a blob in CAS
             cas.store(content)?;
-            
+
             // Count as unique if this blob was new
             if !blob_exists {
                 unique_blobs += 1;
@@ -588,10 +631,10 @@ async fn cmd_ingest(
     // Phase 2: Parallel file ingest with progress bar
     let file_count = file_entries.len();
     let ingest_start = Instant::now();
-    
+
     if file_count > 0 {
         let file_paths: Vec<PathBuf> = file_entries.iter().map(|(p, _, _, _)| p.clone()).collect();
-        
+
         // Determine ingest mode
         let ingest_mode = if is_phantom {
             vrift_cas::IngestMode::Phantom
@@ -634,25 +677,31 @@ async fn cmd_ingest(
                         new_blobs_clone.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                
+
                 // Throttle: update every 100 files AND minimum 100ms since last update
                 let count = idx + 1;
                 if count % 100 == 0 {
                     let now_ms = ingest_start_clone.elapsed().as_millis() as u64;
                     let last_ms = last_update.load(Ordering::Relaxed);
-                    
+
                     // 100ms throttle
                     if now_ms >= last_ms + 100 {
                         last_update.store(now_ms, Ordering::Relaxed);
-                        
+
                         let elapsed = now_ms as f64 / 1000.0;
-                        let rate = if elapsed > 0.0 { count as f64 / elapsed } else { 0.0 };
+                        let rate = if elapsed > 0.0 {
+                            count as f64 / elapsed
+                        } else {
+                            0.0
+                        };
                         let total_bytes = processed_bytes_clone.load(Ordering::Relaxed);
                         let new_count = new_blobs_clone.load(Ordering::Relaxed);
                         let dedup_pct = if count > 0 {
                             100.0 * (1.0 - (new_count as f64 / count as f64))
-                        } else { 0.0 };
-                        
+                        } else {
+                            0.0
+                        };
+
                         // Only update position when also updating message (saves resources)
                         pb_clone.set_position(count as u64);
                         pb_clone.set_message(format!(
@@ -672,21 +721,17 @@ async fn cmd_ingest(
 
             match result {
                 Ok(ingest_result) => {
-                    let vnode = VnodeEntry::new_file(
-                        ingest_result.hash,
-                        ingest_result.size,
-                        mtime,
-                        mode,
-                    );
+                    let vnode =
+                        VnodeEntry::new_file(ingest_result.hash, ingest_result.size, mtime, mode);
                     manifest.insert(manifest_path, vnode.clone());
                     lmdb_manifest.insert(manifest_path, vnode, asset_tier);
 
                     files_ingested += 1;
                     bytes_ingested += ingest_result.size;
-                    
+
                     if ingest_result.was_new {
                         unique_blobs += 1;
-                        new_bytes += ingest_result.size;  // Track actual new storage
+                        new_bytes += ingest_result.size; // Track actual new storage
                     }
                 }
                 Err(e) => {
@@ -695,8 +740,9 @@ async fn cmd_ingest(
                         if io_err.raw_os_error() == Some(libc::EXDEV) {
                             // Fallback to traditional copy
                             let path = &file_entries[i].0;
-                            let content = fs::read(path)
-                                .with_context(|| format!("Fallback read failed: {}", path.display()))?;
+                            let content = fs::read(path).with_context(|| {
+                                format!("Fallback read failed: {}", path.display())
+                            })?;
                             let hash = CasStore::compute_hash(&content);
                             let size = content.len() as u64;
                             cas.store(&content)?;
@@ -720,11 +766,13 @@ async fn cmd_ingest(
         }
         pb.finish_and_clear();
     }
-    
+
     let ingest_elapsed = ingest_start.elapsed();
 
     // Commit LMDB manifest
-    lmdb_manifest.commit().with_context(|| "Failed to commit LMDB manifest")?;
+    lmdb_manifest
+        .commit()
+        .with_context(|| "Failed to commit LMDB manifest")?;
 
     // Save legacy bincode manifest
     manifest
@@ -732,9 +780,13 @@ async fn cmd_ingest(
         .with_context(|| format!("Failed to save manifest to {}", output.display()))?;
 
     // Auto-register in global manifest registry (RFC-0041)
-    let output_abs = output.canonicalize().unwrap_or_else(|_| output.to_path_buf());
-    let directory_abs = directory.canonicalize().unwrap_or_else(|_| directory.to_path_buf());
-    
+    let output_abs = output
+        .canonicalize()
+        .unwrap_or_else(|_| output.to_path_buf());
+    let directory_abs = directory
+        .canonicalize()
+        .unwrap_or_else(|_| directory.to_path_buf());
+
     if let Ok(_lock) = registry::ManifestRegistry::acquire_lock() {
         if let Ok(mut reg) = registry::ManifestRegistry::load_or_create() {
             if let Ok(_uuid) = reg.register_manifest(&output_abs, &directory_abs) {
@@ -749,16 +801,28 @@ async fn cmd_ingest(
     } else {
         0.0
     };
-    
+
     // Calculate speed metrics
     let elapsed_secs = ingest_elapsed.as_secs_f64();
-    let files_per_sec = if elapsed_secs > 0.0 { files_ingested as f64 / elapsed_secs } else { 0.0 };
-    let bytes_per_sec = if elapsed_secs > 0.0 { bytes_ingested as f64 / elapsed_secs } else { 0.0 };
-    
+    let files_per_sec = if elapsed_secs > 0.0 {
+        files_ingested as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+    let bytes_per_sec = if elapsed_secs > 0.0 {
+        bytes_ingested as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+
     // Calculate REAL space savings: original size - new bytes added to CAS
     // Only was_new blobs add to CAS, duplicates are free!
     let saved_bytes = bytes_ingested.saturating_sub(new_bytes);
-    let saved_pct = if bytes_ingested > 0 { 100.0 * saved_bytes as f64 / bytes_ingested as f64 } else { 0.0 };
+    let saved_pct = if bytes_ingested > 0 {
+        100.0 * saved_bytes as f64 / bytes_ingested as f64
+    } else {
+        0.0
+    };
 
     // ANSI color codes
     const GREEN: &str = "\x1b[32m";
@@ -770,45 +834,83 @@ async fn cmd_ingest(
 
     // Pretty output with colors
     println!();
-    println!("{}{}╔════════════════════════════════════════╗{}", BOLD, GREEN, RESET);
-    println!("{}{}║  ✅ VRift Complete in {:.2}s          ║{}", BOLD, GREEN, elapsed_secs, RESET);
-    println!("{}{}╚════════════════════════════════════════╝{}", BOLD, GREEN, RESET);
+    println!(
+        "{}{}╔════════════════════════════════════════╗{}",
+        BOLD, GREEN, RESET
+    );
+    println!(
+        "{}{}║  ✅ VRift Complete in {:.2}s          ║{}",
+        BOLD, GREEN, elapsed_secs, RESET
+    );
+    println!(
+        "{}{}╚════════════════════════════════════════╝{}",
+        BOLD, GREEN, RESET
+    );
     println!();
-    
+
     // Files -> Blobs conversion (the key metric)
-    println!("   {}{}📁 {} files → {} blobs{}", 
-        BOLD, CYAN,
-        format_number(files_ingested), 
+    println!(
+        "   {}{}📁 {} files → {} blobs{}",
+        BOLD,
+        CYAN,
+        format_number(files_ingested),
         format_number(unique_blobs),
         RESET
     );
-    
+
     // Dedup ratio - highlight if significant
     if dedup_ratio > 10.0 {
-        println!("   {}{}🔥 {:.1}% DEDUP{} - Content-Addressable Magic!", BOLD, MAGENTA, dedup_ratio, RESET);
+        println!(
+            "   {}{}🔥 {:.1}% DEDUP{} - Content-Addressable Magic!",
+            BOLD, MAGENTA, dedup_ratio, RESET
+        );
     } else {
         println!("   {}📊 {:.1}% dedup{}", CYAN, dedup_ratio, RESET);
     }
-    
+
     // Speed
-    println!("   {}⚡ {:.0} files/sec • {}/s{}", YELLOW, files_per_sec, format_bytes(bytes_per_sec as u64), RESET);
-    
+    println!(
+        "   {}⚡ {:.0} files/sec • {}/s{}",
+        YELLOW,
+        files_per_sec,
+        format_bytes(bytes_per_sec as u64),
+        RESET
+    );
+
     // Space savings - prominent if significant
-    if saved_bytes > 1024 * 1024 {  // > 1MB
-        println!("   {}{}💾 SAVED {} ({:.1}% reduction){}", BOLD, GREEN, format_bytes(saved_bytes), saved_pct, RESET);
+    if saved_bytes > 1024 * 1024 {
+        // > 1MB
+        println!(
+            "   {}{}💾 SAVED {} ({:.1}% reduction){}",
+            BOLD,
+            GREEN,
+            format_bytes(saved_bytes),
+            saved_pct,
+            RESET
+        );
     } else if saved_bytes > 0 {
-        println!("   💾 Saved {} ({:.1}% reduction)", format_bytes(saved_bytes), saved_pct);
+        println!(
+            "   💾 Saved {} ({:.1}% reduction)",
+            format_bytes(saved_bytes),
+            saved_pct
+        );
     }
-    
+
     println!("   📄 Manifest: {}", output.display());
     if fallback_count > 0 {
-        println!("   {}⚠️  {} cross-device fallbacks{}", YELLOW, fallback_count, RESET);
+        println!(
+            "   {}⚠️  {} cross-device fallbacks{}",
+            YELLOW, fallback_count, RESET
+        );
     }
-    
+
     // Security filter summary (RFC-0042)
     let excluded_count = security_filter.excluded_count();
     if excluded_count > 0 {
-        println!("   {}🛡️  {} sensitive files excluded{}", CYAN, excluded_count, RESET);
+        println!(
+            "   {}🛡️  {} sensitive files excluded{}",
+            CYAN, excluded_count, RESET
+        );
         if !show_excluded {
             println!("       (use --show-excluded for details)");
         }
@@ -817,7 +919,6 @@ async fn cmd_ingest(
 
     Ok(())
 }
-
 
 /// Execute a command with Velo VFS shim
 fn cmd_run(
@@ -834,10 +935,12 @@ fn cmd_run(
 
     // Delegation to daemon
     if daemon_mode {
-       return tokio::task::block_in_place(|| {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        return tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
             rt.block_on(daemon::spawn_command(command, std::env::current_dir()?))
-       });
+        });
     }
 
     if !manifest.exists() {
@@ -948,7 +1051,12 @@ fn find_shim_library() -> Result<PathBuf> {
 }
 
 /// Display CAS, manifest, and optionally session statistics
-fn cmd_status(cas_root: &Path, manifest: Option<&Path>, show_session: bool, project_dir: &Path) -> Result<()> {
+fn cmd_status(
+    cas_root: &Path,
+    manifest: Option<&Path>,
+    show_session: bool,
+    project_dir: &Path,
+) -> Result<()> {
     println!("Velo Rift Status");
     println!("================");
     println!();
@@ -1106,7 +1214,10 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
 
     // Initial ingest
     println!("\n[Initial Scan]");
-    cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2", true, false).await?;
+    cmd_ingest(
+        cas_root, directory, output, None, true, None, "solid", "tier2", true, false,
+    )
+    .await?;
 
     // Create a channel to receive the events.
     let (tx, rx) = channel();
@@ -1134,11 +1245,16 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
                     Ok(_event) => {
                         // Filter out unrelated events if needed, but for now we react to everything
                         // println!("Change detected: {:?}", event.paths);
-                        
+
                         // Simple debounce
                         if last_ingest.elapsed() > debounce_duration {
                             println!("\n[Change Detected] Re-ingesting...");
-                            if let Err(e) = cmd_ingest(cas_root, directory, output, None, true, None, "solid", "tier2", true, false).await {
+                            if let Err(e) = cmd_ingest(
+                                cas_root, directory, output, None, true, None, "solid", "tier2",
+                                true, false,
+                            )
+                            .await
+                            {
                                 eprintln!("Ingest failed: {}", e);
                             }
                             last_ingest = std::time::Instant::now();

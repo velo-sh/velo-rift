@@ -289,9 +289,8 @@ impl ManifestRegistry {
                 continue;
             }
 
-            let manifest = Manifest::load(&entry.source_path).with_context(|| {
-                format!("Failed to load manifest: {:?}", entry.source_path)
-            })?;
+            let manifest = Manifest::load(&entry.source_path)
+                .with_context(|| format!("Failed to load manifest: {:?}", entry.source_path))?;
 
             for (_, vnode) in manifest.iter() {
                 hashes.insert(vnode.content_hash);
@@ -336,11 +335,11 @@ mod tests {
         let registry_path = temp.path().join("manifests.json");
 
         let mut registry = ManifestRegistry::new();
-        
+
         // Create a fake manifest file
         let manifest_path = temp.path().join("test.manifest");
         std::fs::write(&manifest_path, b"dummy").unwrap();
-        
+
         registry
             .register_manifest(&manifest_path, temp.path())
             .unwrap();

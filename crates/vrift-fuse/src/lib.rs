@@ -52,7 +52,7 @@ mod imp {
             // Performance Optimization: TTL=60s (Implies metadata caching).
             // auto_cache / kernel_cache causing issues with current fuser/libfuse version in CI.
             // TTL=60s provides significant getattr reduction.
-            
+
             let opts = vec![
                 fuser::MountOption::RO,
                 fuser::MountOption::FSName("vrift".to_string()),

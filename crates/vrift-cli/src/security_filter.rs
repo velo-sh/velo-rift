@@ -19,41 +19,26 @@ const DEFAULT_EXCLUDE_PATTERNS: &[&str] = &[
     "secrets.yml",
     "secrets.json",
     "secrets.toml",
-    
     // Credentials
     ".npmrc",
     ".netrc",
     ".git-credentials",
     ".pypirc",
-    
     // Private Keys
     "id_rsa",
     "id_ed25519",
     "id_ecdsa",
     "id_dsa",
-    
     // VRift Internal
     ".vrift",
     ".git",
 ];
 
 /// File extensions that indicate private keys or certificates
-const SENSITIVE_EXTENSIONS: &[&str] = &[
-    "pem",
-    "key",
-    "p12",
-    "pfx",
-    "jks",
-    "ppk",
-];
+const SENSITIVE_EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "jks", "ppk"];
 
 /// Directory names that contain credentials
-const SENSITIVE_DIRS: &[&str] = &[
-    ".aws",
-    ".docker",
-    ".secrets",
-    ".ssh",
-];
+const SENSITIVE_DIRS: &[&str] = &[".aws", ".docker", ".secrets", ".ssh"];
 
 /// Security filter for ingest operations
 pub struct SecurityFilter {
@@ -77,17 +62,17 @@ impl SecurityFilter {
             return None;
         }
 
-        let file_name = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         // Check exact filename matches
         for pattern in DEFAULT_EXCLUDE_PATTERNS {
             if file_name == *pattern {
                 return Some(match *pattern {
-                    ".env" | ".env.local" | ".env.development" | ".env.production" | 
-                    ".env.staging" | ".env.test" => "environment secrets",
-                    "secrets.yaml" | "secrets.yml" | "secrets.json" | "secrets.toml" => "secrets file",
+                    ".env" | ".env.local" | ".env.development" | ".env.production"
+                    | ".env.staging" | ".env.test" => "environment secrets",
+                    "secrets.yaml" | "secrets.yml" | "secrets.json" | "secrets.toml" => {
+                        "secrets file"
+                    }
                     ".npmrc" | ".netrc" | ".git-credentials" | ".pypirc" => "credentials",
                     "id_rsa" | "id_ed25519" | "id_ecdsa" | "id_dsa" => "SSH private key",
                     ".vrift" => "VRift internal",
@@ -174,17 +159,19 @@ mod tests {
     #[test]
     fn test_env_files() {
         let filter = SecurityFilter::new(true);
-        
+
         assert!(filter.should_exclude(Path::new(".env")).is_some());
         assert!(filter.should_exclude(Path::new(".env.local")).is_some());
-        assert!(filter.should_exclude(Path::new(".env.production")).is_some());
+        assert!(filter
+            .should_exclude(Path::new(".env.production"))
+            .is_some());
         assert!(filter.should_exclude(Path::new(".env.custom")).is_some());
     }
 
     #[test]
     fn test_private_keys() {
         let filter = SecurityFilter::new(true);
-        
+
         assert!(filter.should_exclude(Path::new("id_rsa")).is_some());
         assert!(filter.should_exclude(Path::new("server.key")).is_some());
         assert!(filter.should_exclude(Path::new("cert.pem")).is_some());
@@ -194,16 +181,20 @@ mod tests {
     #[test]
     fn test_sensitive_dirs() {
         let filter = SecurityFilter::new(true);
-        
-        assert!(filter.should_exclude(Path::new(".aws/credentials")).is_some());
-        assert!(filter.should_exclude(Path::new(".docker/config.json")).is_some());
+
+        assert!(filter
+            .should_exclude(Path::new(".aws/credentials"))
+            .is_some());
+        assert!(filter
+            .should_exclude(Path::new(".docker/config.json"))
+            .is_some());
         assert!(filter.should_exclude(Path::new(".ssh/id_rsa")).is_some());
     }
 
     #[test]
     fn test_safe_files() {
         let filter = SecurityFilter::new(true);
-        
+
         assert!(filter.should_exclude(Path::new("package.json")).is_none());
         assert!(filter.should_exclude(Path::new("index.js")).is_none());
         assert!(filter.should_exclude(Path::new("README.md")).is_none());
@@ -212,7 +203,7 @@ mod tests {
     #[test]
     fn test_disabled_filter() {
         let filter = SecurityFilter::new(false);
-        
+
         // When disabled, nothing should be excluded
         assert!(filter.should_exclude(Path::new(".env")).is_none());
         assert!(filter.should_exclude(Path::new("id_rsa")).is_none());

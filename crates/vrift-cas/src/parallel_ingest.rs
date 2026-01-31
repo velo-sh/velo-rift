@@ -165,19 +165,23 @@ pub fn parallel_ingest_with_threads(
     threads: Option<usize>,
 ) -> Vec<Result<IngestResult>> {
     let pool = create_thread_pool(threads);
-    
+
     // In-memory dedup set for tracking seen hashes
     // Used for both SolidTier1 and SolidTier2
     let seen_hashes: DashSet<String> = DashSet::new();
-    
+
     pool.install(|| {
         files
             .par_iter()
             .map(|path| {
                 match mode {
                     // Use dedup-aware versions to skip redundant hard_link calls
-                    IngestMode::SolidTier1 => ingest_solid_tier1_dedup(path, cas_root, &seen_hashes),
-                    IngestMode::SolidTier2 => ingest_solid_tier2_dedup(path, cas_root, &seen_hashes),
+                    IngestMode::SolidTier1 => {
+                        ingest_solid_tier1_dedup(path, cas_root, &seen_hashes)
+                    }
+                    IngestMode::SolidTier2 => {
+                        ingest_solid_tier2_dedup(path, cas_root, &seen_hashes)
+                    }
                     IngestMode::Phantom => ingest_phantom(path, cas_root),
                 }
             })
@@ -208,25 +212,29 @@ where
     F: Fn(&Result<IngestResult>, usize) + Send + Sync,
 {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    
+
     let pool = create_thread_pool(threads);
     let seen_hashes: DashSet<String> = DashSet::new();
     let counter = AtomicUsize::new(0);
-    
+
     pool.install(|| {
         files
             .par_iter()
             .map(|path| {
                 let result = match mode {
-                    IngestMode::SolidTier1 => ingest_solid_tier1_dedup(path, cas_root, &seen_hashes),
-                    IngestMode::SolidTier2 => ingest_solid_tier2_dedup(path, cas_root, &seen_hashes),
+                    IngestMode::SolidTier1 => {
+                        ingest_solid_tier1_dedup(path, cas_root, &seen_hashes)
+                    }
+                    IngestMode::SolidTier2 => {
+                        ingest_solid_tier2_dedup(path, cas_root, &seen_hashes)
+                    }
                     IngestMode::Phantom => ingest_phantom(path, cas_root),
                 };
-                
+
                 // Call progress callback with current count
                 let idx = counter.fetch_add(1, Ordering::Relaxed);
                 on_progress(&result, idx);
-                
+
                 result
             })
             .collect()
@@ -418,12 +426,8 @@ mod tests {
         }
 
         let cas = crate::CasStore::new(cas_dir.path()).unwrap();
-        let (results, stats) = parallel_ingest_with_fallback(
-            &files,
-            cas_dir.path(),
-            IngestMode::SolidTier2,
-            &cas,
-        );
+        let (results, stats) =
+            parallel_ingest_with_fallback(&files, cas_dir.path(), IngestMode::SolidTier2, &cas);
 
         assert_eq!(results.len(), 5);
         assert_eq!(stats.success_count, 5);

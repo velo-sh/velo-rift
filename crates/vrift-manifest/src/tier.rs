@@ -42,7 +42,7 @@ pub const DEFAULT_TIER2_PATTERNS: &[&str] = &[
 ];
 
 /// Configurable tier classifier
-/// 
+///
 /// Can be created with custom patterns from config file,
 /// or use default patterns via TierClassifier::default().
 #[derive(Debug, Clone)]
@@ -54,8 +54,14 @@ pub struct TierClassifier {
 impl Default for TierClassifier {
     fn default() -> Self {
         Self {
-            tier1_patterns: DEFAULT_TIER1_PATTERNS.iter().map(|s| s.to_string()).collect(),
-            tier2_patterns: DEFAULT_TIER2_PATTERNS.iter().map(|s| s.to_string()).collect(),
+            tier1_patterns: DEFAULT_TIER1_PATTERNS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            tier2_patterns: DEFAULT_TIER2_PATTERNS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }
@@ -63,9 +69,12 @@ impl Default for TierClassifier {
 impl TierClassifier {
     /// Create a new classifier with custom patterns
     pub fn new(tier1_patterns: Vec<String>, tier2_patterns: Vec<String>) -> Self {
-        Self { tier1_patterns, tier2_patterns }
+        Self {
+            tier1_patterns,
+            tier2_patterns,
+        }
     }
-    
+
     /// Classify a path into its appropriate asset tier
     pub fn classify(&self, path: &str) -> AssetTier {
         // Normalize path for matching
@@ -92,7 +101,7 @@ impl TierClassifier {
         // Default: Tier-2 (mutable, safer for unclassified files)
         AssetTier::Tier2Mutable
     }
-    
+
     /// Check if a path is a candidate for Tier-1 immutable storage
     pub fn is_immutable_candidate(&self, path: &str) -> bool {
         matches!(self.classify(path), AssetTier::Tier1Immutable)

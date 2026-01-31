@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum VeloRequest {
-    Handshake { client_version: String },
+    Handshake {
+        client_version: String,
+    },
     Status,
     Spawn {
         command: Vec<String>,

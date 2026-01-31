@@ -1,11 +1,11 @@
+use rayon::prelude::*;
 use std::fs::{self, File};
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
-use rayon::prelude::*;
 use tempfile::TempDir;
 use vrift_cas::CasStore;
-use std::sync::Arc;
 
 fn main() {
     const FILE_COUNT: usize = 10_000;
@@ -57,7 +57,10 @@ fn main() {
     let serial_time = start.elapsed();
     let serial_stats = cas_serial.stats().unwrap();
     println!("Time: {:?}", serial_time);
-    println!("Throughput: {:.2} files/sec", FILE_COUNT as f64 / serial_time.as_secs_f64());
+    println!(
+        "Throughput: {:.2} files/sec",
+        FILE_COUNT as f64 / serial_time.as_secs_f64()
+    );
     println!("Blobs: {}\n", serial_stats.blob_count);
 
     // === Parallel Test ===
@@ -65,27 +68,38 @@ fn main() {
     let cas_parallel = Arc::new(CasStore::new(&cas_dir_parallel).unwrap());
     let counter = Arc::new(AtomicUsize::new(0));
     let start = Instant::now();
-    
+
     files.par_iter().for_each(|path| {
         if let Err(e) = cas_parallel.store_file(path) {
             eprintln!("Error storing {:?}: {}", path, e);
         }
         counter.fetch_add(1, Ordering::Relaxed);
     });
-    
+
     let parallel_time = start.elapsed();
     let parallel_stats = cas_parallel.stats().unwrap();
     println!("Time: {:?}", parallel_time);
-    println!("Throughput: {:.2} files/sec", FILE_COUNT as f64 / parallel_time.as_secs_f64());
+    println!(
+        "Throughput: {:.2} files/sec",
+        FILE_COUNT as f64 / parallel_time.as_secs_f64()
+    );
     println!("Blobs: {}\n", parallel_stats.blob_count);
 
     // === Summary ===
     let speedup = serial_time.as_secs_f64() / parallel_time.as_secs_f64();
     println!("=== Summary ===");
-    println!("Serial:   {:?} ({:.0} files/sec)", serial_time, FILE_COUNT as f64 / serial_time.as_secs_f64());
-    println!("Parallel: {:?} ({:.0} files/sec)", parallel_time, FILE_COUNT as f64 / parallel_time.as_secs_f64());
+    println!(
+        "Serial:   {:?} ({:.0} files/sec)",
+        serial_time,
+        FILE_COUNT as f64 / serial_time.as_secs_f64()
+    );
+    println!(
+        "Parallel: {:?} ({:.0} files/sec)",
+        parallel_time,
+        FILE_COUNT as f64 / parallel_time.as_secs_f64()
+    );
     println!("Speedup:  {:.2}x", speedup);
-    
+
     // Keep temp alive until here
     drop(temp);
 }

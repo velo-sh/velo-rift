@@ -34,8 +34,8 @@ async fn main() -> Result<()> {
 }
 
 use std::path::Path;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
 use vrift_ipc::{VeloRequest, VeloResponse};
 
 use std::collections::HashMap;
@@ -156,9 +156,7 @@ async fn handle_request(req: VeloRequest, state: &DaemonState) -> VeloResponse {
                 status: format!("Operational (Indexed: {} blobs)", count),
             }
         }
-        VeloRequest::Spawn { command, env, cwd } => {
-            handle_spawn(command, env, cwd).await
-        }
+        VeloRequest::Spawn { command, env, cwd } => handle_spawn(command, env, cwd).await,
         VeloRequest::CasInsert { hash, size } => {
             let mut index = state.cas_index.lock().await;
             index.insert(hash, size);
@@ -175,7 +173,11 @@ async fn handle_request(req: VeloRequest, state: &DaemonState) -> VeloResponse {
     }
 }
 
-async fn handle_spawn(command: Vec<String>, env: Vec<(String, String)>, cwd: String) -> VeloResponse {
+async fn handle_spawn(
+    command: Vec<String>,
+    env: Vec<(String, String)>,
+    cwd: String,
+) -> VeloResponse {
     if command.is_empty() {
         return VeloResponse::Error("Command cannot be empty".to_string());
     }
@@ -188,64 +190,68 @@ async fn handle_spawn(command: Vec<String>, env: Vec<(String, String)>, cwd: Str
     cmd.args(&command[1..]);
     cmd.envs(env);
     cmd.current_dir(cwd);
-    
+
     // We direct stdout/stderr to inherit for now, so they appear in daemon logs
     // Ideally we would capture or stream them
-    // cmd.stdout(std::process::Stdio::inherit()); 
+    // cmd.stdout(std::process::Stdio::inherit());
     // cmd.stderr(std::process::Stdio::inherit());
 
     match cmd.spawn() {
         Ok(child) => {
             let pid = child.id().unwrap_or(0);
-             println!("Spawned PID: {}", pid);
-             
-             // Important: Avoid zombie processes.
-             // Since we're not waiting for it here (async handling), we drop the Child handle.
-             // But tokio::process::Command spawns are automatically reaped by tokio runtime if we don't await?
-             // Actually, we SHOULD store the child handle if we want to manage it. 
-             // For this MVP step 1, we'll let it run.
-             tokio::spawn(async move {
-                 let _ = child.wait_with_output().await;
-             });
+            println!("Spawned PID: {}", pid);
 
-             VeloResponse::SpawnAck { pid }
+            // Important: Avoid zombie processes.
+            // Since we're not waiting for it here (async handling), we drop the Child handle.
+            // But tokio::process::Command spawns are automatically reaped by tokio runtime if we don't await?
+            // Actually, we SHOULD store the child handle if we want to manage it.
+            // For this MVP step 1, we'll let it run.
+            tokio::spawn(async move {
+                let _ = child.wait_with_output().await;
+            });
+
+            VeloResponse::SpawnAck { pid }
         }
-        Err(e) => VeloResponse::Error(format!("Failed to spawn: {}", e))
+        Err(e) => VeloResponse::Error(format!("Failed to spawn: {}", e)),
     }
 }
 
 async fn scan_cas_root(state: &DaemonState) -> Result<()> {
     // Get path from env or default
-    let cas_root_str = std::env::var("VR_THE_SOURCE").unwrap_or_else(|_| "~/.vrift/the_source".to_string());
+    let cas_root_str =
+        std::env::var("VR_THE_SOURCE").unwrap_or_else(|_| "~/.vrift/the_source".to_string());
     let cas_root = Path::new(&cas_root_str);
-    
+
     if !cas_root.exists() {
-        println!("vriftd: CAS root not found at {:?}, skipping scan.", cas_root);
+        println!(
+            "vriftd: CAS root not found at {:?}, skipping scan.",
+            cas_root
+        );
         return Ok(());
     }
 
     use vrift_cas::CasStore;
     let cas = CasStore::new(cas_root)?;
-    
+
     // We can use CasStore's iterator, but it's synchronous (blocking).
     // For now, we'll wrap it in spawn_blocking or just run it since we are in a dedicated task.
     // Iterating millions of files might take time, so blocking the runtime is bad if not careful.
     // But this is a separate task.
-    
+
     let mut index = state.cas_index.lock().await;
-    
+
     // Using blocking iterator
     for hash in (cas.iter()?).flatten() {
-         // For size, we currently don't store it in the filename, so we might need to stat.
-         // Statting every file is expensive.
-         // For MVP, if we don't have size efficiently, we can put 0 or Stat content.
-         // Optimized Velo stores [hash_prefix]/[hash] and we can trust it exists.
-         if let Some(path) = cas.blob_path_for_hash(&hash) {
-             if let Ok(metadata) = std::fs::metadata(path) {
-                 index.insert(hash, metadata.len());
-             }
-         }
+        // For size, we currently don't store it in the filename, so we might need to stat.
+        // Statting every file is expensive.
+        // For MVP, if we don't have size efficiently, we can put 0 or Stat content.
+        // Optimized Velo stores [hash_prefix]/[hash] and we can trust it exists.
+        if let Some(path) = cas.blob_path_for_hash(&hash) {
+            if let Ok(metadata) = std::fs::metadata(path) {
+                index.insert(hash, metadata.len());
+            }
+        }
     }
-    
+
     Ok(())
 }

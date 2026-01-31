@@ -33,7 +33,7 @@ pub trait LinkStrategy: Send + Sync {
     /// - clonefile (zero-copy, separate inode)  
     /// - copy (fallback)
     fn link_file(&self, source: &Path, target: &Path) -> io::Result<()>;
-    
+
     /// Name of this strategy (for logging/debugging)
     fn name(&self) -> &'static str;
 }
@@ -50,7 +50,14 @@ pub trait LinkStrategy: Send + Sync {
 /// - Static archives (.a)
 /// - Kernel extensions (.kext, .bundle)
 const BINARY_SENSITIVE_EXTENSIONS: &[&str] = &[
-    "app", "framework", "dylib", "so", "a", "bundle", "kext", "plugin",
+    "app",
+    "framework",
+    "dylib",
+    "so",
+    "a",
+    "bundle",
+    "kext",
+    "plugin",
 ];
 
 /// Check if a path is inside a binary-sensitive bundle
@@ -72,7 +79,7 @@ pub fn is_binary_sensitive(path: &Path) -> bool {
             return true;
         }
     }
-    
+
     // Check if inside .app/ or .framework/ directory
     let path_str = path.to_string_lossy();
     path_str.contains(".app/") || path_str.contains(".framework/")
@@ -109,7 +116,7 @@ impl LinkStrategy for MacosLinkStrategy {
         if is_binary_sensitive(source) {
             return reflink_or_copy(source, target);
         }
-        
+
         // Tier 1: hard_link (most efficient)
         match fs::hard_link(source, target) {
             Ok(()) => return Ok(()),
@@ -119,7 +126,7 @@ impl LinkStrategy for MacosLinkStrategy {
             }
             Err(e) => return Err(e),
         }
-        
+
         // Tier 2: clonefile (APFS CoW)
         match reflink_copy::reflink(source, target) {
             Ok(()) => return Ok(()),
@@ -127,12 +134,12 @@ impl LinkStrategy for MacosLinkStrategy {
                 // clonefile not supported or failed
             }
         }
-        
+
         // Tier 3: copy (last resort)
         fs::copy(source, target)?;
         Ok(())
     }
-    
+
     fn name(&self) -> &'static str {
         "macos-tiered"
     }
@@ -161,17 +168,17 @@ impl LinkStrategy for LinuxLinkStrategy {
             }
             Err(e) => return Err(e),
         }
-        
+
         // Tier 2: reflink (btrfs, xfs)
         if let Ok(()) = reflink_copy::reflink(source, target) {
             return Ok(());
         }
-        
+
         // Tier 3: copy
         fs::copy(source, target)?;
         Ok(())
     }
-    
+
     fn name(&self) -> &'static str {
         "linux-hardlink"
     }
@@ -197,7 +204,7 @@ impl LinkStrategy for UnixLinkStrategy {
             }
         }
     }
-    
+
     fn name(&self) -> &'static str {
         "unix-generic"
     }
@@ -236,47 +243,47 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
-    
+
     #[test]
     fn test_strategy_name() {
         let strategy = get_strategy();
         assert!(!strategy.name().is_empty());
     }
-    
+
     #[test]
     fn test_link_file_success() {
         let dir = tempdir().unwrap();
         let source = dir.path().join("source.txt");
         let target = dir.path().join("target.txt");
-        
+
         let mut f = File::create(&source).unwrap();
         f.write_all(b"hello").unwrap();
-        
+
         let strategy = get_strategy();
         strategy.link_file(&source, &target).unwrap();
-        
+
         assert!(target.exists());
     }
-    
+
     #[test]
     fn test_link_file_already_exists() {
         let dir = tempdir().unwrap();
         let source = dir.path().join("source.txt");
         let target = dir.path().join("target.txt");
-        
+
         File::create(&source).unwrap();
         File::create(&target).unwrap();
-        
+
         let strategy = get_strategy();
         // Should not error on AlreadyExists
         let result = strategy.link_file(&source, &target);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_is_binary_sensitive_extensions() {
         use std::path::Path;
-        
+
         // Sensitive extensions
         assert!(is_binary_sensitive(Path::new("Chromium.app")));
         assert!(is_binary_sensitive(Path::new("libfoo.dylib")));
@@ -284,25 +291,33 @@ mod tests {
         assert!(is_binary_sensitive(Path::new("libstatic.a")));
         assert!(is_binary_sensitive(Path::new("MyPlugin.bundle")));
         assert!(is_binary_sensitive(Path::new("Cocoa.framework")));
-        
+
         // Non-sensitive
         assert!(!is_binary_sensitive(Path::new("index.js")));
         assert!(!is_binary_sensitive(Path::new("package.json")));
         assert!(!is_binary_sensitive(Path::new("README.md")));
     }
-    
+
     #[test]
     fn test_is_binary_sensitive_paths() {
         use std::path::Path;
-        
+
         // Inside .app bundle
-        assert!(is_binary_sensitive(Path::new("Chromium.app/Contents/Info.plist")));
-        assert!(is_binary_sensitive(Path::new("node_modules/puppeteer/Chromium.app/Resources/icon.icns")));
-        
+        assert!(is_binary_sensitive(Path::new(
+            "Chromium.app/Contents/Info.plist"
+        )));
+        assert!(is_binary_sensitive(Path::new(
+            "node_modules/puppeteer/Chromium.app/Resources/icon.icns"
+        )));
+
         // Inside .framework
-        assert!(is_binary_sensitive(Path::new("Foo.framework/Versions/A/Foo")));
-        
+        assert!(is_binary_sensitive(Path::new(
+            "Foo.framework/Versions/A/Foo"
+        )));
+
         // Not inside bundle
-        assert!(!is_binary_sensitive(Path::new("node_modules/lodash/index.js")));
+        assert!(!is_binary_sensitive(Path::new(
+            "node_modules/lodash/index.js"
+        )));
     }
 }

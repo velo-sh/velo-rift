@@ -41,10 +41,10 @@ pub async fn check_status() -> Result<()> {
 
 pub async fn spawn_command(command: &[String], cwd: PathBuf) -> Result<()> {
     let mut stream = connect().await?;
-    
+
     // Construct environment with explicit Strings
     let env: Vec<(String, String)> = std::env::vars().collect();
-    
+
     let req = VeloRequest::Spawn {
         command: command.to_vec(),
         env,
@@ -53,7 +53,7 @@ pub async fn spawn_command(command: &[String], cwd: PathBuf) -> Result<()> {
 
     tracing::info!("Requesting daemon to spawn: {:?}", command);
     send_request(&mut stream, req).await?;
-    
+
     let resp = read_response(&mut stream).await?;
     match resp {
         VeloResponse::SpawnAck { pid } => {
@@ -95,7 +95,7 @@ pub async fn notify_blob(hash: [u8; 32], size: u64) -> Result<()> {
         let req = VeloRequest::CasInsert { hash, size };
         let _ = send_request(&mut stream, req).await;
         // Ideally wait for Ack, but for speed maybe we don't care if it fails
-        // let _ = read_response(&mut stream).await; 
+        // let _ = read_response(&mut stream).await;
     }
     Ok(())
 }
@@ -107,13 +107,13 @@ async fn connect() -> Result<UnixStream> {
             // Attempt to start daemon
             tracing::info!("Daemon not running. Attempting to start...");
             spawn_daemon()?;
-            
+
             // Retry connection loop
             for _ in 0..10 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 if let Ok(stream) = UnixStream::connect(SOCKET_PATH).await {
-                     tracing::info!("Daemon started successfully.");
-                     return Ok(stream);
+                    tracing::info!("Daemon started successfully.");
+                    return Ok(stream);
                 }
             }
             anyhow::bail!("Failed to connect to daemon after starting it.");
@@ -124,7 +124,7 @@ async fn connect() -> Result<UnixStream> {
 fn spawn_daemon() -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let bin_dir = current_exe.parent().context("Failed into get bin dir")?;
-    
+
     // Look for vriftd
     let candidate_names = if cfg!(target_os = "windows") {
         vec!["vriftd.exe"]
@@ -132,7 +132,8 @@ fn spawn_daemon() -> Result<()> {
         vec!["vriftd"]
     };
 
-    let daemon_bin = candidate_names.iter()
+    let daemon_bin = candidate_names
+        .iter()
         .map(|name| bin_dir.join(name))
         .find(|path| path.exists())
         .context("Could not find vriftd binary")?;

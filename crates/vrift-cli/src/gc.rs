@@ -48,8 +48,7 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
     println!("   CAS:     {}", cas_root.display());
 
     // Acquire exclusive lock
-    let _lock = ManifestRegistry::acquire_lock()
-        .context("Failed to acquire registry lock")?;
+    let _lock = ManifestRegistry::acquire_lock().context("Failed to acquire registry lock")?;
 
     // Load or create registry
     let mut registry = ManifestRegistry::load_or_create()?;
@@ -62,15 +61,21 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
         // Legacy mode: single manifest
         println!();
         println!("  [Legacy Mode] Using single manifest: {:?}", manifest_path);
-        let manifest = Manifest::load(manifest_path)
-            .context("Failed to parse manifest")?;
-        manifest.iter().map(|(_, entry)| entry.content_hash).collect()
+        let manifest = Manifest::load(manifest_path).context("Failed to parse manifest")?;
+        manifest
+            .iter()
+            .map(|(_, entry)| entry.content_hash)
+            .collect()
     } else {
         // Registry mode: all active manifests
         println!();
         println!("  Registry Status:");
-        println!("    📁 Registered manifests: {} ({} active, {} stale)",
-            registry.manifests.len(), active_count, stale_count);
+        println!(
+            "    📁 Registered manifests: {} ({} active, {} stale)",
+            registry.manifests.len(),
+            active_count,
+            stale_count
+        );
 
         // Show stale manifests
         if stale_count > 0 {
@@ -96,12 +101,16 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
             println!("  🗑️  Pruned {} stale manifest entries", pruned);
         }
 
-        registry.get_all_blob_hashes()
+        registry
+            .get_all_blob_hashes()
             .context("Failed to collect blob hashes from manifests")?
     };
 
     println!();
-    println!("  ✅ Referenced blobs: {}", format_number(keep_set.len() as u64));
+    println!(
+        "  ✅ Referenced blobs: {}",
+        format_number(keep_set.len() as u64)
+    );
 
     // Sweep: Iterate CAS and find orphans
     let cas = CasStore::new(cas_root)?;
@@ -110,7 +119,6 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
     let mut orphan_bytes = 0u64;
     let mut deleted_count = 0u64;
     let mut deleted_bytes = 0u64;
-
 
     // Calculate total CAS size and collect orphans
     let mut orphans = Vec::new();
@@ -130,10 +138,21 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
 
     println!();
     println!("  CAS Statistics:");
-    println!("    📦 Total blobs:   {} ({})", format_number(total_blobs), format_bytes(total_bytes));
-    println!("    ✅ Referenced:    {}", format_number(keep_set.len() as u64));
-    println!("    🗑️  Orphaned:      {} ({})", format_number(orphan_count), format_bytes(orphan_bytes));
-    
+    println!(
+        "    📦 Total blobs:   {} ({})",
+        format_number(total_blobs),
+        format_bytes(total_bytes)
+    );
+    println!(
+        "    ✅ Referenced:    {}",
+        format_number(keep_set.len() as u64)
+    );
+    println!(
+        "    🗑️  Orphaned:      {} ({})",
+        format_number(orphan_count),
+        format_bytes(orphan_bytes)
+    );
+
     if orphan_count > 0 && total_bytes > 0 {
         let reclaim_pct = (orphan_bytes as f64 / total_bytes as f64) * 100.0;
         println!("    💾 Reclaimable:   {:.1}% of CAS", reclaim_pct);
@@ -150,13 +169,16 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
             // Ask for confirmation unless --yes is specified
             if !args.yes {
                 println!();
-                print!("  ⚠️  Delete {} blobs ({})? [y/N] ", 
-                    format_number(orphan_count), format_bytes(orphan_bytes));
+                print!(
+                    "  ⚠️  Delete {} blobs ({})? [y/N] ",
+                    format_number(orphan_count),
+                    format_bytes(orphan_bytes)
+                );
                 io::stdout().flush()?;
-                
+
                 let mut input = String::new();
                 io::stdin().read_line(&mut input)?;
-                
+
                 if !input.trim().eq_ignore_ascii_case("y") {
                     println!("  Cancelled.");
                     println!();
@@ -186,16 +208,27 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
                     }
                     Err(e) => {
                         pb.inc(1);
-                        pb.println(format!("  ❌ Failed to delete {}: {}", 
-                            CasStore::hash_to_hex(&hash), e));
+                        pb.println(format!(
+                            "  ❌ Failed to delete {}: {}",
+                            CasStore::hash_to_hex(&hash),
+                            e
+                        ));
                     }
                 }
             }
             pb.finish_and_clear();
 
             let gc_elapsed = gc_start.elapsed().as_secs_f64();
-            let delete_rate = if gc_elapsed > 0.0 { deleted_count as f64 / gc_elapsed } else { 0.0 };
-            let reclaim_pct = if total_bytes > 0 { (deleted_bytes as f64 / total_bytes as f64) * 100.0 } else { 0.0 };
+            let delete_rate = if gc_elapsed > 0.0 {
+                deleted_count as f64 / gc_elapsed
+            } else {
+                0.0
+            };
+            let reclaim_pct = if total_bytes > 0 {
+                (deleted_bytes as f64 / total_bytes as f64) * 100.0
+            } else {
+                0.0
+            };
 
             // Print prominent completion box
             println!();
@@ -204,7 +237,10 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
             println!("╚════════════════════════════════════════╝");
             println!();
             // Highlight the key metrics users care about
-            println!("   🗑️  {} orphaned blobs deleted", format_number(deleted_count));
+            println!(
+                "   🗑️  {} orphaned blobs deleted",
+                format_number(deleted_count)
+            );
             println!("   💾 {} reclaimed", format_bytes(deleted_bytes));
             println!("   📉 CAS reduced by {:.1}%", reclaim_pct);
             println!("   ⚡ {:.0} blobs/sec", delete_rate);
@@ -213,7 +249,11 @@ pub fn run(cas_root: &std::path::Path, args: GcArgs) -> Result<()> {
         // Dry run output - highlight what WOULD be reclaimed
         println!();
         if orphan_count > 0 {
-            let reclaim_pct = if total_bytes > 0 { (orphan_bytes as f64 / total_bytes as f64) * 100.0 } else { 0.0 };
+            let reclaim_pct = if total_bytes > 0 {
+                (orphan_bytes as f64 / total_bytes as f64) * 100.0
+            } else {
+                0.0
+            };
             println!("╔════════════════════════════════════════╗");
             println!("║  📋 Dry Run Complete                   ║");
             println!("╚════════════════════════════════════════╝");

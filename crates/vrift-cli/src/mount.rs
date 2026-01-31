@@ -20,7 +20,8 @@ pub struct MountArgs {
 
 /// Execute the mount command
 pub fn run(args: MountArgs) -> Result<()> {
-    let cas_root = std::env::var("VR_THE_SOURCE").unwrap_or_else(|_| "~/.vrift/the_source".to_string());
+    let cas_root =
+        std::env::var("VR_THE_SOURCE").unwrap_or_else(|_| "~/.vrift/the_source".to_string());
     let cas_root = Path::new(&cas_root);
     let manifest_path = &args.manifest;
     let mountpoint = &args.mountpoint;
@@ -49,7 +50,7 @@ pub fn run(args: MountArgs) -> Result<()> {
         let cas = CasStore::new(cas_root)?;
         let manifest = Manifest::load(manifest_path)?;
         let fs = vrift_fuse::VeloFs::new(&manifest, cas);
-        
+
         // This will block until unmounted
         fs.mount(mountpoint)?;
     }

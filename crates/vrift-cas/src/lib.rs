@@ -86,7 +86,7 @@ impl CasStore {
     }
 
     /// Create a CAS store at the default location (`~/.vrift/the_source/`).
-    /// 
+    ///
     /// Per RFC-0039 §3.4, the CAS is stored in the user's home directory.
     pub fn default_location() -> Result<Self> {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -119,30 +119,30 @@ impl CasStore {
     }
 
     /// Get the path where a blob with the given hash would be stored.
-    /// 
+    ///
     /// Uses RFC-0039 §6 layout: `blake3/ab/cd/hash_size.ext`
     /// The simple version without size/ext (for backwards compat during transition).
     fn blob_path(&self, hash: &Blake3Hash) -> PathBuf {
         let hex = Self::hash_to_hex(hash);
-        let l1 = &hex[..2];   // First 2 chars
-        let l2 = &hex[2..4];  // Next 2 chars
+        let l1 = &hex[..2]; // First 2 chars
+        let l2 = &hex[2..4]; // Next 2 chars
         self.root.join("blake3").join(l1).join(l2).join(&hex)
     }
 
     /// Find the actual blob file path, supporting both old and new formats.
-    /// 
+    ///
     /// Returns the path if found, None otherwise.
     /// Handles both:
     /// - Old format: `hash` (no suffix)
     /// - New format: `hash_size.ext` (with size and optional extension)
     fn find_blob_path(&self, hash: &Blake3Hash) -> Option<PathBuf> {
         let base_path = self.blob_path(hash);
-        
+
         // Try old format first
         if base_path.exists() {
             return Some(base_path);
         }
-        
+
         // Try new format: find matching file in the directory
         if let Some(parent) = base_path.parent() {
             if parent.exists() {
@@ -159,12 +159,12 @@ impl CasStore {
                 }
             }
         }
-        
+
         None
     }
 
     /// Get the path for a self-describing blob (RFC-0039 format).
-    /// 
+    ///
     /// Format: `blake3/ab/cd/hash_size.ext`
     /// - O(1) integrity check via filename size
     /// - Extension enables direct file type inspection
@@ -237,9 +237,11 @@ impl CasStore {
     pub fn get(&self, hash: &Blake3Hash) -> Result<Vec<u8>> {
         let path = match self.find_blob_path(hash) {
             Some(p) => p,
-            None => return Err(CasError::NotFound {
-                hash: Self::hash_to_hex(hash),
-            }),
+            None => {
+                return Err(CasError::NotFound {
+                    hash: Self::hash_to_hex(hash),
+                })
+            }
         };
 
         let mut file = File::open(&path)?;
@@ -264,7 +266,7 @@ impl CasStore {
     }
 
     /// Delete a blob from the CAS.
-    /// 
+    ///
     /// Handles both old format (hash) and new format (hash_size.ext).
     pub fn delete(&self, hash: &Blake3Hash) -> Result<()> {
         match self.find_blob_path(hash) {
@@ -284,7 +286,7 @@ impl CasStore {
     }
 
     /// Get statistics about the CAS.
-    /// 
+    ///
     /// Traverses the 3-level structure: blake3/ab/cd/hash
     pub fn stats(&self) -> Result<CasStats> {
         let mut blob_count = 0u64;
@@ -359,9 +361,11 @@ impl CasStore {
     pub fn get_mmap(&self, hash: &Blake3Hash) -> Result<memmap2::Mmap> {
         let path = match self.find_blob_path(hash) {
             Some(p) => p,
-            None => return Err(CasError::NotFound {
-                hash: Self::hash_to_hex(hash),
-            }),
+            None => {
+                return Err(CasError::NotFound {
+                    hash: Self::hash_to_hex(hash),
+                })
+            }
         };
 
         let file = File::open(&path)?;
@@ -372,7 +376,7 @@ impl CasStore {
     }
 
     /// Get an iterator over all blob hashes in the CAS.
-    /// 
+    ///
     /// Traverses the 3-level structure: blake3/ab/cd/hash
     pub fn iter(&self) -> Result<CasIterator> {
         let blake3_dir = self.root.join("blake3");
@@ -550,10 +554,7 @@ impl CasStore {
         use std::process::Command;
 
         // Try using chattr command (requires root)
-        let status = Command::new("chattr")
-            .arg("+i")
-            .arg(path)
-            .status();
+        let status = Command::new("chattr").arg("+i").arg(path).status();
 
         match status {
             Ok(s) if s.success() => Ok(()),
@@ -592,9 +593,9 @@ impl CasStats {
 
 /// Iterator over CAS hashes (3-level: blake3/ab/cd/hash)
 pub struct CasIterator {
-    l1_iter: fs::ReadDir,      // Level 1: ab/ directories
-    l2_iter: Option<fs::ReadDir>,  // Level 2: cd/ directories
-    l3_iter: Option<fs::ReadDir>,  // Level 3: hash files
+    l1_iter: fs::ReadDir,         // Level 1: ab/ directories
+    l2_iter: Option<fs::ReadDir>, // Level 2: cd/ directories
+    l3_iter: Option<fs::ReadDir>, // Level 3: hash files
     blake3_exists: bool,
 }
 
@@ -764,7 +765,11 @@ mod tests {
         let hash = cas.store_and_link_immutable(data, &target_path).unwrap();
 
         // Verify symlink exists
-        assert!(target_path.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(target_path
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
 
         // Verify content via symlink
         let read_content = fs::read(&target_path).unwrap();
@@ -814,7 +819,11 @@ mod tests {
         let target_path = target_dir.path().join("linked_immutable.txt");
         cas.link_immutable(&hash, &target_path).unwrap();
 
-        assert!(target_path.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(target_path
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(fs::read(&target_path).unwrap(), data);
     }
 
@@ -836,19 +845,30 @@ mod tests {
         // Verify the file exists in the correct 3-level structure
         let expected_l1 = &hex[..2];
         let expected_l2 = &hex[2..4];
-        
-        let blob_dir = temp.path().join("blake3").join(expected_l1).join(expected_l2);
-        assert!(blob_dir.exists(), "3-level directory should exist: {:?}", blob_dir);
-        
+
+        let blob_dir = temp
+            .path()
+            .join("blake3")
+            .join(expected_l1)
+            .join(expected_l2);
+        assert!(
+            blob_dir.exists(),
+            "3-level directory should exist: {:?}",
+            blob_dir
+        );
+
         // Find the blob file
         let entries: Vec<_> = fs::read_dir(&blob_dir).unwrap().collect();
         assert_eq!(entries.len(), 1, "Should have exactly one blob");
-        
+
         let filename = entries[0].as_ref().unwrap().file_name();
         let filename_str = filename.to_string_lossy();
-        
+
         // Verify filename starts with hash (basic blob_path format)
-        assert!(filename_str.starts_with(&hex), "Filename should start with hash");
+        assert!(
+            filename_str.starts_with(&hex),
+            "Filename should start with hash"
+        );
     }
 
     #[test]
@@ -932,6 +952,9 @@ mod tests {
         let mut expected = vec![hash1, hash2, hash3];
         expected.sort();
 
-        assert_eq!(found_hashes, expected, "Iterator should find all stored hashes");
+        assert_eq!(
+            found_hashes, expected,
+            "Iterator should find all stored hashes"
+        );
     }
 }
