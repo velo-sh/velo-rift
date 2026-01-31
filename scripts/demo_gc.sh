@@ -1,6 +1,6 @@
 #!/bin/bash
 # VRift GC Demo Script
-# One-click demonstration of the complete GC lifecycle
+# One-click demonstration of the complete GC lifecycle using xsmall (~5K files) and small (~30K files) packages
 #
 # Usage: ./scripts/demo_gc.sh [--skip-npm]
 #
@@ -80,9 +80,9 @@ rm -f ~/.vrift/registry/manifests.json
 
 mkdir -p "$DEMO_DIR/proj1" "$DEMO_DIR/proj2" "$CAS_DIR"
 
-# Copy package.json from examples
-cp "$VRIFT_ROOT/examples/benchmarks/medium_package.json" "$DEMO_DIR/proj1/package.json"
-cp "$VRIFT_ROOT/examples/benchmarks/medium_package.json" "$DEMO_DIR/proj2/package.json"
+# Use xsmall for proj1 (~5K files) and small for proj2 (~30K files)
+cp "$VRIFT_ROOT/examples/benchmarks/xsmall_package.json" "$DEMO_DIR/proj1/package.json"
+cp "$VRIFT_ROOT/examples/benchmarks/small_package.json" "$DEMO_DIR/proj2/package.json"
 
 print_success "Created demo directories"
 
