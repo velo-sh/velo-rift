@@ -1,0 +1,25 @@
+#!/bin/bash
+# =============================================================================
+# VRift Pre-commit Hook
+# =============================================================================
+# This hook runs pre-commit checks before allowing a commit.
+# Install with: git config core.hooksPath .githooks
+# =============================================================================
+
+set -e
+
+# If pre-commit is installed, use it
+if command -v pre-commit &>/dev/null; then
+    exec pre-commit run --all-files
+fi
+
+# Fallback: Run basic checks if pre-commit is not installed
+echo "[*] Pre-commit not installed, running basic checks..."
+
+echo "[*] Running cargo fmt check..."
+cargo fmt --all -- --check
+
+echo "[*] Running cargo clippy..."
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "[✓] Pre-commit checks passed!"

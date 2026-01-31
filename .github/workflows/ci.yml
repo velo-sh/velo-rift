@@ -20,7 +20,7 @@ jobs:
         with:
           components: rustfmt
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: source scripts/ci-common.sh && run_fmt_check
 
   clippy:
     name: Clippy
@@ -32,7 +32,7 @@ jobs:
         with:
           components: clippy
       - name: Run clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: source scripts/ci-common.sh && run_clippy
 
   test:
     name: Test
@@ -45,7 +45,7 @@ jobs:
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run tests
-        run: cargo test --workspace
+        run: source scripts/ci-common.sh && run_rust_tests
 
   # TODO: Add a specific job for LD_PRELOAD integration testing on Linux
   e2e-test:

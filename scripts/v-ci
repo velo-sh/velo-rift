@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Velo Universal CI Driver
+# VRift Universal CI Driver
 # =============================================================================
-# Unified entry point for all Velo CI tasks (Local, Docker, GitHub Actions)
+# Unified entry point for all VRift CI tasks (Local, Docker, GitHub Actions)
 #
 # Usage:
 #   ./scripts/v-ci [OPTIONS]
@@ -28,7 +28,7 @@ cd "$PROJECT_ROOT"
 MODE="local"
 ACTION="run"
 TIER="full"
-DOCKER_IMAGE="velo-ci"
+DOCKER_IMAGE="vrift-ci-base"
 
 # Colors
 RED='\033[0;31m'
@@ -40,7 +40,7 @@ log_error() { echo -e "${RED}❌${NC} $1" >&2; }
 log_info() { echo -e "${BLUE}ℹ${NC} $1"; }
 
 print_usage() {
-    echo "Velo Universal CI Driver"
+    echo "VRift Universal CI Driver"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -101,8 +101,7 @@ run_in_docker() {
     # 1. Build images if needed/requested
     if [[ "$ACTION" == "build" ]] || ! docker image inspect "$DOCKER_IMAGE" &>/dev/null; then
         log_info "Building CI images..."
-        docker build -t velo-ci-base -f Dockerfile.base .
-        docker build -t velo-ci -f Dockerfile.ci .
+        docker build -t vrift-ci-base -f Dockerfile.base .
         if [[ "$ACTION" == "build" ]]; then return; fi
     fi
 
@@ -120,8 +119,8 @@ run_in_docker() {
 
     # 3. Clean
     if [[ "$ACTION" == "clean" ]]; then
-        log_info "Cleaning Velo CI Docker volumes..."
-        docker volume rm velo-ci-target velo-ci-venv 2>/dev/null || true
+        log_info "Cleaning VRift CI Docker volumes..."
+        docker volume rm vrift-cargo-registry vrift-target-cache 2>/dev/null || true
         docker volume prune -f
         log_info "Docker volumes cleaned"
         return
@@ -133,17 +132,21 @@ run_in_docker() {
     # CRITICAL: We use named volumes for target/ and .venv/ to:
     # 1. Preserve Docker-built artifacts across runs (speedup)
     # 2. Avoid masking container's pre-built binaries with empty anonymous volumes
-    log_info "Orchestrating Velo CI in Docker..."
+    log_info "Orchestrating VRift CI in Docker..."
+    
+    # Ensure volumes exist
+    docker volume create vrift-cargo-registry > /dev/null 2>&1 || true
+    docker volume create vrift-target-cache > /dev/null 2>&1 || true
+    
     docker run --rm \
+        --privileged \
+        --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor:unconfined \
         -v "$PROJECT_ROOT:/workspace:delegated" \
-        -v velo-ci-target:/workspace/target \
-        -v velo-ci-venv:/workspace/.venv \
-        -e GITHUB_ACTIONS=true \
+        -v vrift-cargo-registry:/usr/local/cargo/registry \
+        -v vrift-target-cache:/workspace/target \
+        -w /workspace \
         -e CI=true \
-        -e VELO_ENV=ci \
-        -e NO_XDIST="${NO_XDIST:-false}" \
-        -e VELO_FORCE_HEAVY="${VELO_FORCE_HEAVY:-0}" \
-        -e VELO_TIMEOUT_MULTIPLIER="${VELO_TIMEOUT_MULTIPLIER:-1.0}" \
+        -e VR_THE_SOURCE=/tmp/vrift_cas \
         "$DOCKER_IMAGE" \
         /workspace/scripts/v-ci --local --tier "$TIER" \
         --rust-args ${EXTRA_RUST_ARGS[@]+"${EXTRA_RUST_ARGS[@]}"} \
@@ -158,11 +161,13 @@ run_locally() {
     
     case "$ACTION" in
         setup)
-            # Extracted from local-ci.sh
             log_step "Initializing Development Environment..."
-            uv sync
             git config core.hooksPath .githooks
-            uv run pre-commit install || true
+            if command -v pre-commit &>/dev/null; then
+                pre-commit install || true
+            else
+                log_warn "pre-commit not installed. Run: pip install pre-commit"
+            fi
             log_success "Setup complete!"
             ;;
         *)
