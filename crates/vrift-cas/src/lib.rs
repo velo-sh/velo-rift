@@ -277,6 +277,10 @@ impl CasStore {
     pub fn delete(&self, hash: &Blake3Hash) -> Result<()> {
         match self.find_blob_path(hash) {
             Some(path) => {
+                // RFC-0039: Best effort to unset immutable flag before deletion
+                // This allows GC to clean up protected blobs.
+                let _ = crate::protection::set_immutable(&path, false);
+
                 fs::remove_file(path)?;
                 Ok(())
             }
