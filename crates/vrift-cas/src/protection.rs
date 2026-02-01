@@ -13,14 +13,20 @@ use std::io;
 use std::path::Path;
 
 /// RFC-0039 Security Invariant: TheSource (CAS) is a pure data warehouse.
-/// Execution bits are enforced (0555) to allow direct execution of binaries in jails.
-/// This ensures that hard-linked/symlinked binaries remain functional in pivoted roots.
+/// Execution bits are strictly forbidden within the CAS storage layer.
+/// This acts as a circuit breaker against direct execution of ingested payloads.
 #[allow(clippy::unnecessary_cast)]
-pub const CAS_READ_ONLY_PERM: u32 =
-    (libc::S_IRUSR | libc::S_IXUSR | libc::S_IRGRP | libc::S_IXGRP | libc::S_IROTH | libc::S_IXOTH)
-        as u32; // 0555
+pub const CAS_READ_ONLY_PERM: u32 = (libc::S_IRUSR | libc::S_IRGRP | libc::S_IROTH) as u32; // 0444
 
-pub const CAS_FORBIDDEN_PERM_MASK: u32 = (libc::S_IWUSR | libc::S_IWGRP | libc::S_IWOTH) as u32; // Write bits forbidden
+/// The "Forbidden Mask" includes all Write and Execute bits for all users.
+/// We use this to audit and strip permissions.
+#[allow(clippy::unnecessary_cast)]
+pub const CAS_FORBIDDEN_PERM_MASK: u32 = (libc::S_IWUSR
+    | libc::S_IWGRP
+    | libc::S_IWOTH // Write bits
+    | libc::S_IXUSR
+    | libc::S_IXGRP
+    | libc::S_IXOTH) as u32; // Execute bits (The Iron Law)
 
 /// Enforce the security invariant on a CAS blob.
 /// Ensures the file is read-only and NOT executable.
