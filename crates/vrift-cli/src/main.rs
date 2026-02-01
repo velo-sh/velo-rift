@@ -860,7 +860,15 @@ async fn cmd_ingest(
         .commit()
         .with_context(|| "Failed to commit LMDB manifest")?;
 
-    // LMDB manifest committed above (line 863-866)
+    // Create and save legacy binary manifest for backward compatibility (FUSE, etc.)
+    // RFC-0039 transitional support
+    let mut legacy_manifest = vrift_manifest::Manifest::new();
+    for (path, entry) in lmdb_manifest.iter()? {
+        legacy_manifest.insert(&path, entry.vnode);
+    }
+    legacy_manifest
+        .save(output)
+        .with_context(|| format!("Failed to save binary manifest to {}", output.display()))?;
 
     // Auto-register in global manifest registry (RFC-0041)
     let output_abs = output

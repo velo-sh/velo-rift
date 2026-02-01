@@ -1225,16 +1225,20 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: Stat
         if let Some(entry) = state.psfs_lookup(path_str) {
             ptr::write_bytes(buf, 0, 1);
             (*buf).st_size = entry.size as libc::off_t;
-            (*buf).st_mtime = entry.mtime as libc::time_t;
-            // Set nanosecond-precision mtime for incremental build tools (make, ninja, cargo)
+            // mtime is stored as nanoseconds - convert to seconds + nanoseconds
+            let mtime_secs = (entry.mtime / 1_000_000_000) as libc::time_t;
+            let mtime_nsecs = (entry.mtime % 1_000_000_000) as libc::c_long;
+            (*buf).st_mtime = mtime_secs;
+
+            // Platform-specific nanosecond field
             #[cfg(target_os = "macos")]
             {
-                (*buf).st_mtime_nsec = 0; // Manifest stores seconds, nsec = 0 for now
+                (*buf).st_mtime_nsec = mtime_nsecs;
             }
             #[cfg(target_os = "linux")]
             {
-                (*buf).st_mtim.tv_sec = entry.mtime as i64;
-                (*buf).st_mtim.tv_nsec = 0; // Manifest stores seconds, nsec = 0 for now
+                (*buf).st_mtime = mtime_secs;
+                (*buf).st_mtime_nsec = mtime_nsecs;
             }
             (*buf).st_mode = entry.mode as libc::mode_t;
             if entry.is_dir() {
@@ -1299,8 +1303,8 @@ unsafe fn fstat_impl(fd: c_int, buf: *mut libc::stat, real_fstat: FstatFn) -> c_
             }
             #[cfg(target_os = "linux")]
             {
-                (*buf).st_mtim.tv_sec = mtime_secs;
-                (*buf).st_mtim.tv_nsec = mtime_nsecs;
+                (*buf).st_mtime = mtime_secs;
+                (*buf).st_mtime_nsec = mtime_nsecs;
             }
 
             (*buf).st_mode = entry.mode as libc::mode_t;

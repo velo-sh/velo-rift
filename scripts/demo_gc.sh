@@ -155,13 +155,14 @@ print_step "3" "GC Status (all healthy, 2 active manifests)"
 "$VRIFT" --the-source-root "$CAS_DIR" gc
 
 # ============================================================================
-# Step 4: Delete proj1 manifest (simulate project deletion)
+# Step 4: Delete proj1 (simulate project deletion)
 # ============================================================================
 
-print_step "4" "Delete proj1.manifest (simulate project deletion)"
+print_step "4" "Delete proj1 metadata + manifest (simulate project deletion)"
 
-rm "$DEMO_DIR/proj1.manifest"
-print_success "Deleted proj1.manifest"
+rm -rf "$DEMO_DIR/proj1/node_modules/.vrift"
+rm -f "$DEMO_DIR/proj1.manifest"
+print_success "Deleted proj1 project manifest metadata"
 echo ""
 
 # ============================================================================
@@ -198,7 +199,7 @@ echo "  Re-ingesting proj2 to verify all blobs still exist..."
 echo ""
 
 # Re-ingest proj2 - if new_blobs = 0, all blobs were preserved
-OUTPUT=$("$VRIFT" --the-source-root "$CAS_DIR" ingest "$DEMO_DIR/proj2/node_modules" -o "$DEMO_DIR/proj2_verify.manifest" 2>&1)
+OUTPUT=$("$VRIFT" --the-source-root "$CAS_DIR" ingest "$DEMO_DIR/proj2/node_modules" 2>&1)
 echo "$OUTPUT"
 
 # Extract new blobs count from output
