@@ -48,6 +48,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "vrift-clippy"
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev fuse3
       - name: Run Clippy
         run: source scripts/ci-common.sh && run_clippy
 
@@ -123,6 +125,9 @@ jobs:
           shared-key: "vrift-build"
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev sqlite3
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
       - name: Run Tier 1 Tests
         run: ./scripts/v-ci --tier 1 --local
 
@@ -138,7 +143,7 @@ jobs:
         with:
           shared-key: "vrift-build"
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y sqlite3
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev sqlite3
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
