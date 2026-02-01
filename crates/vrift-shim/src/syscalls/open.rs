@@ -17,25 +17,50 @@ use std::sync::atomic::Ordering;
 /// - Write opens: Copy CAS blob to temp file, track for reingest on close
 unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) -> Option<c_int> {
     if path.is_null() {
+        shim_log!("[Shim] open_impl: path is null\n");
         return None;
     }
 
     let path_cstr = CStr::from_ptr(path);
     let path_str = match path_cstr.to_str() {
         Ok(s) => s,
-        Err(_) => return None,
+        Err(_) => {
+            shim_log!("[Shim] open_impl: path not valid UTF-8\n");
+            return None;
+        }
     };
 
+    shim_log!("[Shim] open_impl: path=");
+    shim_log!(path_str);
+    shim_log!("\n");
+
     // Get shim state
-    let state = ShimState::get()?;
+    let state = match ShimState::get() {
+        Some(s) => s,
+        None => {
+            shim_log!("[Shim] open_impl: ShimState::get() returned None\n");
+            return None;
+        }
+    };
 
     // Check if path is in VFS domain
     if !state.psfs_applicable(path_str) {
+        shim_log!("[Shim] open_impl: not in VFS domain\n");
         return None; // Not our path, passthrough
     }
 
+    shim_log!("[Shim] open_impl: in VFS domain, querying manifest\n");
+
     // Query manifest for this path
-    let entry = state.query_manifest(path_str)?;
+    let entry = match state.query_manifest(path_str) {
+        Some(e) => e,
+        None => {
+            shim_log!("[Shim] open_impl: manifest query returned None\n");
+            return None;
+        }
+    };
+
+    shim_log!("[Shim] open_impl: found entry in manifest\n");
 
     // Build CAS blob path: {cas_root}/blobs/{hash_hex}
     let hash_hex = hex_encode(&entry.content_hash);

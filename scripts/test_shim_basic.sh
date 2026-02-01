@@ -136,6 +136,7 @@ export "$PRELOAD_VAR"="$SHIM_PATH"
 if [ "$OS_TYPE" == "Darwin" ]; then
     export DYLD_FORCE_FLAT_NAMESPACE=1
 fi
+export VRIFT_CAS_ROOT="$TEST_DIR/cas"
 export VRIFT_MANIFEST="$TEST_DIR/source/.vrift/manifest.lmdb"
 export VRIFT_VFS_PREFIX="/vrift"
 export VRIFT_DEBUG=1

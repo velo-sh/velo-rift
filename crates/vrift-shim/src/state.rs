@@ -523,8 +523,17 @@ impl ShimState {
     }
 
     pub(crate) fn query_manifest(&self, path: &str) -> Option<vrift_ipc::VnodeEntry> {
+        // Strip VFS prefix to get relative path for manifest lookup
+        let rel_path = if path.starts_with(&*self.vfs_prefix) {
+            path.strip_prefix(&*self.vfs_prefix)
+                .unwrap_or(path)
+                .trim_start_matches('/')
+        } else {
+            path
+        };
+
         // First try Hot Stat Cache (O(1) mmap lookup)
-        if let Some(entry) = mmap_lookup(self.mmap_ptr, self.mmap_size, path) {
+        if let Some(entry) = mmap_lookup(self.mmap_ptr, self.mmap_size, rel_path) {
             return Some(vrift_ipc::VnodeEntry {
                 content_hash: [0u8; 32],
                 size: entry.size,
@@ -535,7 +544,7 @@ impl ShimState {
             });
         }
         // Fall back to IPC query
-        unsafe { sync_ipc_manifest_get(&self.socket_path, path) }
+        unsafe { sync_ipc_manifest_get(&self.socket_path, rel_path) }
     }
 
     /// Check if path is in VFS domain (zero-alloc, O(1) string prefix check)
