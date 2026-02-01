@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 #[allow(unused_imports)]
 use libc::{
-    c_char, c_int, c_void, flock, mkdir, mmap, mode_t, munmap, size_t, ssize_t, symlink, utimensat,
+    c_char, c_int, c_void, flock, mkdir, mode_t, munmap, size_t, ssize_t, symlink, utimensat,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -314,6 +314,9 @@ static IT_FLOCK: Interpose = Interpose {
     old_func: flock as *const (),
 };
 
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
 static IT_READLINK: Interpose = Interpose {
     new_func: readlink_shim as *const (),
     old_func: readlink as *const (),
