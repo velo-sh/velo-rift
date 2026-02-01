@@ -376,7 +376,7 @@ async fn handle_request(
 ) -> VeloResponse {
     tracing::debug!("Received request: {:?}", req);
     match req {
-        VeloRequest::Handshake { client_version } => VeloResponse::HandshakeAck {
+        VeloRequest::Handshake { client_version: _ } => VeloResponse::HandshakeAck {
             server_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         VeloRequest::Status => {
@@ -486,12 +486,10 @@ async fn handle_request(
                     let mut index = state.cas_index.lock().unwrap();
                     index.clear();
                     if let Ok(iter) = state.cas.iter() {
-                        for hash_res in iter {
-                            if let Ok(hash) = hash_res {
-                                if let Some(path) = state.cas.blob_path_for_hash(&hash) {
-                                    if let Ok(meta) = std::fs::metadata(path) {
-                                        index.insert(hash, meta.len());
-                                    }
+                        for hash in iter.flatten() {
+                            if let Some(path) = state.cas.blob_path_for_hash(&hash) {
+                                if let Ok(meta) = std::fs::metadata(path) {
+                                    index.insert(hash, meta.len());
                                 }
                             }
                         }

@@ -5,6 +5,10 @@
 
 #![allow(clippy::missing_safety_doc)]
 #![allow(unused_doc_comments)]
+#![allow(dead_code)]
+#![allow(clippy::needless_borrow)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::unnecessary_map_or)]
 
 use std::ffi::{CStr, CString};
 use std::os::unix::fs::MetadataExt;
@@ -21,7 +25,7 @@ use std::sync::Mutex;
 use vrift_cas::CasStore;
 
 thread_local! {
-    static VIRTUAL_CWD: RefCell<Option<String>> = RefCell::new(None);
+    static VIRTUAL_CWD: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 // ============================================================================
@@ -307,7 +311,8 @@ static IT_FSTATAT: Interpose = Interpose {
 // ============================================================================
 
 static SHIM_STATE: AtomicPtr<ShimState> = AtomicPtr::new(ptr::null_mut());
-static INITIALIZING: AtomicBool = AtomicBool::new(false);
+/// Flag to indicate shim is still initializing. All syscalls passthrough during this phase.
+static INITIALIZING: AtomicBool = AtomicBool::new(true);
 static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 
 // Lock-free recursion key using atomic instead of OnceLock (avoids mutex deadlock during library init)
@@ -384,6 +389,7 @@ impl Logger {
         }
     }
 
+    #[allow(dead_code)]
     fn dump_to_file(&self) {
         let pid = unsafe { libc::getpid() };
         let path = format!("/tmp/vrift-shim-{}.log", pid);
@@ -2302,7 +2308,11 @@ pub unsafe extern "C" fn readlink(p: *const c_char, b: *mut c_char, s: size_t) -
 #[no_mangle]
 pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_int {
     let real = std::mem::transmute::<*const (), OpenFn>(IT_OPEN.old_func);
-    open_impl(p, f, m).unwrap_or_else(|| real(p, f, m))
+    // Early-boot passthrough to avoid deadlock during dyld initialization
+    if INITIALIZING.load(Ordering::Relaxed) {
+        return real(p, f, m);
+    }
+    open_impl(p, f, m, real)
 }
 
 #[cfg(target_os = "macos")]
@@ -2580,6 +2590,10 @@ pub unsafe extern "C" fn fcntl_shim(fd: c_int, cmd: c_int, arg: c_int) -> c_int 
     let real = std::mem::transmute::<*const (), unsafe extern "C" fn(c_int, c_int, c_int) -> c_int>(
         IT_FCNTL.old_func,
     );
+    // Early-boot passthrough to avoid deadlock during dyld initialization
+    if INITIALIZING.load(Ordering::Relaxed) {
+        return real(fd, cmd, arg);
+    }
     real(fd, cmd, arg)
 }
 
@@ -2834,6 +2848,7 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
     real(path)
 }
 
+#[allow(dead_code)]
 extern "C" fn dump_logs_atexit() {
     LOGGER.dump_to_file();
 }

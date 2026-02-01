@@ -12,7 +12,9 @@ The deep forensic audit and Proof of Failure (PoF) suite v2.0 have confirmed the
     -   100% of syscalls required for GCC, Clang, and mainstream linkers (stat, open, mmap, dlopen, etc.) are successfully intercepted.
     -   Velo Rift is confirmed to be **100% Drop-In Compatible** for basic C/C++ compilation on macOS ARM64.
 2.  **Shim Stabilization**:
-    -   `munmap` and `dlsym` are now fully intercepted and stable, resolving previous risk of "Invisible Memory Leaks" and "Dynamic Symbol Resolution Failures."
+    -   `munmap` and `dlsym` are now fully intercepted and stable.
+    -   **Variadic ABI Hazard Resolved**: Assembly stubs correctly handle `open` and `fcntl` stack-passed arguments on macOS ARM64.
+    -   **DYLD Initialization Deadlock Resolved**: `INITIALIZING` flag forces early-boot passthrough, `IN_SHIM` thread-local guard prevents recursion.
 3.  **Vulnerability Perimeter Locked**:
     -   All critical gaps (Path Normalization, FD Leakage, State Leakage) have been quantified and captured in the PoF suite for automated regression tracking.
 
