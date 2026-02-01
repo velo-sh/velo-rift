@@ -18,7 +18,9 @@ use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use libc::{c_char, c_int, c_void, flock, mkdir, mmap, mode_t, munmap, size_t, ssize_t, symlink, utimensat};
+use libc::{
+    c_char, c_int, c_void, flock, mkdir, mmap, mode_t, munmap, size_t, ssize_t, symlink, utimensat,
+};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use vrift_cas::CasStore;
@@ -310,10 +312,6 @@ static IT_FLOCK: Interpose = Interpose {
     new_func: flock_shim as *const (),
     old_func: flock as *const (),
 };
-#[cfg(target_os = "macos")]
-#[link_section = "__DATA,__interpose"]
-#[used]
-
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
@@ -1658,9 +1656,14 @@ unsafe fn sync_ipc_flock(socket_path: &str, path: &str, op: i32) -> Result<(), i
     };
 
     let request = if op & libc::LOCK_UN != 0 {
-         vrift_ipc::VeloRequest::FlockRelease { path: path.to_string() }
+        vrift_ipc::VeloRequest::FlockRelease {
+            path: path.to_string(),
+        }
     } else {
-         vrift_ipc::VeloRequest::FlockAcquire { path: path.to_string(), operation: op }
+        vrift_ipc::VeloRequest::FlockAcquire {
+            path: path.to_string(),
+            operation: op,
+        }
     };
 
     let req_bytes = match bincode::serialize(&request) {
@@ -1696,8 +1699,8 @@ unsafe fn sync_ipc_flock(socket_path: &str, path: &str, op: i32) -> Result<(), i
             } else {
                 Err(libc::EIO)
             }
-        },
-        _ => Err(libc::EIO)
+        }
+        _ => Err(libc::EIO),
     }
 }
 
@@ -1993,11 +1996,14 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, _mode: mode_t) -> Option<
                             // Helper to extract temp_path string
                             let tmp_len = prefix.len() + 64;
                             if let Ok(tmp_str) = std::str::from_utf8(&tmp_path_buf[..tmp_len]) {
-                                state.open_fds.lock().unwrap().insert(tmp_fd, OpenFile {
-                                    vpath: resolved_path.to_string(),
-                                    temp_path: tmp_str.to_string(),
-                                    mmap_count: 0,
-                                });
+                                state.open_fds.lock().unwrap().insert(
+                                    tmp_fd,
+                                    OpenFile {
+                                        vpath: resolved_path.to_string(),
+                                        temp_path: tmp_str.to_string(),
+                                        mmap_count: 0,
+                                    },
+                                );
                             }
                             return Some(tmp_fd);
                         }
@@ -2958,8 +2964,6 @@ pub unsafe extern "C" fn posix_spawnp_shim(
     real(pid, file, file_actions, attrp, argv, envp)
 }
 
-
-
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn dlopen_shim(filename: *const c_char, flags: c_int) -> *mut c_void {
@@ -3484,9 +3488,13 @@ pub unsafe extern "C" fn symlink_shim(target: *const c_char, linkpath: *const c_
 #[no_mangle]
 pub unsafe extern "C" fn flock_shim(fd: c_int, operation: c_int) -> c_int {
     #[cfg(target_os = "linux")]
-    extern "C" { fn __errno_location() -> *mut c_int; }
+    extern "C" {
+        fn __errno_location() -> *mut c_int;
+    }
     #[cfg(target_os = "macos")]
-    extern "C" { fn __error() -> *mut c_int; }
+    extern "C" {
+        fn __error() -> *mut c_int;
+    }
 
     unsafe fn set_errno(e: i32) {
         #[cfg(target_os = "linux")]
@@ -3506,8 +3514,8 @@ pub unsafe extern "C" fn flock_shim(fd: c_int, operation: c_int) -> c_int {
 
     if let Some(state) = ShimState::get() {
         let vpath = {
-             let fds = state.open_fds.lock().unwrap();
-             fds.get(&fd).map(|f| f.vpath.clone())
+            let fds = state.open_fds.lock().unwrap();
+            fds.get(&fd).map(|f| f.vpath.clone())
         };
 
         if let Some(path) = vpath {
@@ -3549,28 +3557,27 @@ pub unsafe extern "C" fn mmap_shim(
 
     if result != libc::MAP_FAILED {
         if let Some(state) = ShimState::get() {
-             let maybe_info = {
-                 let fds = state.open_fds.lock().unwrap();
-                 if let Some(f) = fds.get(&fd) {
-                      Some((f.vpath.clone(), f.temp_path.clone()))
-                 } else {
-                      None
-                 }
-             };
-             
-             if let Some((vpath, temp_path)) = maybe_info {
-                 shim_log("[VRift-Shim] Tracked mmap for: ");
-                 shim_log(&vpath);
-                 shim_log("\n");
-                 
-                 let start_addr = result as usize;
-                 let mut maps = state.active_mmaps.lock().unwrap();
-                 maps.insert(start_addr, MmapInfo {
-                      vpath,
-                      temp_path,
-                      len: len as usize,
-                 });
-             }
+            let maybe_info = {
+                let fds = state.open_fds.lock().unwrap();
+                fds.get(&fd).map(|f| (f.vpath.clone(), f.temp_path.clone()))
+            };
+
+            if let Some((vpath, temp_path)) = maybe_info {
+                shim_log("[VRift-Shim] Tracked mmap for: ");
+                shim_log(&vpath);
+                shim_log("\n");
+
+                let start_addr = result as usize;
+                let mut maps = state.active_mmaps.lock().unwrap();
+                maps.insert(
+                    start_addr,
+                    MmapInfo {
+                        vpath,
+                        temp_path,
+                        len: len as usize,
+                    },
+                );
+            }
         }
     }
     result
@@ -3588,18 +3595,18 @@ pub unsafe extern "C" fn munmap_shim(addr: *mut c_void, len: size_t) -> c_int {
     };
 
     if let Some(state) = ShimState::get() {
-         let info_opt = {
-              let mut maps = state.active_mmaps.lock().unwrap();
-              maps.remove(&(addr as usize))
-         };
-         
-         if let Some(info) = info_opt {
-              if sync_ipc_manifest_reingest(&state.socket_path, &info.vpath, &info.temp_path) {
-                  shim_log("[VRift-Shim] Re-ingested on munmap: ");
-                  shim_log(&info.vpath);
-                  shim_log("\n");
-              }
-         }
+        let info_opt = {
+            let mut maps = state.active_mmaps.lock().unwrap();
+            maps.remove(&(addr as usize))
+        };
+
+        if let Some(info) = info_opt {
+            if sync_ipc_manifest_reingest(&state.socket_path, &info.vpath, &info.temp_path) {
+                shim_log("[VRift-Shim] Re-ingested on munmap: ");
+                shim_log(&info.vpath);
+                shim_log("\n");
+            }
+        }
     }
 
     let real = get_real_shim!(REAL_MUNMAP, "munmap", IT_MUNMAP, MunmapFn);

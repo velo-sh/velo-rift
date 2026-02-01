@@ -72,8 +72,6 @@ fn load_registered_workspaces() -> Vec<PathBuf> {
     Vec::new()
 }
 
-
-
 use vrift_ipc::{bloom_hashes, BLOOM_SIZE};
 
 const MAX_IPC_SIZE: usize = 16 * 1024 * 1024; // 16 MB max to prevent DoS
@@ -197,8 +195,6 @@ impl BloomFilter {
     }
 }
 
-
-
 /// RFC-0049: Daemon Lock Manager for fs-independent flock virtualization
 /// Maintains lock state for VFS paths to support parallel build coordination
 struct LockManager {
@@ -242,7 +238,8 @@ impl LockManager {
             if state.exclusive.is_some() && state.exclusive != Some(pid) {
                 return Ok(false);
             }
-            if !state.shared.is_empty() && (state.shared.len() > 1 || !state.shared.contains(&pid)) {
+            if !state.shared.is_empty() && (state.shared.len() > 1 || !state.shared.contains(&pid))
+            {
                 return Ok(false);
             }
             // Grant exclusive
@@ -276,8 +273,8 @@ impl LockManager {
             if state.exclusive.is_none() && state.shared.is_empty() {
                 state.notify.notify_waiters();
             } else if state.exclusive.is_none() {
-                 // If only shared locks remain, notify waiters (allowing other shared locks)
-                 state.notify.notify_waiters();
+                // If only shared locks remain, notify waiters (allowing other shared locks)
+                state.notify.notify_waiters();
             }
         }
     }
@@ -770,7 +767,9 @@ async fn handle_request(
         VeloRequest::FlockRelease { path } => {
             let pid = match peer_creds.and_then(|c| c.pid) {
                 Some(p) => p as u32,
-                None => return VeloResponse::Error("Could not determine PID for unlock".to_string()),
+                None => {
+                    return VeloResponse::Error("Could not determine PID for unlock".to_string())
+                }
             };
             state.lock_manager.release(&path, pid);
             VeloResponse::FlockAck
