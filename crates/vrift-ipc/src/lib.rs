@@ -55,6 +55,15 @@ pub enum VeloRequest {
     ManifestListDir {
         path: String,
     },
+    /// RFC-0049: Acquire advisory lock on logical file
+    FlockAcquire {
+        path: String,
+        operation: i32, // e.g. LOCK_EX, LOCK_SH, LOCK_NB
+    },
+    /// RFC-0049: Release advisory lock on logical file
+    FlockRelease {
+        path: String,
+    },
     /// Trigger Garbage Collection using a Bloom Filter of active hashes
     CasSweep {
         /// Bloom Filter of all active hashes in the manifest
@@ -102,6 +111,8 @@ pub enum VeloResponse {
         deleted_count: u32,
         reclaimed_bytes: u64,
     },
+    /// RFC-0049: Acknowledgement for FlockAcquire/Release
+    FlockAck,
     /// Acknowledge workspace registration
     RegisterAck {
         workspace_id: String,

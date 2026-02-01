@@ -34,7 +34,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use vrift_ipc::{VeloRequest, VeloResponse};
@@ -70,9 +72,7 @@ fn load_registered_workspaces() -> Vec<PathBuf> {
     Vec::new()
 }
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
+
 
 use vrift_ipc::{bloom_hashes, BLOOM_SIZE};
 
@@ -83,6 +83,7 @@ struct PeerCredentials {
     uid: u32,
     #[allow(dead_code)]
     gid: u32,
+    pid: Option<libc::pid_t>,
 }
 
 impl PeerCredentials {
@@ -105,6 +106,7 @@ impl PeerCredentials {
             Some(Self {
                 uid: cred.uid,
                 gid: cred.gid,
+                pid: Some(cred.pid),
             })
         } else {
             None
@@ -126,6 +128,8 @@ impl PeerCredentials {
         cred.cr_version = 0; // XUCRED_VERSION
         let mut len = std::mem::size_of::<XuCred>() as libc::socklen_t;
         const LOCAL_PEERCRED: libc::c_int = 1;
+        const LOCAL_PEERPID: libc::c_int = 2;
+
         let ret = unsafe {
             libc::getsockopt(
                 fd,
@@ -135,14 +139,28 @@ impl PeerCredentials {
                 &mut len,
             )
         };
-        if ret == 0 {
-            Some(Self {
-                uid: cred.cr_uid,
-                gid: cred.cr_groups[0],
-            })
-        } else {
-            None
+        if ret != 0 {
+            return None;
         }
+
+        // Also fetch PID
+        let mut pid: libc::pid_t = 0;
+        let mut pid_len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        let ret_pid = unsafe {
+            libc::getsockopt(
+                fd,
+                0, // SOL_LOCAL = 0 on macOS
+                LOCAL_PEERPID,
+                &mut pid as *mut _ as *mut libc::c_void,
+                &mut pid_len,
+            )
+        };
+
+        Some(Self {
+            uid: cred.cr_uid,
+            gid: cred.cr_groups[0],
+            pid: if ret_pid == 0 { Some(pid) } else { None },
+        })
     }
 }
 
@@ -179,6 +197,102 @@ impl BloomFilter {
     }
 }
 
+
+
+/// RFC-0049: Daemon Lock Manager for fs-independent flock virtualization
+/// Maintains lock state for VFS paths to support parallel build coordination
+struct LockManager {
+    // Map: Absolute Path -> Lock State
+    locks: Mutex<HashMap<String, LockState>>,
+}
+
+struct LockState {
+    // Exclusive owner (PID)
+    exclusive: Option<u32>,
+    // Shared owners (Set of PIDs)
+    shared: HashSet<u32>,
+    // Waiters notification
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl LockManager {
+    fn new() -> Self {
+        Self {
+            locks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    // Try to acquire lock. Returns:
+    // Ok(true)  -> Granted
+    // Ok(false) -> Blocked (must wait)
+    // Err(_)    -> Error
+    fn try_acquire(&self, path: &str, pid: u32, op: i32) -> Result<bool, String> {
+        let mut locks = self.locks.lock().unwrap();
+        let state = locks.entry(path.to_string()).or_insert_with(|| LockState {
+            exclusive: None,
+            shared: HashSet::new(),
+            notify: Arc::new(tokio::sync::Notify::new()),
+        });
+
+        let is_ex = (op & libc::LOCK_EX) != 0;
+        let is_sh = (op & libc::LOCK_SH) != 0;
+
+        if is_ex {
+            // Exclusive lock requires: no exclusive owner AND no shared owners (except self)
+            if state.exclusive.is_some() && state.exclusive != Some(pid) {
+                return Ok(false);
+            }
+            if !state.shared.is_empty() && (state.shared.len() > 1 || !state.shared.contains(&pid)) {
+                return Ok(false);
+            }
+            // Grant exclusive
+            state.exclusive = Some(pid);
+            state.shared.remove(&pid); // Upgrade clears shared
+            Ok(true)
+        } else if is_sh {
+            // Shared lock requires: no exclusive owner (except self)
+            if state.exclusive.is_some() && state.exclusive != Some(pid) {
+                return Ok(false);
+            }
+            // Grant shared
+            if state.exclusive == Some(pid) {
+                state.exclusive = None; // Downgrade
+            }
+            state.shared.insert(pid);
+            Ok(true)
+        } else {
+            Err("Invalid lock operation".to_string())
+        }
+    }
+
+    fn release(&self, path: &str, pid: u32) {
+        let mut locks = self.locks.lock().unwrap();
+        if let Some(state) = locks.get_mut(path) {
+            if state.exclusive == Some(pid) {
+                state.exclusive = None;
+            }
+            state.shared.remove(&pid);
+            // If resource is free, notify waiters
+            if state.exclusive.is_none() && state.shared.is_empty() {
+                state.notify.notify_waiters();
+            } else if state.exclusive.is_none() {
+                 // If only shared locks remain, notify waiters (allowing other shared locks)
+                 state.notify.notify_waiters();
+            }
+        }
+    }
+
+    fn get_notify(&self, path: &str) -> Arc<tokio::sync::Notify> {
+        let mut locks = self.locks.lock().unwrap();
+        let state = locks.entry(path.to_string()).or_insert_with(|| LockState {
+            exclusive: None,
+            shared: HashSet::new(),
+            notify: Arc::new(tokio::sync::Notify::new()),
+        });
+        state.notify.clone()
+    }
+}
+
 struct WorkspaceState {
     project_root: PathBuf,
     // VFS Manifest (LMDB-backed for ACID persistence)
@@ -195,6 +309,8 @@ struct DaemonState {
     workspaces: Mutex<HashMap<PathBuf, Arc<WorkspaceState>>>,
     // Content-Addressable Storage store
     cas: vrift_cas::CasStore,
+    // Lock Manager for flock virtualization
+    lock_manager: LockManager,
 }
 
 /// RFC-0044 Hot Stat Cache: Export manifest to mmap file for O(1) shim access
@@ -273,6 +389,7 @@ async fn start_daemon() -> Result<()> {
         cas_index: Mutex::new(HashMap::new()),
         workspaces: Mutex::new(HashMap::new()),
         cas: cas.clone(),
+        lock_manager: LockManager::new(),
     });
 
     // Start background scan (Warm-up)
@@ -622,6 +739,41 @@ async fn handle_request(
             } else {
                 VeloResponse::Error("Workspace not registered".to_string())
             }
+        }
+        // RFC-0049: Flock Virtualization
+        VeloRequest::FlockAcquire { path, operation } => {
+            // PID required for locking
+            let pid = match peer_creds.and_then(|c| c.pid) {
+                Some(p) => p as u32,
+                None => return VeloResponse::Error("Could not determine PID for lock".to_string()),
+            };
+
+            // Loop until acquired or error
+            loop {
+                match state.lock_manager.try_acquire(&path, pid, operation) {
+                    Ok(true) => return VeloResponse::FlockAck,
+                    Ok(false) => {
+                        // Blocked
+                        if operation & libc::LOCK_NB != 0 {
+                            // Non-blocking request
+                            return VeloResponse::Error("EWOULDBLOCK".to_string());
+                        }
+                        // Blocking request: wait for notification
+                        let notify = state.lock_manager.get_notify(&path);
+                        notify.notified().await;
+                        // Retry loop after notification
+                    }
+                    Err(e) => return VeloResponse::Error(e),
+                }
+            }
+        }
+        VeloRequest::FlockRelease { path } => {
+            let pid = match peer_creds.and_then(|c| c.pid) {
+                Some(p) => p as u32,
+                None => return VeloResponse::Error("Could not determine PID for unlock".to_string()),
+            };
+            state.lock_manager.release(&path, pid);
+            VeloResponse::FlockAck
         }
         VeloRequest::CasSweep { bloom_filter } => {
             match state.cas.sweep(&bloom_filter) {

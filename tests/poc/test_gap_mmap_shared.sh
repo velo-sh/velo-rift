@@ -1,61 +1,114 @@
 #!/bin/bash
-# RFC-0049 Gap Test: mmap(MAP_SHARED) Write Tracking
+# RFC-0049 Gap Test: mmap(MAP_SHARED) tracking
 #
-# This is a P0 gap that WILL break Git and databases
-#
-# Problem: mmap(MAP_SHARED) + write bypasses the shim
-# Impact: Changes not tracked for CAS reingest
+# This is a P0 gap for Git pack and SQLite.
+# Problem: writes via mmap don't go through write() shim.
+# Mitigation: We track mmap regions and trigger reingest on munmap.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-echo "=== P0 Gap Test: mmap(MAP_SHARED) Write Tracking ==="
+echo "=== P0 Gap Test: mmap(MAP_SHARED) Persistence ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+# Compile helper
+cat > mmap_test.c << 'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <string.h>
 
-echo "[1] Checking for mmap interception with write detection..."
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <file>\n", argv[0]);
+        return 1;
+    }
 
-# Check if mmap has write tracking
-if grep -A30 "mmap_impl\|fn mmap" "$SHIM_SRC" 2>/dev/null | grep -q "MAP_SHARED\|PROT_WRITE\|dirty\|track.*write"; then
-    echo "    ✅ mmap has MAP_SHARED write tracking"
-    HAS_MMAP_TRACKING=true
-else
-    echo "    ❌ mmap does NOT track MAP_SHARED writes"
-    HAS_MMAP_TRACKING=false
+    const char *path = argv[1];
+    
+    // 1. Open file (should trigger VFS CoW)
+    int fd = open(path, O_RDWR);
+    if (fd < 0) {
+        perror("open");
+        return 1;
+    }
+
+    // 2. mmap (MAP_SHARED)
+    // Map 4KB or file size
+    size_t len = 4096;
+    void *addr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
+
+    // 3. Write updates
+    const char *msg = "UPDATED_BY_MMAP";
+    memcpy(addr, msg, strlen(msg));
+
+    // 4. Unmap (Should trigger reingest)
+    if (munmap(addr, len) != 0) {
+        perror("munmap");
+        return 1;
+    }
+
+    // 5. Close
+    close(fd);
+    return 0;
+}
+EOF
+
+gcc -o mmap_test mmap_test.c
+
+echo "[1] Starting Daemon..."
+export VELO_PROJECT_ROOT="${SCRIPT_DIR}/test_mmap_root"
+mkdir -p "$VELO_PROJECT_ROOT/.vrift"
+rm -rf "$VELO_PROJECT_ROOT/.vrift/socket"
+DAEMON_BIN="${PROJECT_ROOT}/target/debug/vriftd"
+$DAEMON_BIN start &
+DAEMON_PID=$!
+sleep 2
+
+# Register workspace
+mkdir -p "$HOME/.vrift/registry"
+echo "{\"manifests\": {\"test_mmap\": {\"project_root\": \"$VELO_PROJECT_ROOT\"}}}" > "$HOME/.vrift/registry/manifests.json"
+kill $DAEMON_PID
+sleep 1
+$DAEMON_BIN start &
+DAEMON_PID=$!
+sleep 2
+
+echo "[3] Running functional test..."
+export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+if [[ "$(uname)" == "Linux" ]]; then
+    export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
 fi
+export VRIFT_socket_path="${VELO_PROJECT_ROOT}/.vrift/socket"
 
-echo ""
-echo "[2] Impact Analysis:"
-cat << 'EOF'
-    Git pack-objects pattern:
-    
-    fd = open(".git/objects/pack/pack-xxx.pack", O_RDWR);
-    map = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-    memcpy(map + offset, data, len);  // ❌ Write bypasses shim!
-    msync(map, size, MS_SYNC);
-    munmap(map, size);
-    
-    Result: VFS doesn't know file changed.
-    Git status may show wrong results.
-EOF
+TEST_FILE="$VELO_PROJECT_ROOT/mapped_file.txt"
+# Create initial file (size needs to be enough for mmap 4k or we handle SIGBUS?)
+# Actually mmap extends file? No.
+# Only trunc/ftruncate extends.
+# We should create file with some size.
+dd if=/dev/zero of="$TEST_FILE" bs=4096 count=1 > /dev/null 2>&1
 
-echo ""
-echo "[3] Mitigation Strategy:"
-cat << 'EOF'
-    Option A: Intercept msync() and re-hash file
-    Option B: Convert MAP_SHARED → MAP_PRIVATE + CoW
-    Option C: Detect and warn (not transparent)
-EOF
+./mmap_test "$TEST_FILE"
 
-echo ""
-if [[ "$HAS_MMAP_TRACKING" == "true" ]]; then
-    echo "✅ PASS: mmap MAP_SHARED tracking implemented"
+echo "[4] Verifying content..."
+# Read first few bytes
+CONTENT=$(head -c 15 "$TEST_FILE")
+echo "File content: $CONTENT"
+
+kill $DAEMON_PID
+rm mmap_test mmap_test.c
+
+if [[ "$CONTENT" == "UPDATED_BY_MMAP"* ]]; then
+    echo "✅ PASS: mmap writes persisted via reingest"
     exit 0
 else
-    echo "❌ GAP DETECTED: mmap MAP_SHARED writes not tracked"
-    echo ""
-    echo "Affected tools: Git, SQLite, LMDB, mmap-based databases"
+    echo "❌ FAIL: Context mismatch. Wanted 'UPDATED_BY_MMAP', got '$CONTENT'"
     exit 1
 fi

@@ -18,9 +18,7 @@ use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use libc::{c_char, c_int, c_void, mode_t, size_t, ssize_t};
-#[cfg(target_os = "macos")]
-use libc::{mkdir, symlink, utimensat};
+use libc::{c_char, c_int, c_void, flock, mkdir, mmap, mode_t, munmap, size_t, ssize_t, symlink, utimensat};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use vrift_cas::CasStore;
@@ -166,15 +164,7 @@ extern "C" {
     fn unlink(path: *const c_char) -> c_int;
     fn rename(oldpath: *const c_char, newpath: *const c_char) -> c_int;
     fn rmdir(path: *const c_char) -> c_int;
-    fn mmap(
-        addr: *mut c_void,
-        len: size_t,
-        prot: c_int,
-        flags: c_int,
-        fd: c_int,
-        offset: libc::off_t,
-    ) -> *mut c_void;
-    fn munmap(addr: *mut c_void, len: size_t) -> c_int;
+
     fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn access(path: *const c_char, mode: c_int) -> c_int;
@@ -313,6 +303,17 @@ static IT_SYMLINK: Interpose = Interpose {
     new_func: symlink_shim as *const (),
     old_func: symlink as *const (),
 };
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+static IT_FLOCK: Interpose = Interpose {
+    new_func: flock_shim as *const (),
+    old_func: flock as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
@@ -526,8 +527,17 @@ static LOGGER: Logger = Logger::new();
 
 struct OpenFile {
     vpath: String,
-    #[allow(dead_code)] // Will be used when async re-ingest is implemented
-    original_path: String,
+    // Path to the temporary file backing this FD (for CoW)
+    temp_path: String,
+    // Number of active mmap mappings for this FD
+    mmap_count: usize,
+}
+
+/// Track active mmap regions for VFS files
+struct MmapInfo {
+    vpath: String,
+    temp_path: String,
+    len: usize,
 }
 
 /// Synthetic directory for VFS opendir/readdir
@@ -736,6 +746,8 @@ struct ShimState {
     vfs_prefix: std::borrow::Cow<'static, str>,
     socket_path: std::borrow::Cow<'static, str>,
     open_fds: Mutex<HashMap<c_int, OpenFile>>,
+    /// Active mmap regions (Addr -> Info)
+    active_mmaps: Mutex<HashMap<usize, MmapInfo>>,
     /// Synthetic directories for VFS readdir (DIR* pointer -> SyntheticDir)
     open_dirs: Mutex<HashMap<usize, SyntheticDir>>,
     bloom_ptr: *const u8,
@@ -812,6 +824,7 @@ impl ShimState {
             vfs_prefix,
             socket_path,
             open_fds: Mutex::new(HashMap::new()),
+            active_mmaps: Mutex::new(HashMap::new()),
             open_dirs: Mutex::new(HashMap::new()),
             bloom_ptr,
             mmap_ptr,
@@ -1634,6 +1647,74 @@ unsafe fn sync_ipc_manifest_reingest(socket_path: &str, vpath: &str, temp_path: 
     )
 }
 
+/// RFC-0049: Sync IPC for advisory locking (flock serialization)
+unsafe fn sync_ipc_flock(socket_path: &str, path: &str, op: i32) -> Result<(), i32> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    let stream = match UnixStream::connect(socket_path) {
+        Ok(s) => s,
+        Err(_) => return Err(libc::ECONNREFUSED),
+    };
+
+    let request = if op & libc::LOCK_UN != 0 {
+         vrift_ipc::VeloRequest::FlockRelease { path: path.to_string() }
+    } else {
+         vrift_ipc::VeloRequest::FlockAcquire { path: path.to_string(), operation: op }
+    };
+
+    let req_bytes = match bincode::serialize(&request) {
+        Ok(b) => b,
+        Err(_) => return Err(libc::EIO),
+    };
+
+    let mut stream = stream;
+    let len_bytes = (req_bytes.len() as u32).to_le_bytes();
+    if stream.write_all(&len_bytes).is_err() {
+        return Err(libc::EPIPE);
+    }
+    if stream.write_all(&req_bytes).is_err() {
+        return Err(libc::EPIPE);
+    }
+
+    let mut len_buf = [0u8; 4];
+    if stream.read_exact(&mut len_buf).is_err() {
+        return Err(libc::EPIPE);
+    }
+    let resp_len = u32::from_le_bytes(len_buf) as usize;
+
+    let mut resp_buf = vec![0u8; resp_len];
+    if stream.read_exact(&mut resp_buf).is_err() {
+        return Err(libc::EPIPE);
+    }
+
+    match bincode::deserialize::<vrift_ipc::VeloResponse>(&resp_buf) {
+        Ok(vrift_ipc::VeloResponse::FlockAck) => Ok(()),
+        Ok(vrift_ipc::VeloResponse::Error(msg)) => {
+            if msg.contains("WOULDBLOCK") {
+                Err(libc::EWOULDBLOCK)
+            } else {
+                Err(libc::EIO)
+            }
+        },
+        _ => Err(libc::EIO)
+    }
+}
+
+/// RFC-0049: Generate virtual inode from path
+/// Prevents st_ino collision when CAS dedup causes multiple logical files to share same blob
+/// Uses a simple hash to generate unique inode per logical path
+#[inline]
+fn path_to_virtual_ino(path: &str) -> libc::ino_t {
+    // Simple FNV-1a hash for O(1) inode generation
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in path.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash as libc::ino_t
+}
+
 // ============================================================================
 // Core Logic
 // ============================================================================
@@ -1794,6 +1875,7 @@ type PosixSpawnFn = unsafe extern "C" fn(
 ) -> c_int;
 type MmapFn =
     unsafe extern "C" fn(*mut c_void, size_t, c_int, c_int, c_int, libc::off_t) -> *mut c_void;
+type MunmapFn = unsafe extern "C" fn(*mut c_void, size_t) -> c_int;
 type DlopenFn = unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void;
 #[allow(dead_code)]
 type AccessFn = unsafe extern "C" fn(*const c_char, c_int) -> c_int;
@@ -1862,7 +1944,7 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, _mode: mode_t) -> Option<
     let resolved_len = (unsafe { resolve_path_with_cwd(path_str, &mut path_buf) })?;
     let resolved_path = unsafe { std::str::from_utf8_unchecked(&path_buf[..resolved_len]) };
 
-    let is_write = (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_TRUNC)) != 0;
+    let is_write = (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_TRUNC | libc::O_APPEND)) != 0;
 
     // RFC-0046/RFC-0043: Robust check with mandatory exclusions
     if resolved_path.starts_with(&*state.vfs_prefix)
@@ -1907,6 +1989,16 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, _mode: mode_t) -> Option<
                         if tmp_fd >= 0 {
                             libc::write(tmp_fd, content.as_ptr() as *const c_void, content.len());
                             libc::lseek(tmp_fd, 0, libc::SEEK_SET);
+
+                            // Helper to extract temp_path string
+                            let tmp_len = prefix.len() + 64;
+                            if let Ok(tmp_str) = std::str::from_utf8(&tmp_path_buf[..tmp_len]) {
+                                state.open_fds.lock().unwrap().insert(tmp_fd, OpenFile {
+                                    vpath: resolved_path.to_string(),
+                                    temp_path: tmp_str.to_string(),
+                                    mmap_count: 0,
+                                });
+                            }
                             return Some(tmp_fd);
                         }
                     }
@@ -1953,7 +2045,7 @@ unsafe fn close_impl(fd: c_int, real_close: CloseFn) -> c_int {
         if let Some(file) = open_file {
             // RFC-0047: CoW close path - reingest modified file back to CAS and Manifest
             // Daemon will read temp file, hash it, insert to CAS, update Manifest
-            if sync_ipc_manifest_reingest(&state.socket_path, &file.vpath, &file.original_path) {
+            if sync_ipc_manifest_reingest(&state.socket_path, &file.vpath, &file.temp_path) {
                 shim_log("[VRift-Shim] File re-ingested successfully: ");
                 shim_log(&file.vpath);
                 shim_log("\n");
@@ -1995,6 +2087,7 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat) -> Option<c_int
         ptr::write_bytes(buf, 0, 1);
         (*buf).st_mode = libc::S_IFDIR | 0o755;
         (*buf).st_nlink = 2;
+        (*buf).st_dev = 0x4C4F474F5321_u64 as libc::dev_t;
         (*buf).st_uid = libc::getuid();
         (*buf).st_gid = libc::getgid();
         return Some(0);
@@ -2033,7 +2126,10 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat) -> Option<c_int
             } else {
                 (*buf).st_mode |= libc::S_IFREG;
             }
+            // RFC-0049: Virtual inode to prevent collision from CAS dedup
+            (*buf).st_ino = path_to_virtual_ino(manifest_path);
             (*buf).st_nlink = 1;
+            (*buf).st_dev = 0x4C4F474F5321_u64 as libc::dev_t;
             (*buf).st_uid = libc::getuid();
             (*buf).st_gid = libc::getgid();
             return Some(0);
@@ -2071,7 +2167,12 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat) -> Option<c_int
             } else {
                 (*buf).st_mode |= libc::S_IFREG;
             }
+            // RFC-0049: Virtual inode to prevent collision from CAS dedup
+            if let Ok(p_str) = CStr::from_ptr(path).to_str() {
+                (*buf).st_ino = path_to_virtual_ino(p_str);
+            }
             (*buf).st_nlink = 1;
+            (*buf).st_dev = 0x4C4F474F5321_u64 as libc::dev_t;
             (*buf).st_uid = libc::getuid();
             (*buf).st_gid = libc::getgid();
             (*buf).st_blksize = 4096;
@@ -2141,6 +2242,7 @@ unsafe fn fstat_impl(fd: c_int, buf: *mut libc::stat) -> Option<c_int> {
                 (*buf).st_mode |= libc::S_IFREG;
             }
             (*buf).st_nlink = 1;
+            (*buf).st_dev = 0x4C4F474F5321_u64 as libc::dev_t;
             (*buf).st_uid = libc::getuid();
             (*buf).st_gid = libc::getgid();
             (*buf).st_blksize = 4096;
@@ -2232,6 +2334,8 @@ type UtimensatFn =
     unsafe extern "C" fn(c_int, *const c_char, *const libc::timespec, c_int) -> c_int;
 type MkdirFn = unsafe extern "C" fn(*const c_char, mode_t) -> c_int;
 type SymlinkFn = unsafe extern "C" fn(*const c_char, *const c_char) -> c_int;
+type FlockFn = unsafe extern "C" fn(c_int, c_int) -> c_int;
+
 #[allow(dead_code)] // Will be exported when full readdir support is added
 type ReaddirFn = unsafe extern "C" fn(*mut libc::DIR) -> *mut libc::dirent;
 #[allow(dead_code)]
@@ -2584,6 +2688,12 @@ static REAL_UTIMENSAT: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static REAL_MKDIR: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 #[cfg(target_os = "linux")]
 static REAL_SYMLINK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_FLOCK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_MMAP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_MUNMAP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
@@ -2848,58 +2958,7 @@ pub unsafe extern "C" fn posix_spawnp_shim(
     real(pid, file, file_actions, attrp, argv, envp)
 }
 
-#[cfg(target_os = "macos")]
-#[no_mangle]
-pub unsafe extern "C" fn mmap_shim(
-    addr: *mut c_void,
-    len: size_t,
-    prot: c_int,
-    flags: c_int,
-    fd: c_int,
-    offset: libc::off_t,
-) -> *mut c_void {
-    let real = std::mem::transmute::<*const (), MmapFn>(IT_MMAP.old_func);
 
-    // Early bailout during initialization
-    if INITIALIZING.load(Ordering::SeqCst) {
-        return real(addr, len, prot, flags, fd, offset);
-    }
-
-    // Guard recursion
-    let _guard = match ShimGuard::enter() {
-        Some(g) => g,
-        None => return real(addr, len, prot, flags, fd, offset),
-    };
-
-    // For VFS file descriptors (tracked in open_fds), the underlying fd already
-    // points to the CAS blob temp file, so mmap can proceed normally.
-    // The interposition here ensures we can add future optimizations like:
-    // - Direct CAS blob mmap without temp files
-    // - Memory-mapped manifest lookups
-    // - Lazy content materialization
-
-    real(addr, len, prot, flags, fd, offset)
-}
-
-#[cfg(target_os = "macos")]
-#[no_mangle]
-pub unsafe extern "C" fn munmap_shim(addr: *mut c_void, len: size_t) -> c_int {
-    type MunmapFn = unsafe extern "C" fn(*mut c_void, size_t) -> c_int;
-    let real = std::mem::transmute::<*const (), MunmapFn>(IT_MUNMAP.old_func);
-
-    // Early bailout during initialization
-    if INITIALIZING.load(Ordering::SeqCst) {
-        return real(addr, len);
-    }
-
-    // Guard recursion
-    let _guard = match ShimGuard::enter() {
-        Some(g) => g,
-        None => return real(addr, len),
-    };
-
-    real(addr, len)
-}
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
@@ -3419,6 +3478,132 @@ pub unsafe extern "C" fn symlink_shim(target: *const c_char, linkpath: *const c_
 
     let real = get_real_shim!(REAL_SYMLINK, "symlink", IT_SYMLINK, SymlinkFn);
     real(target, linkpath)
+}
+
+/// RFC-0049 P0: flock shim - virtualization of advisory locks
+#[no_mangle]
+pub unsafe extern "C" fn flock_shim(fd: c_int, operation: c_int) -> c_int {
+    #[cfg(target_os = "linux")]
+    extern "C" { fn __errno_location() -> *mut c_int; }
+    #[cfg(target_os = "macos")]
+    extern "C" { fn __error() -> *mut c_int; }
+
+    unsafe fn set_errno(e: i32) {
+        #[cfg(target_os = "linux")]
+        let errno_ptr = __errno_location();
+        #[cfg(target_os = "macos")]
+        let errno_ptr = __error();
+        *errno_ptr = e;
+    }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => {
+            let real = get_real_shim!(REAL_FLOCK, "flock", IT_FLOCK, FlockFn);
+            return real(fd, operation);
+        }
+    };
+
+    if let Some(state) = ShimState::get() {
+        let vpath = {
+             let fds = state.open_fds.lock().unwrap();
+             fds.get(&fd).map(|f| f.vpath.clone())
+        };
+
+        if let Some(path) = vpath {
+            // It is a VFS file, divert to daemon shadow lock
+            return match sync_ipc_flock(&state.socket_path, &path, operation) {
+                Ok(_) => 0,
+                Err(e) => {
+                    set_errno(e);
+                    -1
+                }
+            };
+        }
+    }
+
+    let real = get_real_shim!(REAL_FLOCK, "flock", IT_FLOCK, FlockFn);
+    real(fd, operation)
+}
+
+/// RFC-0049 P0: mmap shim - tracking of shared mappings
+#[no_mangle]
+pub unsafe extern "C" fn mmap_shim(
+    addr: *mut c_void,
+    len: size_t,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: libc::off_t,
+) -> *mut c_void {
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => {
+            let real = get_real_shim!(REAL_MMAP, "mmap", IT_MMAP, MmapFn);
+            return real(addr, len, prot, flags, fd, offset);
+        }
+    };
+
+    let real = get_real_shim!(REAL_MMAP, "mmap", IT_MMAP, MmapFn);
+    let result = real(addr, len, prot, flags, fd, offset);
+
+    if result != libc::MAP_FAILED {
+        if let Some(state) = ShimState::get() {
+             let maybe_info = {
+                 let fds = state.open_fds.lock().unwrap();
+                 if let Some(f) = fds.get(&fd) {
+                      Some((f.vpath.clone(), f.temp_path.clone()))
+                 } else {
+                      None
+                 }
+             };
+             
+             if let Some((vpath, temp_path)) = maybe_info {
+                 shim_log("[VRift-Shim] Tracked mmap for: ");
+                 shim_log(&vpath);
+                 shim_log("\n");
+                 
+                 let start_addr = result as usize;
+                 let mut maps = state.active_mmaps.lock().unwrap();
+                 maps.insert(start_addr, MmapInfo {
+                      vpath,
+                      temp_path,
+                      len: len as usize,
+                 });
+             }
+        }
+    }
+    result
+}
+
+/// RFC-0049 P0: munmap shim - reingest on unmap of tracked VFS region
+#[no_mangle]
+pub unsafe extern "C" fn munmap_shim(addr: *mut c_void, len: size_t) -> c_int {
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => {
+            let real = get_real_shim!(REAL_MUNMAP, "munmap", IT_MUNMAP, MunmapFn);
+            return real(addr, len);
+        }
+    };
+
+    if let Some(state) = ShimState::get() {
+         let info_opt = {
+              let mut maps = state.active_mmaps.lock().unwrap();
+              maps.remove(&(addr as usize))
+         };
+         
+         if let Some(info) = info_opt {
+              if sync_ipc_manifest_reingest(&state.socket_path, &info.vpath, &info.temp_path) {
+                  shim_log("[VRift-Shim] Re-ingested on munmap: ");
+                  shim_log(&info.vpath);
+                  shim_log("\n");
+              }
+         }
+    }
+
+    let real = get_real_shim!(REAL_MUNMAP, "munmap", IT_MUNMAP, MunmapFn);
+    real(addr, len)
 }
 
 #[allow(dead_code)]
