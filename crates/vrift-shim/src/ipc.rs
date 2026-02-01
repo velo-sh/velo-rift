@@ -243,18 +243,95 @@ pub(crate) unsafe fn sync_ipc_fcntl_lock(
     false
 }
 
-/// Query manifest for a single path
+/// Query manifest for a single path (with workspace registration)
+/// Daemon requires RegisterWorkspace before ManifestGet on same connection
 pub(crate) unsafe fn sync_ipc_manifest_get(
     socket_path: &str,
     path: &str,
 ) -> Option<vrift_ipc::VnodeEntry> {
-    let request = vrift_ipc::VeloRequest::ManifestGet {
+    let fd = raw_unix_connect(socket_path);
+    if fd < 0 {
+        return None;
+    }
+
+    // Get project root from environment for workspace registration
+    let project_root = std::env::var("VRIFT_PROJECT_ROOT")
+        .or_else(|_| {
+            // Derive from VRIFT_MANIFEST: /path/to/project/.vrift/manifest.lmdb -> /path/to/project
+            std::env::var("VRIFT_MANIFEST").map(|m| {
+                let p = std::path::Path::new(&m);
+                p.parent()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+        })
+        .unwrap_or_default();
+
+    if project_root.is_empty() {
+        libc::close(fd);
+        return None;
+    }
+
+    // Send RegisterWorkspace first
+    let register_req = vrift_ipc::VeloRequest::RegisterWorkspace {
+        project_root: project_root.clone(),
+    };
+    if !send_request_on_fd(fd, &register_req) {
+        libc::close(fd);
+        return None;
+    }
+
+    // Read RegisterWorkspace response (we ignore the actual response)
+    if recv_response_on_fd(fd).is_none() {
+        libc::close(fd);
+        return None;
+    }
+
+    // Now send ManifestGet
+    let manifest_req = vrift_ipc::VeloRequest::ManifestGet {
         path: path.to_string(),
     };
-    match sync_rpc(socket_path, &request) {
+    if !send_request_on_fd(fd, &manifest_req) {
+        libc::close(fd);
+        return None;
+    }
+
+    // Read ManifestGet response
+    let response = recv_response_on_fd(fd);
+    libc::close(fd);
+
+    match response {
         Some(vrift_ipc::VeloResponse::ManifestAck { entry }) => entry,
         _ => None,
     }
+}
+
+// Helper: send request on existing FD
+unsafe fn send_request_on_fd(fd: libc::c_int, request: &vrift_ipc::VeloRequest) -> bool {
+    let req_bytes = match bincode::serialize(request) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let len_bytes = (req_bytes.len() as u32).to_le_bytes();
+    raw_write_all(fd, &len_bytes) && raw_write_all(fd, &req_bytes)
+}
+
+// Helper: receive response on existing FD
+unsafe fn recv_response_on_fd(fd: libc::c_int) -> Option<vrift_ipc::VeloResponse> {
+    let mut resp_len_buf = [0u8; 4];
+    if !raw_read_exact(fd, &mut resp_len_buf) {
+        return None;
+    }
+    let resp_len = u32::from_le_bytes(resp_len_buf) as usize;
+    if resp_len > 1024 * 1024 {
+        return None; // Sanity limit
+    }
+    let mut resp_buf = vec![0u8; resp_len];
+    if !raw_read_exact(fd, &mut resp_buf) {
+        return None;
+    }
+    bincode::deserialize(&resp_buf).ok()
 }
 
 /// Query directory listing from daemon

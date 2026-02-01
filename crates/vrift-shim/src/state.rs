@@ -547,6 +547,22 @@ impl ShimState {
         unsafe { sync_ipc_manifest_get(&self.socket_path, rel_path) }
     }
 
+    /// Query manifest directly via IPC (bypasses mmap cache)
+    /// Required for open() which needs content_hash to locate CAS blob
+    pub(crate) fn query_manifest_ipc(&self, path: &str) -> Option<vrift_ipc::VnodeEntry> {
+        // Strip VFS prefix to get relative path for manifest lookup
+        let rel_path = if path.starts_with(&*self.vfs_prefix) {
+            path.strip_prefix(&*self.vfs_prefix)
+                .unwrap_or(path)
+                .trim_start_matches('/')
+        } else {
+            path
+        };
+
+        // Always use IPC - mmap cache doesn't have content_hash
+        unsafe { sync_ipc_manifest_get(&self.socket_path, rel_path) }
+    }
+
     /// Check if path is in VFS domain (zero-alloc, O(1) string prefix check)
     /// Returns true if path should be considered for Hot Stat acceleration
     #[inline(always)]

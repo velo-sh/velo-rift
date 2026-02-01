@@ -49,10 +49,10 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) -> Option<c
         return None; // Not our path, passthrough
     }
 
-    shim_log!("[Shim] open_impl: in VFS domain, querying manifest\n");
+    shim_log!("[Shim] open_impl: in VFS domain, querying manifest via IPC\n");
 
-    // Query manifest for this path
-    let entry = match state.query_manifest(path_str) {
+    // Query manifest via IPC - mmap cache doesn't have content_hash
+    let entry = match state.query_manifest_ipc(path_str) {
         Some(e) => e,
         None => {
             shim_log!("[Shim] open_impl: manifest query returned None\n");
@@ -229,6 +229,12 @@ pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_i
     if INITIALIZING.load(Ordering::Relaxed) {
         return real(p, f, m);
     }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return real(p, f, m),
+    };
+
     open_impl(p, f, m).unwrap_or_else(|| real(p, f, m))
 }
 
