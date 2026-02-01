@@ -2,12 +2,19 @@
 //! Safety: All extern "C" functions here are dangerous FFI and must be used correctly.
 #![allow(clippy::missing_safety_doc)]
 
+#[cfg(target_os = "macos")]
 use crate::syscalls::dir::{closedir_shim, opendir_shim, readdir_shim};
+#[cfg(target_os = "macos")]
 use crate::syscalls::misc::{rename_shim, renameat_shim};
+#[cfg(target_os = "macos")]
 use crate::syscalls::mmap::{mmap_shim, munmap_shim};
+#[cfg(target_os = "macos")]
 use crate::syscalls::open::{open_shim, openat_shim};
+#[cfg(target_os = "macos")]
 use crate::syscalls::path::{readlink_shim, realpath_shim};
+#[cfg(target_os = "macos")]
 use crate::syscalls::stat::{fstat_shim, lstat_shim, stat_shim};
+#[cfg(target_os = "macos")]
 use libc::{c_char, c_int, c_void, dirent, mode_t, pid_t, size_t, ssize_t, timespec, DIR};
 
 #[cfg(target_os = "macos")]
@@ -94,57 +101,70 @@ macro_rules! shim {
 // - misc: rename_shim (with EXDEV logic)
 
 // Simple I/O passthroughs (no VFS logic needed)
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
     close(fd)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn write_shim(fd: c_int, b: *const c_void, c: size_t) -> ssize_t {
     write(fd, b, c)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn read_shim(fd: c_int, b: *mut c_void, c: size_t) -> ssize_t {
     read(fd, b, c)
 }
 // Note: readlink_shim, realpath_shim imported from syscalls/path.rs
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn getcwd_shim(b: *mut c_char, s: size_t) -> *mut c_char {
     getcwd(b, s)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn chdir_shim(p: *const c_char) -> c_int {
     chdir(p)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn unlink_shim(p: *const c_char) -> c_int {
     unlink(p)
 }
 // Note: rename_shim, renameat_shim imported from syscalls/misc.rs with EXDEV logic
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn rmdir_shim(p: *const c_char) -> c_int {
     rmdir(p)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn dlopen_shim(p: *const c_char, f: c_int) -> *mut c_void {
     dlopen(p, f)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn dlsym_shim(h: *mut c_void, s: *const c_char) -> *mut c_void {
     dlsym(h, s)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn access_shim(p: *const c_char, m: c_int) -> c_int {
     access(p, m)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn faccessat_shim(d: c_int, p: *const c_char, m: c_int, f: c_int) -> c_int {
     faccessat(d, p, m, f)
 }
 // Note: openat_shim imported from syscalls/open.rs
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn link_shim(o: *const c_char, n: *const c_char) -> c_int {
     link(o, n)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn linkat_shim(
     f1: c_int,
@@ -156,14 +176,17 @@ pub unsafe extern "C" fn linkat_shim(
     linkat(f1, p1, f2, p2, f)
 }
 // Note: renameat_shim imported from syscalls/misc.rs with EXDEV logic
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn symlink_shim(p1: *const c_char, p2: *const c_char) -> c_int {
     symlink(p1, p2)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn flock_shim(fd: c_int, o: c_int) -> c_int {
     flock(fd, o)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn utimensat_shim(
     d: c_int,
@@ -173,15 +196,18 @@ pub unsafe extern "C" fn utimensat_shim(
 ) -> c_int {
     utimensat(d, p, t, f)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn mkdir_shim(p: *const c_char, m: mode_t) -> c_int {
     mkdir(p, m)
 }
 // Note: mmap_shim, munmap_shim imported from syscalls/mmap.rs
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn fcntl_shim(f: c_int, c: c_int, a: c_int) -> c_int {
     fcntl(f, c, a)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn fstatat_shim(
     d: c_int,
@@ -191,6 +217,7 @@ pub unsafe extern "C" fn fstatat_shim(
 ) -> c_int {
     fstatat(d, p, b, f)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn execve_shim(
     p: *const c_char,
@@ -199,6 +226,7 @@ pub unsafe extern "C" fn execve_shim(
 ) -> c_int {
     execve(p, a, e)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn posix_spawn_shim(
     p: *mut pid_t,
@@ -210,6 +238,7 @@ pub unsafe extern "C" fn posix_spawn_shim(
 ) -> c_int {
     posix_spawn(p, pa, fa, at, ar, e)
 }
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn posix_spawnp_shim(
     p: *mut pid_t,

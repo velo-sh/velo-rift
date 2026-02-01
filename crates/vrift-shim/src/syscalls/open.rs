@@ -4,7 +4,10 @@ use crate::state::*;
 use libc::{c_char, c_int, c_void, mode_t};
 use std::ffi::CStr;
 #[cfg(target_os = "linux")]
+use std::ptr;
+#[cfg(target_os = "linux")]
 use std::sync::atomic::AtomicPtr;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
 
 /// Open implementation with VFS detection and CoW semantics.

@@ -1,7 +1,12 @@
+#[cfg(target_os = "macos")]
 use crate::interpose::*;
+#[cfg(target_os = "macos")]
 use crate::state::*;
+#[cfg(target_os = "macos")]
 use libc::{c_int, c_void};
+#[cfg(target_os = "macos")]
 use std::ffi::CStr;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
 
 #[no_mangle]
@@ -67,6 +72,7 @@ pub unsafe extern "C" fn opendir_shim(path: *const libc::c_char) -> *mut c_void 
 }
 
 /// Static buffer for readdir dirent (readdir returns pointer to static data)
+#[cfg(target_os = "macos")]
 static mut DIRENT_BUF: libc::dirent = libc::dirent {
     d_ino: 0,
     d_seekoff: 0,

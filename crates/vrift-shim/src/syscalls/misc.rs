@@ -1,13 +1,22 @@
 // RFC-0047: VFS boundary enforcement for rename operations
+#[cfg(target_os = "macos")]
 use crate::interpose::*;
 use crate::state::*;
 use libc::{c_char, c_int};
 use std::ffi::CStr;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
 
+#[cfg(target_os = "macos")]
 #[inline]
 unsafe fn set_errno(e: c_int) {
     *libc::__error() = e;
+}
+
+#[cfg(target_os = "linux")]
+#[inline]
+unsafe fn set_errno(e: c_int) {
+    *libc::__errno_location() = e;
 }
 
 /// RFC-0047: Rename implementation with VFS boundary enforcement

@@ -1,4 +1,6 @@
+#[cfg(target_os = "macos")]
 use crate::interpose::*;
+#[cfg(target_os = "macos")]
 use libc::{c_int, c_void, off_t, size_t};
 
 #[no_mangle]

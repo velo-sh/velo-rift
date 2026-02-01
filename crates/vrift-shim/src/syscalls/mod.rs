@@ -17,5 +17,6 @@ pub use dir::*;
 pub use misc::*;
 #[cfg(target_os = "macos")]
 pub use open::*;
+#[cfg(target_os = "macos")]
 pub use path::*;
 pub use stat::*;
