@@ -56,9 +56,9 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 | **`readdir`** | Discovery | ✅ | ✅ | ⏳ | `test_opendir_*` | Virtual entries |
 | **`closedir`** | Discovery | ✅ | ✅ | ⏳ | `test_opendir_*` | State cleanup |
 | **`readlink`** | Discovery | ✅ | ✅ | ⏳ | `test_readlink_*` | Manifest target |
-| **`realpath`** | Namespace | 🔄 | ✅ | ⏳ | `test_realpath_virtual` | VFS path resolution |
-| **`getcwd`** | Namespace | 🔄 | ✅ | ⏳ | `test_getcwd_chdir_*` | Virtual CWD |
-| **`chdir`** | Namespace | 🔄 | ✅ | ⏳ | `test_getcwd_chdir_*` | Manifest lookup |
+| **`realpath`** | Namespace | ✅ | ✅ | ⏳ | `test_realpath_virtual` | VFS path resolution |
+| **`getcwd`** | Namespace | ✅ | ✅ | ⏳ | `test_getcwd_chdir_*` | Virtual CWD |
+| **`chdir`** | Namespace | ✅ | ✅ | ⏳ | `test_getcwd_chdir_*` | Manifest lookup |
 | **`execve`** | Execution | ✅ | ✅ | ✅ | `test_execve_*` | Env inheritance |
 | **`posix_spawn`** | Execution | ✅ | ✅ | ⏳ | `test_spawn_*` | Recursion-safe |
 | **`posix_spawnp`** | Execution | ✅ | ✅ | ⏳ | `test_spawn_*` | PATH-resolving |

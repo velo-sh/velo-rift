@@ -20,7 +20,7 @@ pub const CAS_READ_ONLY_PERM: u32 =
     (libc::S_IRUSR | libc::S_IXUSR | libc::S_IRGRP | libc::S_IXGRP | libc::S_IROTH | libc::S_IXOTH)
         as u32; // 0555
 
-pub const CAS_FORBIDDEN_PERM_MASK: u32 = libc::S_IWUSR | libc::S_IWGRP | libc::S_IWOTH; // Write bits forbidden
+pub const CAS_FORBIDDEN_PERM_MASK: u32 = (libc::S_IWUSR | libc::S_IWGRP | libc::S_IWOTH) as u32; // Write bits forbidden
 
 /// Enforce the security invariant on a CAS blob.
 /// Ensures the file is read-only and NOT executable.
