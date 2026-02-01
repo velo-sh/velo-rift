@@ -14,11 +14,13 @@ echo ""
 
 # Setup (chflags first to handle leftover immutable files)
 export VR_THE_SOURCE="/tmp/inception_cas"
-export VRIFT_MANIFEST="/tmp/inception.manifest"
 export VRIFT_VFS_PREFIX="/vrift"
 
+# LMDB manifest is now in project's .vrift directory
+export VRIFT_MANIFEST_DIR="/tmp/inception_project/.vrift/manifest.lmdb"
+
 chflags -R nouchg "$VR_THE_SOURCE" /tmp/inception_project 2>/dev/null || true
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/inception_project 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" /tmp/inception_project 2>/dev/null || true
 mkdir -p "$VR_THE_SOURCE" /tmp/inception_project
 
 # Create a simple C project
@@ -32,15 +34,15 @@ EOF
 
 echo "[STEP 1] Ingest project into VFS..."
 "${PROJECT_ROOT}/target/debug/vrift" --the-source-root "$VR_THE_SOURCE" \
-    ingest /tmp/inception_project --output "$VRIFT_MANIFEST" --prefix /project
+    ingest /tmp/inception_project --prefix /vrift/project
 
-if [ ! -f "$VRIFT_MANIFEST" ]; then
-    echo "[FAIL] Ingest failed - no manifest created"
+if [ ! -d "$VRIFT_MANIFEST_DIR" ]; then
+    echo "[FAIL] Ingest failed - no LMDB manifest directory created"
     exit 1
 fi
-echo "[OK] Manifest created"
+echo "[OK] LMDB Manifest created at $VRIFT_MANIFEST_DIR"
 
-echo "[STEP 2] Start daemon..."
+echo "[STEP 2] Start daemon with manifest..."
 killall vriftd 2>/dev/null || true
 "${PROJECT_ROOT}/target/debug/vriftd" start > /tmp/inception_daemon.log 2>&1 &
 DAEMON_PID=$!

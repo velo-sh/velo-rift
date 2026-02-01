@@ -578,8 +578,7 @@ async fn cmd_ingest(
             .unwrap_or("root")
     });
 
-    // Legacy bincode manifest (for backwards compatibility)
-    let mut manifest = Manifest::new();
+    // LMDB manifest initialized above (line 562)
     let mut files_ingested = 0u64;
     let mut bytes_ingested = 0u64;
     let mut unique_blobs = 0u64;
@@ -672,7 +671,6 @@ async fn cmd_ingest(
 
         if metadata.is_dir() {
             let vnode = VnodeEntry::new_directory(mtime, metadata.mode());
-            manifest.insert(&manifest_path, vnode.clone());
             lmdb_manifest.insert(&manifest_path, vnode, asset_tier);
         } else if metadata.is_file() {
             // Collect for parallel processing
@@ -698,7 +696,6 @@ async fn cmd_ingest(
             }
 
             let vnode = VnodeEntry::new_symlink(hash, content.len() as u64, mtime);
-            manifest.insert(&manifest_path, vnode.clone());
             lmdb_manifest.insert(&manifest_path, vnode, asset_tier);
         }
     }
@@ -798,7 +795,6 @@ async fn cmd_ingest(
                 Ok(ingest_result) => {
                     let vnode =
                         VnodeEntry::new_file(ingest_result.hash, ingest_result.size, mtime, mode);
-                    manifest.insert(manifest_path, vnode.clone());
                     lmdb_manifest.insert(manifest_path, vnode, asset_tier);
 
                     files_ingested += 1;
@@ -839,7 +835,6 @@ async fn cmd_ingest(
                             cas.store(&content)?;
 
                             let vnode = VnodeEntry::new_file(hash, size, mtime, mode);
-                            manifest.insert(manifest_path, vnode.clone());
                             lmdb_manifest.insert(manifest_path, vnode, asset_tier);
 
                             files_ingested += 1;
@@ -865,10 +860,7 @@ async fn cmd_ingest(
         .commit()
         .with_context(|| "Failed to commit LMDB manifest")?;
 
-    // Save legacy bincode manifest
-    manifest
-        .save(output)
-        .with_context(|| format!("Failed to save manifest to {}", output.display()))?;
+    // LMDB manifest committed above (line 863-866)
 
     // Auto-register in global manifest registry (RFC-0041)
     let output_abs = output
@@ -886,7 +878,6 @@ async fn cmd_ingest(
         }
     }
 
-    let _stats = manifest.stats();
     let dedup_ratio = if files_ingested > 0 {
         100.0 * (1.0 - (unique_blobs as f64 / files_ingested as f64))
     } else {
