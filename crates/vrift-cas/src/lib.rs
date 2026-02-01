@@ -421,10 +421,10 @@ impl CasStore {
 
         for hash_res in self.iter()? {
             let hash = hash_res?;
-            
+
             // Convert Blake3Hash ([u8; 32]) to hex string for bloom lookup
             let hex = Self::hash_to_hex(&hash);
-            
+
             if !bloom.contains(&hex) {
                 // Potential orphan (not in Bloom Filter)
                 if let Some(path) = self.find_blob_path(&hash) {

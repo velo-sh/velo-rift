@@ -5,6 +5,10 @@
 
 #![allow(clippy::missing_safety_doc)]
 #![allow(unused_doc_comments)]
+#![allow(dead_code)]
+#![allow(clippy::needless_borrow)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::unnecessary_map_or)]
 
 use std::ffi::{CStr, CString};
 use std::os::unix::fs::MetadataExt;
@@ -13,13 +17,13 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use libc::{c_char, c_int, c_void, mode_t, size_t, ssize_t};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::cell::RefCell;
 use vrift_cas::CasStore;
 
 thread_local! {
-    static VIRTUAL_CWD: RefCell<Option<String>> = RefCell::new(None);
+    static VIRTUAL_CWD: RefCell<Option<String>> = const { RefCell::new(None) };
     /// Thread-local recursion guard to prevent re-entry during shim execution.
     static IN_SHIM: AtomicBool = const { AtomicBool::new(false) };
 }
@@ -456,7 +460,7 @@ fn open_manifest_mmap() -> (*const u8, usize) {
         return (ptr::null(), 0);
     }
     let manifest_path = unsafe { CStr::from_ptr(manifest_ptr).to_string_lossy() };
-    
+
     // Project root is the parent of manifest file
     let path = Path::new(manifest_path.as_ref());
     let project_root = match path.parent() {
@@ -592,7 +596,8 @@ fn mmap_dir_lookup(
     let parent_hash = vrift_ipc::fnv1a_hash(path);
     let dir_index_offset = header.dir_index_offset as usize;
     let dir_index_capacity = header.dir_index_capacity as usize;
-    let dir_index_ptr = unsafe { mmap_ptr.add(dir_index_offset) as *const vrift_ipc::MmapDirIndexEntry };
+    let dir_index_ptr =
+        unsafe { mmap_ptr.add(dir_index_offset) as *const vrift_ipc::MmapDirIndexEntry };
 
     let start_slot = (parent_hash as usize) % dir_index_capacity;
     for i in 0..dir_index_capacity {
@@ -774,7 +779,7 @@ impl ShimState {
         let mut buf = [0u8; 1024];
         if let Some(len) = unsafe { resolve_path_with_cwd(path, &mut buf) } {
             let normalized = unsafe { std::str::from_utf8_unchecked(&buf[..len]) };
-            
+
             // RFC-0046: Re-check after normalization
             if normalized.contains("/.vrift/") || normalized.starts_with(&*self.cas_root) {
                 return false;
@@ -1185,7 +1190,6 @@ unsafe fn resolve_path_with_cwd(path: &str, out: &mut [u8]) -> Option<usize> {
 
     raw_path_normalize(path, out)
 }
-
 
 unsafe fn shim_log(msg: &str) {
     LOGGER.log(msg);
@@ -1823,7 +1827,6 @@ unsafe fn access_impl(path: *const c_char, mode: c_int, real_access: AccessFn) -
     real_access(path, mode)
 }
 
-
 type OpendirFn = unsafe extern "C" fn(*const c_char) -> *mut libc::DIR;
 type ReadlinkFn = unsafe extern "C" fn(*const c_char, *mut c_char, size_t) -> ssize_t;
 type RealpathFn = unsafe extern "C" fn(*const c_char, *mut c_char) -> *mut c_char;
@@ -1874,15 +1877,17 @@ unsafe fn opendir_impl(path: *const c_char, real_opendir: OpendirFn) -> *mut lib
         } else {
             path_str
         };
-        
+
         let vpath = &path_str[state.vfs_prefix.len()..];
 
         // 1. Try mmap lookup first (Zero-Copy)
-        if let Some((children_ptr, count)) = mmap_dir_lookup(state.mmap_ptr, state.mmap_size, lookup_path) {
+        if let Some((children_ptr, count)) =
+            mmap_dir_lookup(state.mmap_ptr, state.mmap_size, lookup_path)
+        {
             shim_log("[VRift] opendir mmap: ");
             shim_log(lookup_path);
             shim_log("\n");
-            
+
             let handle = SYNTHETIC_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
             let synthetic = SyntheticDir {
                 vpath: vpath.to_string(),
@@ -2583,7 +2588,7 @@ pub unsafe extern "C" fn chdir_shim(path: *const c_char) -> c_int {
         let mut path_buf = [0u8; 1024];
         if let Some(len) = resolve_path_with_cwd(&path_str, &mut path_buf) {
             let resolved_path = unsafe { std::str::from_utf8_unchecked(&path_buf[..len]) };
-            
+
             // RFC-0043: Robust virtualization support
             if resolved_path.starts_with(&*state.vfs_prefix) {
                 // Check if it exists and is a directory in manifest
@@ -2653,10 +2658,10 @@ pub unsafe extern "C" fn rename_shim(oldpath: *const c_char, newpath: *const c_c
         let new_str = CStr::from_ptr(newpath).to_string_lossy();
         let mut buf_old = [0u8; 1024];
         let mut buf_new = [0u8; 1024];
-        
+
         let old_res = resolve_path_with_cwd(&old_str, &mut buf_old);
         let new_res = resolve_path_with_cwd(&new_str, &mut buf_new);
-        
+
         let old_is_vfs = old_res.map_or(false, |len| {
             let p = unsafe { std::str::from_utf8_unchecked(&buf_old[..len]) };
             p.starts_with(&*state.vfs_prefix)

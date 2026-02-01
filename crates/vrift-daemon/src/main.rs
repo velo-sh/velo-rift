@@ -171,7 +171,7 @@ fn export_mmap_cache(manifest: &LmdbManifest, project_root: &Path) {
     use vrift_ipc::ManifestMmapBuilder;
 
     let mut builder = ManifestMmapBuilder::new();
-    
+
     // Derived mmap path: /tmp/vrift-manifest-[hash].mmap
     let root_str = project_root.to_string_lossy();
     let root_hash = blake3::hash(root_str.as_bytes());
@@ -227,8 +227,7 @@ async fn start_daemon() -> Result<()> {
     tracing::info!("vriftd: Listening on {}", socket_path);
 
     // Initialize shared state
-    let cas_root = std::env::var("VRIFT_CAS_ROOT")
-        .unwrap_or_else(|_| ".vrift/cas".to_string());
+    let cas_root = std::env::var("VRIFT_CAS_ROOT").unwrap_or_else(|_| ".vrift/cas".to_string());
     let cas = vrift_cas::CasStore::new(&cas_root)?;
 
     let state = Arc::new(DaemonState {
@@ -300,14 +299,20 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
         }
 
         let response = match bincode::deserialize::<VeloRequest>(&buf) {
-            Ok(req) => handle_request(req, &state, peer_creds, daemon_uid, &mut current_workspace).await,
+            Ok(req) => {
+                handle_request(req, &state, peer_creds, daemon_uid, &mut current_workspace).await
+            }
             Err(e) => VeloResponse::Error(format!("Invalid request: {}", e)),
         };
 
         let resp_bytes = bincode::serialize(&response).unwrap();
         let resp_len = (resp_bytes.len() as u32).to_le_bytes();
-        if stream.write_all(&resp_len).await.is_err() { return; }
-        if stream.write_all(&resp_bytes).await.is_err() { return; }
+        if stream.write_all(&resp_len).await.is_err() {
+            return;
+        }
+        if stream.write_all(&resp_bytes).await.is_err() {
+            return;
+        }
     }
 }
 
@@ -320,24 +325,24 @@ async fn handle_request(
 ) -> VeloResponse {
     tracing::debug!("Received request: {:?}", req);
     match req {
-        VeloRequest::Handshake { client_version } => {
-            VeloResponse::HandshakeAck {
-                server_version: env!("CARGO_PKG_VERSION").to_string(),
-            }
-        }
+        VeloRequest::Handshake { client_version: _ } => VeloResponse::HandshakeAck {
+            server_version: env!("CARGO_PKG_VERSION").to_string(),
+        },
         VeloRequest::Status => {
             let count = state.cas_index.lock().unwrap().len();
             VeloResponse::StatusAck {
                 status: format!("Multi-tenant Operational (Global Blobs: {})", count),
             }
         }
-        VeloRequest::RegisterWorkspace { project_root: root_str } => {
+        VeloRequest::RegisterWorkspace {
+            project_root: root_str,
+        } => {
             tracing::info!("vriftd: Workspace Registration Request for: {}", root_str);
             let project_root = PathBuf::from(&root_str);
             if !project_root.exists() {
                 return VeloResponse::Error("Project root does not exist".to_string());
             }
-            
+
             // Security: In a production system, verify that peer_creds has access to this folder
             // For now, we allow any local user but bind the connection to this root.
             match get_or_create_workspace(state, project_root).await {
@@ -373,32 +378,46 @@ async fn handle_request(
                 VeloResponse::CasNotFound
             }
         }
-        VeloRequest::Protect { path, immutable, owner } => {
+        VeloRequest::Protect {
+            path,
+            immutable,
+            owner,
+        } => {
             // Sandboxing check
             if let Some(ref ws) = current_workspace {
                 if !path.starts_with(ws.project_root.to_str().unwrap_or("")) {
-                     return VeloResponse::Error("Access Denied: Path outside project root".to_string());
+                    return VeloResponse::Error(
+                        "Access Denied: Path outside project root".to_string(),
+                    );
                 }
             } else {
-                 return VeloResponse::Error("Access Denied: Workspace not registered".to_string());
+                return VeloResponse::Error("Access Denied: Workspace not registered".to_string());
             }
             handle_protect(path, immutable, owner).await
         }
         VeloRequest::ManifestGet { path } => {
-             if let Some(ref ws) = current_workspace {
+            if let Some(ref ws) = current_workspace {
                 let manifest = ws.manifest.lock().unwrap();
                 let entry = match manifest.get(&path) {
                     Ok(Some(manifest_entry)) => Some(manifest_entry.vnode.clone()),
                     _ => None,
                 };
-                tracing::info!("vriftd: ManifestGet lookup for '{}' -> {}", path, if entry.is_some() { "FOUND" } else { "NOT FOUND" });
+                tracing::info!(
+                    "vriftd: ManifestGet lookup for '{}' -> {}",
+                    path,
+                    if entry.is_some() {
+                        "FOUND"
+                    } else {
+                        "NOT FOUND"
+                    }
+                );
                 VeloResponse::ManifestAck { entry }
             } else {
                 VeloResponse::Error("Workspace not registered".to_string())
             }
         }
         VeloRequest::ManifestUpsert { path, entry } => {
-             if let Some(ref ws) = current_workspace {
+            if let Some(ref ws) = current_workspace {
                 let manifest = ws.manifest.lock().unwrap();
                 manifest.insert(&path, entry, AssetTier::Tier2Mutable);
                 ws.bloom.add(&path);
@@ -416,26 +435,31 @@ async fn handle_request(
                     let mut index = state.cas_index.lock().unwrap();
                     index.clear();
                     if let Ok(iter) = state.cas.iter() {
-                        for hash_res in iter {
-                            if let Ok(hash) = hash_res {
-                                if let Some(path) = state.cas.blob_path_for_hash(&hash) {
-                                    if let Ok(meta) = std::fs::metadata(path) {
-                                        index.insert(hash, meta.len());
-                                    }
+                        for hash in iter.flatten() {
+                            if let Some(path) = state.cas.blob_path_for_hash(&hash) {
+                                if let Ok(meta) = std::fs::metadata(path) {
+                                    index.insert(hash, meta.len());
                                 }
                             }
                         }
                     }
-                    VeloResponse::CasSweepAck { deleted_count, reclaimed_bytes }
+                    VeloResponse::CasSweepAck {
+                        deleted_count,
+                        reclaimed_bytes,
+                    }
                 }
                 Err(e) => VeloResponse::Error(format!("Sweep failed: {}", e)),
             }
         }
         VeloRequest::ManifestListDir { path } => {
-             if let Some(ref ws) = current_workspace {
+            if let Some(ref ws) = current_workspace {
                 let manifest = ws.manifest.lock().unwrap();
                 let mut entries = Vec::new();
-                let prefix = if path.is_empty() { String::new() } else { format!("{}/", path.trim_end_matches('/')) };
+                let prefix = if path.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}/", path.trim_end_matches('/'))
+                };
                 let prefix_len = prefix.len();
                 let mut seen = std::collections::HashSet::new();
                 if let Ok(all_entries) = manifest.iter() {
@@ -444,8 +468,12 @@ async fn handle_request(
                             let remainder = &entry_path[prefix_len..];
                             let child_name = remainder.split('/').next().unwrap_or(remainder);
                             if !child_name.is_empty() && seen.insert(child_name.to_string()) {
-                                let is_dir = manifest_entry.vnode.is_dir() || remainder.contains('/');
-                                entries.push(vrift_ipc::DirEntry { name: child_name.to_string(), is_dir });
+                                let is_dir =
+                                    manifest_entry.vnode.is_dir() || remainder.contains('/');
+                                entries.push(vrift_ipc::DirEntry {
+                                    name: child_name.to_string(),
+                                    is_dir,
+                                });
                             }
                         }
                     }
@@ -552,7 +580,10 @@ async fn scan_cas_root(state: &DaemonState, cas_root_path: &str) -> Result<()> {
     let cas_root = Path::new(cas_root_path);
 
     if !cas_root.exists() {
-        tracing::warn!("vriftd: CAS root not found at {:?}, skipping scan.", cas_root);
+        tracing::warn!(
+            "vriftd: CAS root not found at {:?}, skipping scan.",
+            cas_root
+        );
         return Ok(());
     }
 
@@ -624,7 +655,7 @@ async fn get_or_create_workspace(
     let root_str = project_root.to_string_lossy();
     let root_hash = blake3::hash(root_str.as_bytes());
     let shm_name = format!("/vrift_bloom_{}", &root_hash.to_hex()[..16]);
-    
+
     let _ = shm_unlink(shm_name.as_str());
     let shm_fd = shm_open(
         shm_name.as_str(),
@@ -663,7 +694,7 @@ async fn get_or_create_workspace(
     });
 
     workspaces.insert(project_root, ws.clone());
-    
+
     // Export initial mmap cache
     {
         let manifest = ws.manifest.lock().unwrap();
