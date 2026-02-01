@@ -8,6 +8,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# macOS hardened runtime blocks DYLD_INSERT_LIBRARIES on system binaries (python)
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo "[SKIP] test_python_vfs_execution.sh - macOS hardened runtime blocks DYLD_INSERT_LIBRARIES"
+    echo "       System binaries (python) cannot load the VFS shim on macOS."
+    echo "       Run this test on Linux for full VFS E2E verification."
+    exit 0
+fi
+
 echo "=== Test: Python Script Execution via VFS ==="
 echo "Goal: python /vrift/project/main.py"
 echo ""

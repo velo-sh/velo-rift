@@ -8,6 +8,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# macOS hardened runtime blocks DYLD_INSERT_LIBRARIES on system binaries (cargo, rustc)
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo "[SKIP] test_rust_cargo_build.sh - macOS hardened runtime blocks DYLD_INSERT_LIBRARIES"
+    echo "       System binaries (cargo, rustc) cannot load the VFS shim on macOS."
+    echo "       Run this test on Linux for full VFS E2E verification."
+    exit 0
+fi
+
 echo "=== Rust Build Test: cargo build via VFS ==="
 echo "Goal: Fool cargo/rustc into believing virtual files are real."
 echo ""
