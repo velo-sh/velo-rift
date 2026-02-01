@@ -61,6 +61,14 @@ extern "C" {
         argv: *const *const c_char,
         envp: *const *const c_char,
     ) -> c_int;
+    fn mmap(
+        addr: *mut c_void,
+        len: size_t,
+        prot: c_int,
+        flags: c_int,
+        fd: c_int,
+        offset: libc::off_t,
+    ) -> *mut c_void;
 }
 
 #[cfg(target_os = "macos")]
@@ -153,6 +161,13 @@ static IT_POSIX_SPAWN: Interpose = Interpose {
 static IT_POSIX_SPAWNP: Interpose = Interpose {
     new_func: posix_spawnp_shim as *const (),
     old_func: posix_spawnp as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+static IT_MMAP: Interpose = Interpose {
+    new_func: mmap_shim as *const (),
+    old_func: mmap as *const (),
 };
 
 // ============================================================================
@@ -764,6 +779,8 @@ type PosixSpawnFn = unsafe extern "C" fn(
     *const *const c_char,
     *const *const c_char,
 ) -> c_int;
+type MmapFn =
+    unsafe extern "C" fn(*mut c_void, size_t, c_int, c_int, c_int, libc::off_t) -> *mut c_void;
 
 unsafe fn execve_impl(
     path: *const c_char,
@@ -1430,6 +1447,39 @@ pub unsafe extern "C" fn posix_spawnp_shim(
 ) -> c_int {
     let real = std::mem::transmute::<*const (), PosixSpawnFn>(IT_POSIX_SPAWNP.old_func);
     real(pid, file, file_actions, attrp, argv, envp)
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn mmap_shim(
+    addr: *mut c_void,
+    len: size_t,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: libc::off_t,
+) -> *mut c_void {
+    let real = std::mem::transmute::<*const (), MmapFn>(IT_MMAP.old_func);
+
+    // Early bailout during initialization
+    if INITIALIZING.load(Ordering::SeqCst) {
+        return real(addr, len, prot, flags, fd, offset);
+    }
+
+    // Guard recursion
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return real(addr, len, prot, flags, fd, offset),
+    };
+
+    // For VFS file descriptors (tracked in open_fds), the underlying fd already
+    // points to the CAS blob temp file, so mmap can proceed normally.
+    // The interposition here ensures we can add future optimizations like:
+    // - Direct CAS blob mmap without temp files
+    // - Memory-mapped manifest lookups
+    // - Lazy content materialization
+
+    real(addr, len, prot, flags, fd, offset)
 }
 
 // Constructor
