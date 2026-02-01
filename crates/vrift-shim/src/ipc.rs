@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use libc::c_int;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;

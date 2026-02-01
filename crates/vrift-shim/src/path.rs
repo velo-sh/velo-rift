@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use libc::{c_char, c_int, c_void, AT_FDCWD};
 use std::ffi::CStr;
 use std::ptr;
