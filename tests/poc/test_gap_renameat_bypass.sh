@@ -74,7 +74,7 @@ export VRIFT_socket_path="/tmp/vrift.sock"
 
 echo "Running renameat test..."
 set +e
-"$TEST_DIR/renameat_test" "$VELO_PROJECT_ROOT/test.txt" "$EXPORT_PATH"
+(cd "$VELO_PROJECT_ROOT" && "$TEST_DIR/renameat_test" test.txt "$EXPORT_PATH")
 RET=$?
 set -e
 

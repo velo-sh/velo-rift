@@ -84,10 +84,11 @@ if [[ "$(uname)" == "Darwin" ]]; then
     export DYLD_INSERT_LIBRARIES="$LD_PRELOAD"
     export DYLD_FORCE_FLAT_NAMESPACE=1
 fi
+export RUST_LOG=debug
 
 echo "Running rename..."
 set +e
-"$TEST_DIR/boundary_test" "$VELO_PROJECT_ROOT/test.txt" "$EXTERNAL_DIR/test.txt"
+(cd "$VELO_PROJECT_ROOT" && "$TEST_DIR/boundary_test" test.txt "$EXTERNAL_DIR/test.txt")
 RET=$?
 set -e
 

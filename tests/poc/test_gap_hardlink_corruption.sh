@@ -74,7 +74,7 @@ export VRIFT_socket_path="/tmp/vrift.sock"
 
 echo "Running link() test..."
 set +e
-"$TEST_DIR/link_test" "$VELO_PROJECT_ROOT/blobs.txt" "$EXPORT_PATH"
+(cd "$VELO_PROJECT_ROOT" && "$TEST_DIR/link_test" blobs.txt "$EXPORT_PATH")
 RET=$?
 set -e
 
