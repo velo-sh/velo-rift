@@ -1,7 +1,7 @@
 # RFC-0052: L2 Compilation Artifact Cache
 
 ## Vision
-> **改一行代码，立即编译完成。团队共享编译结果，彻底消灭重复 CPU 工作。**
+> **Change one line of code, build completes instantly. Share compilation results across the team, eliminate all redundant CPU work.**
 
 ## The 10x Promise
 | Layer | What it caches | Speedup |
@@ -142,9 +142,9 @@ cache_extensions = [".rlib", ".rmeta", ".o", ".a"]
 
 ## The Ultimate Promise
 
-> **修改一个文件 → 按下回车 → 编译已完成**
+> **Change one file → Press Enter → Build complete**
 
 This is the true meaning of `--live` mode:
 - L1: Sources in memory → No IO wait
 - L2: Artifacts cached → No CPU wait
-- Result: **编译时间 ≈ 网络延迟** (LAN: 1-5ms)
+- Result: **Build time ≈ Network latency** (LAN: 1-5ms)
