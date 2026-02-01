@@ -194,13 +194,32 @@ stat(vfs_path) → st_ino = hash(path) % 2^32
 
 ## Verification Status
 
+### E2E Tests (2026-02-01)
+
+| Test | Result | Notes |
+|------|--------|-------|
+| `test_e2e_gcc_compile` | ✅ PASS | Full GCC compile cycle works in VFS |
+| `test_e2e_mtime_update` | ✅ PASS | utimes works, incremental builds OK |
+| `test_e2e_mutation_syscalls` | ✅ PASS | unlink/rename/create/truncate work |
+
+### Gap Test Results
+
+| Status | Count | Syscalls |
+|--------|-------|----------|
+| ✅ PASS | 2 | flock_semantic, symlink |
+| ⚠️ WARNING | 5 | ctime, readdir_order, st_dev, st_nlink, xattr |
+| ❌ FAIL | 10 | copy_file_range, dup, fchdir, fcntl, ftruncate, inode, lseek, mmap, sendfile, utimes |
+
+### Component Status
+
 | Component | Status |
 |-----------|--------|
 | Read path (stat, open, read) | ✅ Implemented |
 | Path resolution (realpath, getcwd, chdir) | ✅ Implemented |
 | utimes/utimensat | ✅ Implemented |
-| Mutation (unlink, rename, rmdir) | ⚠️ Returns EROFS |
-| CoW write path | ⚠️ Incomplete |
+| flock VFS semantic | ✅ Implemented |
+| symlink interception | ✅ Implemented |
+| Mutation (unlink, rename, rmdir) | ⚠️ EPERM (CAS protected) |
 | mmap tracking | ❌ Not implemented |
-| flock virtualization | ❌ Not implemented |
 | Inode virtualization | ❌ Not implemented |
+

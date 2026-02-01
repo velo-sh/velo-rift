@@ -73,7 +73,7 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 | **`rmdir`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
 | **`chmod`** | Mutation | ⏳ | ⏳ | ⏳ | - | Passthrough (correct) |
 | **`chown`** | Mutation | ⏳ | ⏳ | ⏳ | - | Passthrough (correct) |
-| **`utimes`** | Mutation | ⏳ | ⏳ | ⏳ | - | Passthrough (correct) |
+| **`utimes`** | Mutation | ✅ | ✅ | ⏳ | `test_gap_utimes` | VFS mtime update via IPC |
 | **`statx`** | Metadata | ❌ | ❌ | ⏳ | `test_statx_*` | Linux-only |
 | **`getdents`** | Discovery | ❌ | ❌ | ⏳ | - | Linux raw syscall |
 
