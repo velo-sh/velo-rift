@@ -64,15 +64,17 @@ Any detectable inconsistency could cause:
 | `rename` | Update Manifest path | Atomic replace fails |
 | `utimes` | Update Manifest mtime | Stale incremental builds |
 
-### ⚡ Can Passthrough
+### ⚡ Native Execution (On Virtualized FD)
 
-| Syscall | Rationale |
-|---------|-----------|
-| `read/write` | FD already points to correct file* | *Assumption: `open` redirected FD to CoW temp |
-| `lseek/pread/pwrite` | FD-local operation |
-| `ftruncate` | Works on CoW temp |
-| `fsync/fdatasync` | CAS already durable |
-| `mmap(MAP_PRIVATE)` | FD-based, works on temp |
+These syscalls execute natively because `open` has already **swizzled** the file descriptor to a local real file (CoW copy or immutable blob).
+
+| Syscall | Behavior | Mechanism |
+|---------|----------|-----------|
+| `read/write` | **Native Speed** | Operates on the swizzled FD returned by `open` |
+| `lseek/pread/pwrite` | **Native Speed** | Operates on the swizzled FD |
+| `ftruncate` | **Native Speed** | Operates on the CoW temp file |
+| `fsync/fdatasync` | **Native Speed** | Flushes the underlying real file |
+| `mmap(MAP_PRIVATE)` | **Native Speed** | Maps the underlying real file |
 
 ---
 
