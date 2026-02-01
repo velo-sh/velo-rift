@@ -34,7 +34,7 @@ unsafe fn stat_impl(
         (*buf).st_size = entry.size as i64;
         (*buf).st_mode = entry.mode as u16;
         (*buf).st_mtime = entry.mtime;
-        (*buf).st_dev = 0x52494654;
+        (*buf).st_dev = 0x52494654; // "RIFT"
         (*buf).st_nlink = 1;
         (*buf).st_ino = vrift_ipc::fnv1a_hash(path_str);
         return Some(0);
@@ -46,7 +46,7 @@ unsafe fn stat_impl(
         (*buf).st_size = entry.size as i64;
         (*buf).st_mode = entry.mode as u16;
         (*buf).st_mtime = entry.mtime as i64;
-        (*buf).st_dev = 0x52494654;
+        (*buf).st_dev = 0x52494654; // "RIFT"
         (*buf).st_nlink = 1;
         (*buf).st_ino = vrift_ipc::fnv1a_hash(path_str);
         return Some(0);
@@ -56,8 +56,8 @@ unsafe fn stat_impl(
     // Call real stat, then patch st_dev to mark as VFS file
     let ret = real_stat(path, buf);
     if ret == 0 {
-        (*buf).st_dev = 0x52494654;
-        // Keep real st_ino from stat
+        (*buf).st_dev = 0x52494654; // "RIFT"
+                                    // Keep real st_ino from stat
     }
     Some(ret)
 }
