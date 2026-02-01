@@ -24,8 +24,6 @@ use vrift_cas::CasStore;
 
 thread_local! {
     static VIRTUAL_CWD: RefCell<Option<String>> = const { RefCell::new(None) };
-    /// Thread-local recursion guard to prevent re-entry during shim execution.
-    static IN_SHIM: AtomicBool = const { AtomicBool::new(false) };
 }
 
 // ============================================================================
@@ -389,6 +387,7 @@ impl Logger {
         }
     }
 
+    #[allow(dead_code)]
     fn dump_to_file(&self) {
         let pid = unsafe { libc::getpid() };
         let path = format!("/tmp/vrift-shim-{}.log", pid);
@@ -2707,6 +2706,7 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
     real(path)
 }
 
+#[allow(dead_code)]
 extern "C" fn dump_logs_atexit() {
     LOGGER.dump_to_file();
 }
