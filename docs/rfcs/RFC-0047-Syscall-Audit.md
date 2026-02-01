@@ -160,6 +160,23 @@ msync(map, size, MS_SYNC);
 
 **Problem**: VFS doesn't know file changed → Silent data loss
 
+### Why st_dev Matters (The EXDEV Trap)
+
+`st_dev` (Device ID) tells tools if two files are on the same filesystem.
+
+1. **If st_dev differs (Source ≠ Dest)**:
+   - Tools (mv, cp, install) assume `rename` is impossible.
+   - Fallback: `read()` source → `write()` dest → `unlink()` source.
+   - **Result**: Slow, non-atomic.
+
+2. **If st_dev matches**:
+   - Tools try atomic `rename()`.
+   - **Benefit**: Fast, atomic replacement (crucial for compilers).
+
+**Recommendation**: VFS should return a **Fixed Virtual Device ID** for all properties provided by VFS.
+- **VFS ↔ VFS**: Atomic rename (handled by Shim/Daemon).
+- **VFS ↔ Real**: Kernel sees different Device IDs → returns `EXDEV` → tools fallback to copy (Correct).
+
 ---
 
 ## Mitigation Strategies
