@@ -17,7 +17,7 @@ mkdir -p "$TEST_DIR"
 echo "lockfile content" > "$TEST_DIR/file.lock"
 
 echo "[1] Testing exclusive lock..."
-cat > /tmp/flock_test.c << 'EOF'
+cat > "$TEST_DIR/flock_test.c" << 'EOF'
 #include <stdio.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -25,6 +25,7 @@ cat > /tmp/flock_test.c << 'EOF'
 #include <string.h>
 
 int main(int argc, char *argv[]) {
+    if (argc < 3) return 1;
     const char *path = argv[1];
     const char *mode = argv[2];
     int lock_type = (strcmp(mode, "shared") == 0) ? LOCK_SH : LOCK_EX;
@@ -47,19 +48,28 @@ int main(int argc, char *argv[]) {
 }
 EOF
 
-if ! gcc /tmp/flock_test.c -o /tmp/flock_test 2>/dev/null; then
+if ! gcc "$TEST_DIR/flock_test.c" -o "$TEST_DIR/flock_test" 2>/dev/null; then
     echo "⚠️  Could not compile flock test"
     exit 0
 fi
 
-# First lock should succeed
-OUTPUT1=$(/tmp/flock_test "$TEST_DIR/file.lock" "exclusive" &
+# First lock should succeed in background
+"$TEST_DIR/flock_test" "$TEST_DIR/file.lock" "exclusive" > "$TEST_DIR/out1.txt" &
 PID1=$!
-sleep 0.5
-echo $PID1)
+sleep 1
 
 # Second exclusive lock should fail (be blocked)
-OUTPUT2=$(/tmp/flock_test "$TEST_DIR/file.lock" "exclusive" 2>&1) || true
+if "$TEST_DIR/flock_test" "$TEST_DIR/file.lock" "exclusive" > "$TEST_DIR/out2.txt" 2>&1; then
+    OUTPUT2=$(cat "$TEST_DIR/out2.txt")
+    echo "    ✗ Lock behavior incorrect: Second lock succeeded ($OUTPUT2)"
+else
+    OUTPUT2=$(cat "$TEST_DIR/out2.txt")
+    if echo "$OUTPUT2" | grep -q "BLOCKED"; then
+        echo "    ✓ Exclusive lock blocks second locker"
+    else
+        echo "    ⚠ Lock behavior unclear: $OUTPUT2"
+    fi
+fi
 
 wait 2>/dev/null || true
 
@@ -71,10 +81,10 @@ fi
 
 echo "[2] Testing shared locks..."
 # Multiple shared locks should work
-/tmp/flock_test "$TEST_DIR/file.lock" "shared" &
+"$TEST_DIR/flock_test" "$TEST_DIR/file.lock" "shared" &
 PID1=$!
 sleep 0.2
-/tmp/flock_test "$TEST_DIR/file.lock" "shared" &
+"$TEST_DIR/flock_test" "$TEST_DIR/file.lock" "shared" &
 PID2=$!
 
 wait $PID1 2>/dev/null

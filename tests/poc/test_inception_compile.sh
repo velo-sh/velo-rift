@@ -11,7 +11,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # macOS hardened runtime blocks DYLD_INSERT_LIBRARIES on system binaries (gcc, clang)
 # Skip this test on macOS with informative message
 if [[ "$(uname)" == "Darwin" ]]; then
-    echo "[SKIP] test_inception_compile.sh - macOS hardened runtime blocks DYLD_INSERT_LIBRARIES"
+    echo "⏭️  SKIP: test_inception_compile.sh - macOS hardened runtime blocks DYLD_INSERT_LIBRARIES"
     echo "       System binaries (gcc, clang) cannot load the VFS shim on macOS."
     echo "       Run this test on Linux for full VFS E2E verification."
     exit 0

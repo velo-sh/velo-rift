@@ -7,7 +7,7 @@ THE_SOURCE="${VR_THE_SOURCE:-$HOME/.vrift/the_source}"
 echo "--- Iron Law Verification: $THE_SOURCE ---"
 
 if [ ! -d "$THE_SOURCE" ]; then
-    echo "[SKIP] CAS directory $THE_SOURCE not found. Run an ingest first."
+    echo "⏭️  SKIP: CAS directory $THE_SOURCE not found. Run an ingest first."
     exit 0
 fi
 
@@ -15,7 +15,7 @@ fi
 BLOB=$(find "$THE_SOURCE" -type f -name "*.bin" | head -n 1)
 
 if [ -z "$BLOB" ]; then
-    echo "[SKIP] No blobs found in CAS."
+    echo "⏭️  SKIP: No blobs found in CAS."
     exit 0
 fi
 
@@ -49,4 +49,4 @@ else
     echo "[OK] No execute bits found: $PERMS"
 fi
 
-echo "[SUCCESS] Iron Law Verification complete."
+echo "✅ PASS: Iron Law Verification (Immutability) complete."

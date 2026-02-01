@@ -84,6 +84,8 @@ sleep 1
 ./target/debug/vrift --the-source-root "$CAS_ROOT" ingest "$TEST_DIR" --output "$TEST_DIR/fallback.manifest"
 if [ $? -eq 0 ]; then
     echo "[SUCCESS] CLI correctly falls back to direct mode when daemon is offline."
+    echo ""
+    echo "✅ PASS: Standard Ingest IPC Verification (with functional warnings)"
     EXIT_CODE=0
 else
     echo "[FAIL] CLI failed when daemon was offline."

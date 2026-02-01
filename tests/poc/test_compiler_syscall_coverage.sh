@@ -116,15 +116,15 @@ echo "    Linker:    stat/fstat, mmap (.o/.a), readlink"
 echo "    Native:    dlopen (.so/.dylib/.node), mmap"
 echo ""
 
-if [[ $FAIL -gt 2 ]]; then
-    echo "⚠️ WARNING: $FAIL syscalls not intercepted"
-    echo "   Some compiler scenarios may not work correctly."
-    exit 1
-else
-    if [[ $FAIL -gt 0 ]]; then
-        echo "✅ PASS: Core syscalls covered ($FAIL non-critical missing, passthrough OK)"
+if [[ $FAIL -gt 0 ]]; then
+    if [[ $FAIL -gt 2 ]]; then
+        echo "❌ FAIL: $FAIL syscalls not intercepted. Compiler support is incomplete."
+        exit 1
     else
-        echo "✅ ALL PASS: 100% syscall coverage for compilers!"
+        echo "⚠️  PARTIAL PASS: Core syscalls covered ($FAIL non-critical missing, passthrough OK)"
+        exit 0
     fi
+else
+    echo "✅ COMPLETE PASS: 100% syscall coverage for compilers!"
     exit 0
 fi

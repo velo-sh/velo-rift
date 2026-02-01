@@ -16,7 +16,7 @@ cleanup
 mkdir -p "$TEST_DIR"
 
 echo "[1] Compiling O_APPEND test..."
-cat > /tmp/append_test.c << 'EOF'
+cat > "$TEST_DIR/append_test.c" << 'EOF'
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -24,6 +24,7 @@ cat > /tmp/append_test.c << 'EOF'
 #include <stdlib.h>
 
 int main(int argc, char *argv[]) {
+    if (argc < 3) return 1;
     const char *path = argv[1];
     const char *id = argv[2];
     
@@ -41,17 +42,17 @@ int main(int argc, char *argv[]) {
 }
 EOF
 
-if ! gcc /tmp/append_test.c -o /tmp/append_test 2>/dev/null; then
+if ! gcc "$TEST_DIR/append_test.c" -o "$TEST_DIR/append_test" 2>/dev/null; then
     echo "⚠️  Could not compile append test"
     exit 0
 fi
 
 echo "[2] Running 4 concurrent appenders..."
 rm -f "$TEST_DIR/log.txt"
-/tmp/append_test "$TEST_DIR/log.txt" "A" &
-/tmp/append_test "$TEST_DIR/log.txt" "B" &
-/tmp/append_test "$TEST_DIR/log.txt" "C" &
-/tmp/append_test "$TEST_DIR/log.txt" "D" &
+"$TEST_DIR/append_test" "$TEST_DIR/log.txt" "A" &
+"$TEST_DIR/append_test" "$TEST_DIR/log.txt" "B" &
+"$TEST_DIR/append_test" "$TEST_DIR/log.txt" "C" &
+"$TEST_DIR/append_test" "$TEST_DIR/log.txt" "D" &
 wait
 
 echo "[3] Checking for interleaving or corruption..."
@@ -65,8 +66,8 @@ else
 fi
 
 # Check for any corrupted lines (lines should match pattern X:NNN)
-BAD_LINES=$(grep -cvE "^[A-D]:[0-9]{3}$" "$TEST_DIR/log.txt" 2>/dev/null || echo "0")
-if [ "$BAD_LINES" -eq 0 ]; then
+BAD_LINES=$(grep -cvE "^[A-D]:[0-9]{3}$" "$TEST_DIR/log.txt" 2>/dev/null | tail -n 1 || echo "0")
+if [ "${BAD_LINES:-0}" -eq 0 ]; then
     echo "    ✓ No corrupted lines (atomic writes)"
 else
     echo "    ⚠ Found $BAD_LINES corrupted lines"

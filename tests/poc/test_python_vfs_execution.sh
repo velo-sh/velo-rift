@@ -10,8 +10,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # macOS hardened runtime blocks DYLD_INSERT_LIBRARIES on system binaries (python)
 if [[ "$(uname)" == "Darwin" ]]; then
-    echo "[SKIP] test_python_vfs_execution.sh - macOS hardened runtime blocks DYLD_INSERT_LIBRARIES"
-    echo "       System binaries (python) cannot load the VFS shim on macOS."
+    echo "⏭️  SKIP: test_rust_cargo_build.sh - macOS hardened runtime blocks DYLD_INSERT_LIBRARIES"
+    echo "       System binaries (cargo, rustc) cannot load the VFS shim on macOS."
     echo "       Run this test on Linux for full VFS E2E verification."
     exit 0
 fi

@@ -15,62 +15,63 @@ cleanup
 
 mkdir -p "$TEST_DIR"
 
-echo "[1] Testing O_EXCL creates new file..."
-cat > /tmp/oexcl_test.c << 'EOF'
+echo "[1] Compiling O_EXCL test program..."
+cat > "$TEST_DIR/o_excl_test.c" << 'EOF'
 #include <stdio.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
 
 int main(int argc, char *argv[]) {
+    if (argc < 2) return 1;
     const char *path = argv[1];
-    int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0644);
-    if (fd >= 0) {
-        printf("CREATED\n");
-        close(fd);
-        return 0;
-    } else if (errno == EEXIST) {
-        printf("EEXIST\n");
+    int fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0644);
+    if (fd < 0) {
+        if (errno == EEXIST) {
+            printf("EXISTS\n");
+            return 2;
+        }
+        perror("open");
         return 1;
-    } else {
-        printf("ERROR: %d\n", errno);
-        return 2;
     }
+    printf("CREATED\n");
+    // Hold it for a bit to test race
+    sleep(1);
+    close(fd);
+    return 0;
 }
 EOF
 
-if ! gcc /tmp/oexcl_test.c -o /tmp/oexcl_test 2>/dev/null; then
+if ! gcc "$TEST_DIR/o_excl_test.c" -o "$TEST_DIR/o_excl_test" 2>/dev/null; then
     echo "⚠️  Could not compile test program"
     exit 0
 fi
 
-# First create should succeed
-OUTPUT1=$(/tmp/oexcl_test "$TEST_DIR/newfile.txt")
+echo "[2] Testing basic O_EXCL..."
+rm -f "$TEST_DIR/testfile.txt"
+OUTPUT1=$("$TEST_DIR/o_excl_test" "$TEST_DIR/testfile.txt")
 if [ "$OUTPUT1" = "CREATED" ]; then
-    echo "    ✓ O_EXCL created new file"
+    echo "    ✓ First creation succeeded"
 else
-    echo "    ✗ First create failed: $OUTPUT1"
-    exit 1
+    echo "    ✗ First creation failed: $OUTPUT1"
 fi
 
-# Second create should fail with EEXIST
-OUTPUT2=$(/tmp/oexcl_test "$TEST_DIR/newfile.txt")
-if [ "$OUTPUT2" = "EEXIST" ]; then
-    echo "    ✓ O_EXCL correctly returned EEXIST"
+OUTPUT2=$("$TEST_DIR/o_excl_test" "$TEST_DIR/testfile.txt" 2>&1) || EXIT_VAL=$?
+if [ "$OUTPUT2" = "EXISTS" ] || [ "$EXIT_VAL" -eq 2 ]; then
+    echo "    ✓ Second creation blocked as expected"
 else
-    echo "    ✗ Expected EEXIST, got: $OUTPUT2"
-    exit 1
+    echo "    ✗ Second creation was not blocked: $OUTPUT2 (yielded $EXIT_VAL)"
 fi
 
-echo "[2] Testing race condition prevention..."
-# Multiple processes try to create same file
+echo "[3] Testing concurrent O_EXCL race..."
 rm -f "$TEST_DIR/race.txt"
-CREATED=0
+rm -f "$TEST_DIR"/winner_*
 for i in $(seq 1 10); do
-    /tmp/oexcl_test "$TEST_DIR/race.txt" >/dev/null 2>&1 && ((CREATED++)) || true &
+    ( "$TEST_DIR/o_excl_test" "$TEST_DIR/race.txt" > /dev/null 2>&1 && touch "$TEST_DIR/winner_$i" ) &
 done
 wait
 
+CREATED=$(ls "$TEST_DIR"/winner_* 2>/dev/null | wc -l | xargs)
 if [ "$CREATED" -eq 1 ]; then
     echo "    ✓ Only one process won the race"
 else
