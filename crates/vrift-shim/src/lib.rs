@@ -2695,7 +2695,7 @@ static REAL_MKDIR: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static REAL_SYMLINK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 #[cfg(target_os = "linux")]
 static REAL_FLOCK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-#[cfg(target_os = "linux")]
+
 #[cfg(target_os = "linux")]
 static REAL_MUNMAP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
