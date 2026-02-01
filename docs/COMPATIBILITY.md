@@ -31,15 +31,35 @@ This report provides the definitive status of Velo Rift's compatibility with hos
 
 ---
 
-## 🛠️ Toolchain & Runtime Compatibility
+## 🔬 Detailed Interface Behavior (Syscall Specs)
 
-| Category | Typical Tools | Compatibility | Blocking Reason |
-| :--- | :--- | :--- | :--- |
-| **Compilers** | `gcc`, `clang`, `rustc` | ⚠️ Partial | Failure to `rename` temp objects. |
-| **Build Systems** | `make`, `ninja`, `bazel` | ❌ Broken | `chdir` and `unlink` dependency. |
-| **Package Mgrs** | `npm`, `pnpm`, `cargo` | ❌ Broken | Heavy use of atomic `rename`. |
-| **Runtimes** | `node`, `python`, `jvm` | ✅ Good/High | Basic Execution & Read paths stable. |
-| **VCS** | `git`, `hg` | ❌ Broken | Structural mutations on `.git`. |
+This section documents the exact logic implemented for each intercepted syscall.
+
+### 📁 File Operations
+| Interface | Behavior Header | Redirection Logic |
+| :--- | :--- | :--- |
+| `open` | **VFS Translation** | If in `/vrift`, queries manifest. If found, extracts to `/tmp/vrift-mem-*` and returns that FD. Returns `EISDIR` if path is a virtual directory. |
+| `close` | **Sync-on-Close** | If the closed FD was a writable CoW file, it triggers a non-blocking IPC to daemon for async re-ingest. |
+| `read` | **Passthrough** | Operates on the redirected FD returned by `open`. No data modification. |
+| `write` | **CoW Tracking** | Passthrough to the temporary writable file. Tracking is used to determine re-ingest on `close`. |
+| `access` | **Virtual Check** | Queries manifest for `F_OK`. Validates `R/W/X` bits against virtual metadata. |
+| `readlink`| **Symlink Synth** | If path is a virtual symlink, returns the link target stored in CAS/Manifest. |
+
+### 📊 Discovery & Metadata
+| Interface | Behavior Header | Implementation Details |
+| :--- | :--- | :--- |
+| `stat` / `lstat`| **Hot Stat (O(1))**| Uses Mmap'd manifest + Bloom Filter. ZERO allocations. Injects virtual `size`, `mtime` (ns), and `mode`. |
+| `fstat` | **FD Tracking** | Checks if FD belongs to a VFS-tracked file. Injects virtual metadata to hide temporary host paths. |
+| `opendir` | **Handle Synthesis**| Returns a synthetic `DIR*` handle. Queries daemon for full virtual directory listing. |
+| `readdir` | **Virtual Stream** | Iterates through a cached list of virtual entries. Uses a static `dirent` buffer to avoid heap usage. |
+
+### 🚀 Execution & Linking
+| Interface | Behavior Header | Side Effects |
+| :--- | :--- | :--- |
+| `execve` | **Env Inheritance** | Merges current `DYLD_INSERT_LIBRARIES` / `LD_PRELOAD` into child env to maintain shim persistency. |
+| `posix_spawn`| **Recursion Guard** | Similar to `execve`. Ensures ShimGuard is active to prevent early-init hangs. |
+| `dlopen` | **Library Extraction**| If loading a VFS `.dylib`/`.so`, extracts to temp host path before calling host linker. |
+| `mmap` | **Backing Parity** | Respects virtual FD redirection for memory-mapped IO consistency. |
 
 ---
 
