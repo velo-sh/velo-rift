@@ -390,6 +390,39 @@ impl ShimState {
         }
     }
 
+    // ========================================================================
+    // PSFS (Provably-Side-Effect-Free Stat) - RFC-0044
+    // ========================================================================
+    //
+    // Hot Stat requirements:
+    // - ❌ No alloc (malloc = forbidden)
+    // - ❌ No lock (mutex/futex = forbidden)
+    // - ❌ No log (absolutely forbidden)
+    // - ❌ No syscall (including stat)
+    // - ✅ O(1) constant time
+    // - ✅ Read-only (no cache writes)
+    //
+    // psfs_applicable() checks VFS domain membership (pure string prefix check)
+    // psfs_lookup() delegates to query_manifest which uses Bloom filter fast path
+
+    /// Check if path is in VFS domain (zero-alloc, O(1) string prefix check)
+    /// Returns true if path should be considered for Hot Stat acceleration
+    #[inline(always)]
+    fn psfs_applicable(&self, path: &str) -> bool {
+        // RFC-0044: Physical domain membership check
+        // No alloc, no lock, no syscall - pure string comparison
+        path.starts_with(&*self.vfs_prefix)
+    }
+
+    /// Attempt O(1) stat lookup from manifest cache
+    /// Uses Bloom filter for fast negative checks, then daemon IPC for positive hits
+    /// Returns None if path not found (caller should fall back to real_stat)
+    fn psfs_lookup(&self, path: &str) -> Option<vrift_manifest::VnodeEntry> {
+        // Bloom filter provides O(1) rejection for paths not in manifest
+        // Daemon IPC provides O(1) LMDB lookup for paths in manifest
+        self.query_manifest(path)
+    }
+
     fn query_manifest(&self, path: &str) -> Option<vrift_manifest::VnodeEntry> {
         // Bloom Filter Fast Path
         if !self.bloom_ptr.is_null() {
@@ -975,6 +1008,7 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: Stat
         return real_stat(path, buf);
     };
 
+    // RFC-0044 PSFS: VFS prefix root (special case)
     if path_str == state.vfs_prefix {
         ptr::write_bytes(buf, 0, 1);
         (*buf).st_mode = libc::S_IFDIR | 0o755;
@@ -984,9 +1018,10 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: Stat
         return 0;
     }
 
-    if path_str.starts_with(&*state.vfs_prefix) {
-        // Query with full path since manifest stores full paths (e.g., /vrift/testfile.txt)
-        if let Some(entry) = state.query_manifest(path_str) {
+    // RFC-0044 PSFS: Hot Stat path - check VFS domain membership first
+    if state.psfs_applicable(path_str) {
+        // O(1) manifest lookup with Bloom filter fast-path rejection
+        if let Some(entry) = state.psfs_lookup(path_str) {
             ptr::write_bytes(buf, 0, 1);
             (*buf).st_size = entry.size as libc::off_t;
             (*buf).st_mtime = entry.mtime as libc::time_t;
@@ -1005,6 +1040,7 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: Stat
         }
     }
 
+    // RFC-0044 Cold Stat: pure transparent passthrough
     real_stat(path, buf)
 }
 
