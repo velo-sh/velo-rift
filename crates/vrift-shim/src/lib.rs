@@ -20,8 +20,8 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 #[allow(unused_imports)]
 use libc::{
-    c_char, c_int, c_void, flock, link, linkat, mkdir, mmap, mode_t, munmap, renameat, size_t,
-    ssize_t, symlink, utimensat, AT_FDCWD,
+    c_char, c_int, c_void, flock, link, linkat, mkdir, mode_t, munmap, renameat, size_t, ssize_t,
+    symlink, utimensat, AT_FDCWD,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
