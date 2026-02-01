@@ -150,6 +150,46 @@ jobs:
       - name: Run Tier 2 Tests
         run: ./scripts/v-ci --tier 2 --local
 
+  tier-3:
+    name: "Tier 3: Benchmarks"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true # Benchmarks shouldn't block merge, but results are valuable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-build"
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev sqlite3
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Run Tier 3 Benchmarks
+        run: ./scripts/v-ci --tier 3 --local
+
+  tier-4:
+    name: "Tier 4: Gap Analysis & Report"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true # Report mode: Expected to have failures
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vrift-build"
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev sqlite3
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Run Tier 4 Reports
+        run: ./scripts/v-ci --tier 4 --local
+
   # ============================================
   # Summary Gate (All Must Pass)
   # ============================================
@@ -157,7 +197,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always()
-    needs: [fmt, clippy, build, test-matrix, tier-1, tier-2]
+    needs: [fmt, clippy, build, test-matrix, tier-1, tier-2, tier-3, tier-4]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs
@@ -168,6 +208,14 @@ jobs:
              [[ "${{ needs.test-matrix.result }}" != "success" ]] || \
              [[ "${{ needs.tier-1.result }}" != "success" ]] || \
              [[ "${{ needs.tier-2.result }}" != "success" ]]; then
+            echo "One or more blocking jobs failed"
+            exit 1
+          fi
+          
+          # Tier 3 & 4 are non-blocking / informative
+          echo "Tier 3 Result: ${{ needs.tier-3.result }}"
+          echo "Tier 4 Result: ${{ needs.tier-4.result }}"
+
             echo "One or more jobs failed"
             exit 1
           fi
