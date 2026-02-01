@@ -11,21 +11,58 @@ echo "=== Test: fstat Virtual Metadata FULL E2E Proof ==="
 echo "This test PROVES fstat returns virtual metadata at runtime"
 echo ""
 
-# Build everything first
-echo "[BUILD] Building vrift-cli and vrift-shim..."
-cargo build -p vrift-cli -p vrift-shim --quiet 2>/dev/null || cargo build -p vrift-cli -p vrift-shim
+# Build everything first (including daemon)
+echo "[BUILD] Building vrift-cli, vrift-shim, and vrift-daemon..."
+cargo build -p vrift-cli -p vrift-shim -p vrift-daemon --quiet 2>/dev/null || \
+    cargo build -p vrift-cli -p vrift-shim -p vrift-daemon
 
 VRIFT="${PROJECT_ROOT}/target/debug/vrift"
-SHIM="${PROJECT_ROOT}/target/debug/libvelo_shim.dylib"
+VRIFTD="${PROJECT_ROOT}/target/debug/vriftd"
 
-if [ ! -f "$VRIFT" ] || [ ! -f "$SHIM" ]; then
+# Platform-specific shim path
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    SHIM="${PROJECT_ROOT}/target/debug/libvelo_shim.dylib"
+else
+    SHIM="${PROJECT_ROOT}/target/debug/libvelo_shim.so"
+fi
+
+if [ ! -f "$VRIFT" ] || [ ! -f "$SHIM" ] || [ ! -f "$VRIFTD" ]; then
     echo "[FAIL] Build failed - missing binaries"
+    echo "  VRIFT: $VRIFT (exists: $(test -f "$VRIFT" && echo yes || echo no))"
+    echo "  SHIM: $SHIM (exists: $(test -f "$SHIM" && echo yes || echo no))"
+    echo "  VRIFTD: $VRIFTD (exists: $(test -f "$VRIFTD" && echo yes || echo no))"
     exit 1
 fi
 
+# Daemon PID for cleanup
+DAEMON_PID=""
+
+cleanup() {
+    echo ""
+    echo "[CLEANUP] Cleaning up..."
+    if [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+        echo "  Stopping daemon (PID: $DAEMON_PID)..."
+        kill "$DAEMON_PID" 2>/dev/null || true
+        wait "$DAEMON_PID" 2>/dev/null || true
+    fi
+    rm -f /tmp/vrift.sock
+    # Remove immutable flags on macOS before cleanup
+    if [[ "$OSTYPE" == "darwin"* ]] && [ -d "$TEST_DIR" ]; then
+        chflags -R nouchg "$TEST_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$TEST_DIR"
+}
+trap cleanup EXIT
+
 # Create test environment
 TEST_DIR="/tmp/test_fstat_full_e2e"
-rm -rf "$TEST_DIR"
+# Pre-cleanup in case previous run left immutable files
+if [ -d "$TEST_DIR" ]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        chflags -R nouchg "$TEST_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$TEST_DIR"
+fi
 mkdir -p "$TEST_DIR/source"
 mkdir -p "$TEST_DIR/cas"
 mkdir -p "$TEST_DIR/manifest"
@@ -40,13 +77,15 @@ echo "$KNOWN_SIZE bytes written to testfile.txt"
 echo ""
 echo "[INGEST] Ingesting test file to CAS..."
 export VR_THE_SOURCE="$TEST_DIR/cas"
+# Note: prefix should NOT have leading slash (ingest adds /{prefix}/...)
 $VRIFT ingest "$TEST_DIR/source" \
-    --output "$TEST_DIR/manifest/manifest.lmdb" \
-    --prefix "/" 2>&1
+    --prefix "vrift" 2>&1
 
 echo ""
 echo "[VERIFY] Checking CAS and manifest..."
 ls -la "$TEST_DIR/cas/blake3" 2>/dev/null | head -5 || echo "CAS structure created"
+echo "  LMDB manifest:"
+ls -la "$TEST_DIR/source/.vrift/manifest.lmdb/" 2>/dev/null || echo "  (LMDB dir not found)"
 
 # Create test C program that opens VFS path, calls fstat, verifies size
 cat > "$TEST_DIR/test_fstat.c" << CCODE
@@ -107,16 +146,54 @@ gcc "$TEST_DIR/test_fstat.c" -o "$TEST_DIR/test_fstat"
 echo ""
 echo "[COMPILED] Test program ready"
 
+# Start the daemon with manifest
+echo ""
+echo "[DAEMON] Starting vrift daemon with manifest..."
+export VR_THE_SOURCE="$TEST_DIR/cas"
+# IMPORTANT: Use LMDB manifest directory (created by ingest in source/.vrift/)
+export VRIFT_MANIFEST_DIR="$TEST_DIR/source/.vrift/manifest.lmdb"
+
+# Remove stale socket if exists
+rm -f /tmp/vrift.sock
+
+# Start daemon in background
+"$VRIFTD" start > "$TEST_DIR/daemon.log" 2>&1 &
+DAEMON_PID=$!
+
+echo "  Daemon PID: $DAEMON_PID"
+echo "  Waiting for socket..."
+
+# Wait for socket to be ready (max 5 seconds)
+for i in {1..50}; do
+    if [ -S /tmp/vrift.sock ]; then
+        echo "  Socket ready!"
+        break
+    fi
+    sleep 0.1
+done
+
+if [ ! -S /tmp/vrift.sock ]; then
+    echo "[FAIL] Daemon socket not ready after 5 seconds"
+    cat "$TEST_DIR/daemon.log"
+    exit 1
+fi
+
 # Run with shim and proper environment
 echo ""
-echo "[RUN] Executing fstat test with shim + manifest..."
-export DYLD_FORCE_FLAT_NAMESPACE=1
-export DYLD_INSERT_LIBRARIES="$SHIM"
-export VR_THE_SOURCE="$TEST_DIR/cas"
-export VRIFT_VFS_PREFIX="/vrift"
-export VRIFT_MANIFEST_PATH="$TEST_DIR/manifest/manifest.lmdb"
+echo "[RUN] Executing fstat test with shim + daemon..."
 
-# Cross-platform timeout
+# Platform-specific shim injection
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    export DYLD_FORCE_FLAT_NAMESPACE=1
+    export DYLD_INSERT_LIBRARIES="$SHIM"
+else
+    export LD_PRELOAD="$SHIM"
+fi
+
+export VRIFT_VFS_PREFIX="/vrift"
+
+# Cross-platform timeout (disable set -e to capture output on failure)
+set +e
 "$TEST_DIR/test_fstat" > "$TEST_DIR/output.log" 2>&1 &
 PID=$!
 sleep 3
@@ -128,8 +205,11 @@ if kill -0 $PID 2>/dev/null; then
 else
     wait $PID
     EXIT_CODE=$?
+    echo "  Test exit code: $EXIT_CODE"
+    echo "  Test output:"
     cat "$TEST_DIR/output.log"
 fi
+set -e
 
 echo ""
 if [ $EXIT_CODE -eq 0 ]; then
@@ -140,6 +220,5 @@ else
     echo "[FAIL] fstat test failed with exit code: $EXIT_CODE"
 fi
 
-# Cleanup
-rm -rf "$TEST_DIR"
+# Cleanup handled by trap
 exit $EXIT_CODE

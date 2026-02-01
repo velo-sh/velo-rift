@@ -812,28 +812,32 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t, real_open: 
         return real_open(path, flags, mode);
     }
 
-    // Skip if ShimState is not yet initialized (avoids malloc during dyld __malloc_init)
-    if SHIM_STATE.load(Ordering::Acquire).is_null() {
-        return real_open(path, flags, mode);
-    }
+    // Note: Don't check SHIM_STATE.is_null() here - ShimState::get() handles lazy init properly
 
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
-        None => return real_open(path, flags, mode),
-    };
-    let path_str = match CStr::from_ptr(path).to_str() {
-        Ok(s) => s,
-        Err(_) => return real_open(path, flags, mode),
+        None => {
+            return real_open(path, flags, mode);
+        }
     };
 
+    // Get or init state - this triggers initialization if needed
     let Some(state) = ShimState::get() else {
         return real_open(path, flags, mode);
     };
 
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            return real_open(path, flags, mode);
+        }
+    };
+
     let is_write = (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_TRUNC)) != 0;
+
     if path_str.starts_with(&*state.vfs_prefix) {
-        let vpath = &path_str[state.vfs_prefix.len()..];
-        if let Some(entry) = state.query_manifest(vpath) {
+        // Query with full path since manifest stores full paths (e.g., /vrift/testfile.txt)
+        if let Some(entry) = state.query_manifest(path_str) {
             if entry.is_dir() {
                 set_errno(libc::EISDIR);
                 return -1;
@@ -964,8 +968,8 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat, real_stat: Stat
     }
 
     if path_str.starts_with(&*state.vfs_prefix) {
-        let vpath = &path_str[state.vfs_prefix.len()..];
-        if let Some(entry) = state.query_manifest(vpath) {
+        // Query with full path since manifest stores full paths (e.g., /vrift/testfile.txt)
+        if let Some(entry) = state.query_manifest(path_str) {
             ptr::write_bytes(buf, 0, 1);
             (*buf).st_size = entry.size as libc::off_t;
             (*buf).st_mtime = entry.mtime as libc::time_t;
