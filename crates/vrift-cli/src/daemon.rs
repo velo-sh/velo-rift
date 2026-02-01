@@ -44,7 +44,7 @@ pub async fn spawn_command(command: &[String], cwd: PathBuf, project_root: &Path
     match resp {
         VeloResponse::SpawnAck { pid } => {
             tracing::info!("Daemon successfully spawned process. PID: {}", pid);
-            println!("Daemon successfully spawned process. PID: {}", pid); 
+            println!("Daemon successfully spawned process. PID: {}", pid);
             println!("(Output will be in daemon logs for now)");
         }
         VeloResponse::Error(msg) => {

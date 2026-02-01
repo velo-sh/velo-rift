@@ -46,7 +46,7 @@ MANIFEST="$TEST_DIR/vrift.manifest"
 
 safe_rm "$TEST_DIR"
 mkdir -p "$CAS_DIR" "$DATA_DIR"
-export VR_THE_SOURCE="$CAS_DIR"
+export VRIFT_CAS_ROOT="$CAS_DIR"
 
 # Create test data
 echo "Hello Velo Rift" > "$DATA_DIR/file1.txt"

@@ -35,7 +35,7 @@ echo "Original Content" > "$PHYSICAL_ROOT/original.txt"
 
 # 3. Ingest into VRift
 echo ""
-export VR_THE_SOURCE="$(realpath "$CAS_ROOT")"
+export VRIFT_CAS_ROOT="$(realpath "$CAS_ROOT")"
 "$VELO_BIN" ingest "$PHYSICAL_ROOT" --output "$TEST_DIR/manifest.lmdb"
 
 CAS_FILE=$(find "$CAS_ROOT" -type f | grep -v "\.lock" | head -n 1)
@@ -44,7 +44,7 @@ echo "CAS File: $CAS_FILE"
 # 4. Start vriftd
 pkill vriftd 2>/dev/null || true
 sleep 1
-export VRIFT_MANIFEST_DIR="$TEST_DIR"
+export VRIFT_MANIFEST="$TEST_DIR"
 "$VRIFTD_BIN" > "$TEST_DIR/daemon.log" 2>&1 &
 DAEMON_PID=$!
 
@@ -94,13 +94,13 @@ echo "Step 2: Testing WITH shim (Simulating CoW)..."
 
 # Find the shim
 if [[ "$OS_TYPE" == "Darwin" ]]; then
-    SHIM_BIN=$(find "$PROJECT_ROOT/target/release" -name "libvelo_shim.dylib" | head -n 1)
+    SHIM_BIN=$(find "$PROJECT_ROOT/target/release" -name "libvrift_shim.dylib" | head -n 1)
 else
-    SHIM_BIN=$(find "$PROJECT_ROOT/target/release" -name "libvelo_shim.so" | head -n 1)
+    SHIM_BIN=$(find "$PROJECT_ROOT/target/release" -name "libvrift_shim.so" | head -n 1)
 fi
 
 if [[ -z "$SHIM_BIN" ]]; then
-    echo "ERROR: libvelo_shim not found."
+    echo "ERROR: libvrift_shim not found."
     exit 1
 fi
 

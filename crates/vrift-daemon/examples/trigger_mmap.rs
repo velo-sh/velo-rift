@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     println!("Sending 1,000 ManifestUpserts to daemon (including /vrift/subdir)...");
-    
+
     // 1. Root files
     for i in 0..10 {
         let path = format!("/vrift/root_{}.txt", i);
@@ -32,10 +32,12 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Subdirectory entry
     let dir_entry = VnodeEntry::new_directory(now, 0o755);
-    client.send(VeloRequest::ManifestUpsert {
-        path: "/vrift/subdir".to_string(),
-        entry: dir_entry,
-    }).await?;
+    client
+        .send(VeloRequest::ManifestUpsert {
+            path: "/vrift/subdir".to_string(),
+            entry: dir_entry,
+        })
+        .await?;
 
     // 3. Subdirectory files
     for i in 0..10 {

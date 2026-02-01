@@ -8,7 +8,6 @@
 //! - Namespace isolation (Linux only)
 
 use std::fs;
-
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -98,11 +97,35 @@ impl LinkFarm {
                         fs::remove_file(&dest_path)?;
                     }
 
-                    fs::hard_link(&src_path, &dest_path)?;
+                    if let Err(e) = fs::hard_link(&src_path, &dest_path) {
+                        // Fallback to symlink if hard link fails with EPERM or EXDEV
+                        if e.kind() == std::io::ErrorKind::PermissionDenied
+                            || e.raw_os_error() == Some(18)
+                        {
+                            tracing::debug!(
+                                "Hard link failed (EPERM/EXDEV), falling back to symlink: {} -> {}",
+                                src_path.display(),
+                                dest_path.display()
+                            );
+                            if let Err(se) = std::os::unix::fs::symlink(&src_path, &dest_path) {
+                                return Err(RuntimeError::Io(se));
+                            }
+                        } else {
+                            return Err(RuntimeError::Io(e));
+                        }
+                    }
 
                     // Apply metadata (mode, mtime)
                     use std::os::unix::fs::PermissionsExt;
-                    fs::set_permissions(&dest_path, fs::Permissions::from_mode(entry.mode))?;
+                    if let Err(e) =
+                        fs::set_permissions(&dest_path, fs::Permissions::from_mode(entry.mode))
+                    {
+                        tracing::warn!(
+                            "Failed to set permissions on {}: {}",
+                            dest_path.display(),
+                            e
+                        );
+                    }
 
                     // Note: Setting mtime requires filetime or similar,
                     // skipping for MVP unless we add dependency.

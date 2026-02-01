@@ -116,24 +116,30 @@ pub struct ManifestMmapHeader {
     pub magic: u32,
     pub version: u32,
     pub entry_count: u32,
-    pub bloom_offset: u32,    // Offset to bloom filter (BLOOM_SIZE)
-    pub table_offset: u32,    // Offset to stat hash table (table_capacity * MmapStatEntry::SIZE)
-    pub table_capacity: u32,  // Number of slots in stat hash table
-    pub dir_index_offset: u32, // Offset to directory index table
+    pub bloom_offset: u32,       // Offset to bloom filter (BLOOM_SIZE)
+    pub table_offset: u32,       // Offset to stat hash table (table_capacity * MmapStatEntry::SIZE)
+    pub table_capacity: u32,     // Number of slots in stat hash table
+    pub dir_index_offset: u32,   // Offset to directory index table
     pub dir_index_capacity: u32, // Capacity of directory index table
-    pub children_offset: u32, // Offset to children pool
-    pub children_count: u32,  // Total children across all directories
+    pub children_offset: u32,    // Offset to children pool
+    pub children_count: u32,     // Total children across all directories
 }
 
 impl ManifestMmapHeader {
     pub const SIZE: usize = std::mem::size_of::<Self>();
 
-    pub fn new(entry_count: u32, table_capacity: u32, dir_index_capacity: u32, children_count: u32) -> Self {
+    pub fn new(
+        entry_count: u32,
+        table_capacity: u32,
+        dir_index_capacity: u32,
+        children_count: u32,
+    ) -> Self {
         let bloom_offset = Self::SIZE as u32;
         let table_offset = bloom_offset + BLOOM_SIZE as u32;
         let dir_index_offset = table_offset + (table_capacity * MmapStatEntry::SIZE as u32);
-        let children_offset = dir_index_offset + (dir_index_capacity * MmapDirIndexEntry::SIZE as u32);
-        
+        let children_offset =
+            dir_index_offset + (dir_index_capacity * MmapDirIndexEntry::SIZE as u32);
+
         Self {
             magic: MMAP_MAGIC,
             version: MMAP_VERSION,
@@ -199,17 +205,21 @@ impl MmapDirIndexEntry {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MmapDirChild {
-    pub name: [u8; 128],  // Name of the entry (max 127 bytes + null)
-    pub stat_index: u32,  // Index in the stat hash table (for stat-on-readdir)
+    pub name: [u8; 128], // Name of the entry (max 127 bytes + null)
+    pub stat_index: u32, // Index in the stat hash table (for stat-on-readdir)
     pub is_dir: u8,
     pub _pad: [u8; 3],
 }
 
 impl MmapDirChild {
     pub const SIZE: usize = std::mem::size_of::<Self>();
-    
+
     pub fn name_as_str(&self) -> &str {
-        let len = self.name.iter().position(|&b| b == 0).unwrap_or(self.name.len());
+        let len = self
+            .name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.name.len());
         std::str::from_utf8(&self.name[..len]).unwrap_or("")
     }
 }
@@ -229,12 +239,16 @@ pub fn fnv1a_hash(s: &str) -> u64 {
 }
 
 /// Calculate total mmap file size for given capacities
-pub fn mmap_file_size(table_capacity: usize, dir_index_capacity: usize, children_count: usize) -> usize {
-    ManifestMmapHeader::SIZE + 
-    BLOOM_SIZE + 
-    (table_capacity * MmapStatEntry::SIZE) + 
-    (dir_index_capacity * MmapDirIndexEntry::SIZE) + 
-    (children_count * MmapDirChild::SIZE)
+pub fn mmap_file_size(
+    table_capacity: usize,
+    dir_index_capacity: usize,
+    children_count: usize,
+) -> usize {
+    ManifestMmapHeader::SIZE
+        + BLOOM_SIZE
+        + (table_capacity * MmapStatEntry::SIZE)
+        + (dir_index_capacity * MmapDirIndexEntry::SIZE)
+        + (children_count * MmapDirChild::SIZE)
 }
 
 /// Builder for creating mmap manifest files (RFC-0044 Hot Stat Cache)
@@ -292,8 +306,8 @@ impl ManifestMmapBuilder {
 
     /// Write mmap file to disk (now includes directory indexing)
     pub fn write_to_file(&self, path: &str) -> std::io::Result<()> {
-        use std::io::Write;
         use std::collections::HashMap;
+        use std::io::Write;
 
         // 1. Group children by parent directory
         let mut dir_map: HashMap<String, Vec<(String, usize)>> = HashMap::new();
@@ -302,10 +316,18 @@ impl ManifestMmapBuilder {
             if let Some(parent) = p.parent() {
                 let parent_str = parent.to_str().unwrap_or("/");
                 // Ensure "/" is used for root
-                let parent_key = if parent_str.is_empty() { "/" } else { parent_str };
+                let parent_key = if parent_str.is_empty() {
+                    "/"
+                } else {
+                    parent_str
+                };
                 dir_map.entry(parent_key.to_string()).or_default().push((
-                    p.file_name().unwrap_or_default().to_str().unwrap_or("").to_string(),
-                    idx
+                    p.file_name()
+                        .unwrap_or_default()
+                        .to_str()
+                        .unwrap_or("")
+                        .to_string(),
+                    idx,
                 ));
             }
         }
@@ -314,7 +336,7 @@ impl ManifestMmapBuilder {
         let table_capacity = (self.entries.len() * 2).clamp(1024, MMAP_MAX_ENTRIES);
         let dir_index_capacity = (dir_map.len() * 2).clamp(256, MMAP_MAX_ENTRIES);
         let children_count: usize = dir_map.values().map(|v| v.len()).sum();
-        
+
         let file_size = mmap_file_size(table_capacity, dir_index_capacity, children_count);
 
         // 3. Create buffer
@@ -325,7 +347,7 @@ impl ManifestMmapBuilder {
             self.entries.len() as u32,
             table_capacity as u32,
             dir_index_capacity as u32,
-            children_count as u32
+            children_count as u32,
         );
         let header_bytes = unsafe {
             std::slice::from_raw_parts(&header as *const _ as *const u8, ManifestMmapHeader::SIZE)
@@ -340,17 +362,21 @@ impl ManifestMmapBuilder {
         // We'll also need a way to map original index to actual slot for dir entries
         let table_start = header.table_offset as usize;
         let mut index_to_slot = vec![0u32; self.entries.len()];
-        
+
         for (idx, (_path, entry)) in self.entries.iter().enumerate() {
             let start_slot = (entry.path_hash as usize) % table_capacity;
             for i in 0..table_capacity {
                 let slot = (start_slot + i) % table_capacity;
                 let offset = table_start + slot * MmapStatEntry::SIZE;
 
-                let existing_hash = u64::from_le_bytes(buffer[offset..offset+8].try_into().unwrap());
+                let existing_hash =
+                    u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap());
                 if existing_hash == 0 {
                     let entry_bytes = unsafe {
-                        std::slice::from_raw_parts(entry as *const _ as *const u8, MmapStatEntry::SIZE)
+                        std::slice::from_raw_parts(
+                            entry as *const _ as *const u8,
+                            MmapStatEntry::SIZE,
+                        )
                     };
                     buffer[offset..offset + MmapStatEntry::SIZE].copy_from_slice(entry_bytes);
                     index_to_slot[idx] = slot as u32;
@@ -378,10 +404,14 @@ impl ManifestMmapBuilder {
                 let slot = (start_slot + i) % dir_index_capacity;
                 let offset = dir_index_start + slot * MmapDirIndexEntry::SIZE;
 
-                let existing_hash = u64::from_le_bytes(buffer[offset..offset+8].try_into().unwrap());
+                let existing_hash =
+                    u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap());
                 if existing_hash == 0 {
                     let entry_bytes = unsafe {
-                        std::slice::from_raw_parts(&dir_entry as *const _ as *const u8, MmapDirIndexEntry::SIZE)
+                        std::slice::from_raw_parts(
+                            &dir_entry as *const _ as *const u8,
+                            MmapDirIndexEntry::SIZE,
+                        )
                     };
                     buffer[offset..offset + MmapDirIndexEntry::SIZE].copy_from_slice(entry_bytes);
                     break;
@@ -393,7 +423,11 @@ impl ManifestMmapBuilder {
                 let mut child = MmapDirChild {
                     name: [0u8; 128],
                     stat_index: index_to_slot[stat_idx],
-                    is_dir: if self.entries[stat_idx].1.is_dir() { 1 } else { 0 },
+                    is_dir: if self.entries[stat_idx].1.is_dir() {
+                        1
+                    } else {
+                        0
+                    },
                     _pad: [0; 3],
                 };
                 let name_bytes = name.as_bytes();
@@ -428,7 +462,6 @@ impl ManifestMmapBuilder {
         self.entries.is_empty()
     }
 }
-
 
 /// Check if daemon is running (socket exists and connectable)
 pub fn is_daemon_running() -> bool {

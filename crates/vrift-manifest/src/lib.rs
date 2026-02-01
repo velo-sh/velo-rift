@@ -148,12 +148,12 @@ pub type PathHash = Blake3Hash;
 
 /// Compute the path hash for a given path string
 pub fn compute_path_hash(path: &str) -> PathHash {
-    let normalized = normalize_path(path);
+    let normalized = normalize_vfs_path(path);
     *blake3::hash(normalized.as_bytes()).as_bytes()
 }
 
-/// Normalize a path for consistent hashing
-fn normalize_path(path: &str) -> String {
+/// Normalize a path for consistent hashing within the VFS
+fn normalize_vfs_path(path: &str) -> String {
     let mut normalized = path.replace("//", "/");
     // Remove trailing slash unless it's root
     if normalized.len() > 1 && normalized.ends_with('/') {
@@ -192,7 +192,7 @@ impl Manifest {
     pub fn insert(&mut self, path: &str, entry: VnodeEntry) {
         let hash = compute_path_hash(path);
         self.entries.insert(hash, entry);
-        self.paths.insert(hash, normalize_path(path));
+        self.paths.insert(hash, normalize_vfs_path(path));
     }
 
     /// Get an entry by path
@@ -278,6 +278,16 @@ impl Manifest {
             total_size,
         }
     }
+}
+
+/// Robust path normalization (expands tilde and resolves absolute)
+pub fn normalize_path(p: &str) -> std::path::PathBuf {
+    if let Some(stripped) = p.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(stripped);
+        }
+    }
+    std::path::PathBuf::from(p)
 }
 
 /// Statistics about a manifest

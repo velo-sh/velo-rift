@@ -15,9 +15,9 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use libc::{c_char, c_int, c_void, mode_t, size_t, ssize_t};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::cell::RefCell;
 use vrift_cas::CasStore;
 
 thread_local! {
@@ -455,7 +455,7 @@ fn open_manifest_mmap() -> (*const u8, usize) {
         return (ptr::null(), 0);
     }
     let manifest_path = unsafe { CStr::from_ptr(manifest_ptr).to_string_lossy() };
-    
+
     // Project root is the parent of manifest file
     let path = Path::new(manifest_path.as_ref());
     let project_root = match path.parent() {
@@ -470,12 +470,13 @@ fn open_manifest_mmap() -> (*const u8, usize) {
         project_root
     };
 
-    let root_str = project_root.to_string_lossy();
-    let root_hash = blake3::hash(root_str.as_bytes());
-    let mmap_path_str = format!("/tmp/vrift-manifest-{}.mmap", &root_hash.to_hex()[..16]);
-    let mmap_path = CString::new(mmap_path_str).unwrap_or_default();
+    let _root_str = project_root.to_string_lossy();
+    let mmap_path_dir = project_root.join(".vrift");
+    let mmap_path = mmap_path_dir.join("manifest.mmap");
 
-    let fd = unsafe { libc::open(mmap_path.as_ptr(), libc::O_RDONLY) };
+    let mmap_path_cstr = CString::new(mmap_path.to_string_lossy().as_ref()).unwrap_or_default();
+
+    let fd = unsafe { libc::open(mmap_path_cstr.as_ptr(), libc::O_RDONLY) };
     if fd < 0 {
         return (ptr::null(), 0);
     }
@@ -591,7 +592,8 @@ fn mmap_dir_lookup(
     let parent_hash = vrift_ipc::fnv1a_hash(path);
     let dir_index_offset = header.dir_index_offset as usize;
     let dir_index_capacity = header.dir_index_capacity as usize;
-    let dir_index_ptr = unsafe { mmap_ptr.add(dir_index_offset) as *const vrift_ipc::MmapDirIndexEntry };
+    let dir_index_ptr =
+        unsafe { mmap_ptr.add(dir_index_offset) as *const vrift_ipc::MmapDirIndexEntry };
 
     let start_slot = (parent_hash as usize) % dir_index_capacity;
     for i in 0..dir_index_capacity {
@@ -773,7 +775,7 @@ impl ShimState {
         let mut buf = [0u8; 1024];
         if let Some(len) = unsafe { resolve_path_with_cwd(path, &mut buf) } {
             let normalized = unsafe { std::str::from_utf8_unchecked(&buf[..len]) };
-            
+
             // RFC-0046: Re-check after normalization
             if normalized.contains("/.vrift/") || normalized.starts_with(&*self.cas_root) {
                 return false;
@@ -819,18 +821,13 @@ impl ShimState {
             return None;
         }
 
-        let vpath = if path.starts_with(&*self.vfs_prefix) {
-            &path[self.vfs_prefix.len()..]
-        } else {
-            path
-        };
-        // Normalize: remove leading slash if any
-        let vpath = vpath.trim_start_matches('/');
+        // Use FULL path including VFS prefix - aligns with how CLI stores paths in manifest
+        let manifest_path = path;
 
         let ok = (|| -> Option<vrift_manifest::VnodeEntry> {
             // 3. Manifest Get
             let req = VeloRequest::ManifestGet {
-                path: vpath.to_string(),
+                path: manifest_path.to_string(),
             };
             let buf = bincode::serialize(&req).ok()?;
             let len = (buf.len() as u32).to_le_bytes();
@@ -1186,7 +1183,6 @@ unsafe fn resolve_path_with_cwd(path: &str, out: &mut [u8]) -> Option<usize> {
     raw_path_normalize(path, out)
 }
 
-
 unsafe fn shim_log(msg: &str) {
     LOGGER.log(msg);
     if DEBUG_ENABLED.load(Ordering::Relaxed) {
@@ -1448,9 +1444,9 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, _mode: mode_t) -> Option<
     let path_str = CStr::from_ptr(path).to_str().ok()?;
 
     let mut path_buf = [0u8; 1024];
-    let resolved_len = match resolve_path_with_cwd(path_str, &mut path_buf) {
+    let resolved_len = match unsafe { resolve_path_with_cwd(path_str, &mut path_buf) } {
         Some(len) => len,
-        None => return real_open(path, flags, mode),
+        None => return None,
     };
     let resolved_path = unsafe { std::str::from_utf8_unchecked(&path_buf[..resolved_len]) };
 
@@ -1569,9 +1565,9 @@ unsafe fn stat_common(path: *const c_char, buf: *mut libc::stat) -> Option<c_int
     let state = ShimState::get()?;
 
     let mut path_buf = [0u8; 1024];
-    let resolved_len = match resolve_path_with_cwd(path_str, &mut path_buf) {
+    let resolved_len = match unsafe { resolve_path_with_cwd(path_str, &mut path_buf) } {
         Some(len) => len,
-        None => return real_stat(path, buf),
+        None => return None,
     };
     let resolved_path = unsafe { std::str::from_utf8_unchecked(&path_buf[..resolved_len]) };
 
@@ -1805,7 +1801,6 @@ unsafe fn access_impl(path: *const c_char, mode: c_int) -> Option<c_int> {
     None
 }
 
-
 type OpendirFn = unsafe extern "C" fn(*const c_char) -> *mut libc::DIR;
 type ReadlinkFn = unsafe extern "C" fn(*const c_char, *mut c_char, size_t) -> ssize_t;
 type RealpathFn = unsafe extern "C" fn(*const c_char, *mut c_char) -> *mut c_char;
@@ -1858,15 +1853,17 @@ unsafe fn opendir_impl(path: *const c_char, real_opendir: OpendirFn) -> *mut lib
         } else {
             path_str
         };
-        
+
         let vpath = &path_str[state.vfs_prefix.len()..];
 
         // 1. Try mmap lookup first (Zero-Copy)
-        if let Some((children_ptr, count)) = mmap_dir_lookup(state.mmap_ptr, state.mmap_size, lookup_path) {
+        if let Some((children_ptr, count)) =
+            mmap_dir_lookup(state.mmap_ptr, state.mmap_size, lookup_path)
+        {
             shim_log("[VRift] opendir mmap: ");
             shim_log(lookup_path);
             shim_log("\n");
-            
+
             let handle = SYNTHETIC_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
             let synthetic = SyntheticDir {
                 vpath: vpath.to_string(),
@@ -2078,6 +2075,19 @@ macro_rules! get_real {
     }};
 }
 
+macro_rules! get_real_shim {
+    ($storage:ident, $name:literal, $it:ident, $t:ty) => {{
+        #[cfg(target_os = "macos")]
+        {
+            std::mem::transmute::<*const (), $t>($it.old_func)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            get_real!($storage, $name, $t)
+        }
+    }};
+}
+
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn open(p: *const c_char, f: c_int, m: mode_t) -> c_int {
@@ -2133,6 +2143,18 @@ static REAL_MMAP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static REAL_DLOPEN: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 #[cfg(target_os = "linux")]
 static REAL_READLINK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_REALPATH: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_GETCWD: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_CHDIR: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_UNLINK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_RENAME: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+#[cfg(target_os = "linux")]
+static REAL_RMDIR: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
@@ -2571,7 +2593,7 @@ pub unsafe extern "C" fn openat_shim(
 ) -> c_int {
     // Passthrough to real openat - VFS path resolution happens at open time
     // AT_FDCWD (-2) means use current working directory
-    let real = std::mem::transmute::<*const (), OpenatFn>(IT_OPENAT.old_func);
+    let real = get_real_shim!(REAL_OPENAT, "openat", IT_OPENAT, OpenatFn);
     real(dirfd, pathname, flags, mode)
 }
 
@@ -2609,7 +2631,7 @@ pub unsafe extern "C" fn realpath_shim(
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => {
-            let real = std::mem::transmute::<*const (), RealpathFn>(IT_REALPATH.old_func);
+            let real = get_real_shim!(REAL_REALPATH, "realpath", IT_REALPATH, RealpathFn);
             return real(pathname, resolved_path);
         }
     };
@@ -2637,7 +2659,7 @@ pub unsafe extern "C" fn realpath_shim(
         }
     }
 
-    let real = std::mem::transmute::<*const (), RealpathFn>(IT_REALPATH.old_func);
+    let real = get_real_shim!(REAL_REALPATH, "realpath", IT_REALPATH, RealpathFn);
     real(pathname, resolved_path)
 }
 
@@ -2646,7 +2668,7 @@ pub unsafe extern "C" fn getcwd_shim(buf: *mut c_char, size: size_t) -> *mut c_c
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => {
-            let real = std::mem::transmute::<*const (), GetcwdFn>(IT_GETCWD.old_func);
+            let real = get_real_shim!(REAL_GETCWD, "getcwd", IT_GETCWD, GetcwdFn);
             return real(buf, size);
         }
     };
@@ -2669,7 +2691,7 @@ pub unsafe extern "C" fn getcwd_shim(buf: *mut c_char, size: size_t) -> *mut c_c
         }
     }
 
-    let real = std::mem::transmute::<*const (), GetcwdFn>(IT_GETCWD.old_func);
+    let real = get_real_shim!(REAL_GETCWD, "getcwd", IT_GETCWD, GetcwdFn);
     real(buf, size)
 }
 
@@ -2678,7 +2700,7 @@ pub unsafe extern "C" fn chdir_shim(path: *const c_char) -> c_int {
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => {
-            let real = std::mem::transmute::<*const (), ChdirFn>(IT_CHDIR.old_func);
+            let real = get_real_shim!(REAL_CHDIR, "chdir", IT_CHDIR, ChdirFn);
             return real(path);
         }
     };
@@ -2693,7 +2715,7 @@ pub unsafe extern "C" fn chdir_shim(path: *const c_char) -> c_int {
         let mut path_buf = [0u8; 1024];
         if let Some(len) = resolve_path_with_cwd(&path_str, &mut path_buf) {
             let resolved_path = unsafe { std::str::from_utf8_unchecked(&path_buf[..len]) };
-            
+
             // RFC-0043: Robust virtualization support
             if resolved_path.starts_with(&*state.vfs_prefix) {
                 // Check if it exists and is a directory in manifest
@@ -2718,7 +2740,7 @@ pub unsafe extern "C" fn chdir_shim(path: *const c_char) -> c_int {
         }
     }
 
-    let real = std::mem::transmute::<*const (), ChdirFn>(IT_CHDIR.old_func);
+    let real = get_real_shim!(REAL_CHDIR, "chdir", IT_CHDIR, ChdirFn);
     real(path)
 }
 
@@ -2727,7 +2749,7 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => {
-            let real = std::mem::transmute::<*const (), UnlinkFn>(IT_UNLINK.old_func);
+            let real = get_real_shim!(REAL_UNLINK, "unlink", IT_UNLINK, UnlinkFn);
             return real(path);
         }
     };
@@ -2744,7 +2766,7 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
         }
     }
 
-    let real = std::mem::transmute::<*const (), UnlinkFn>(IT_UNLINK.old_func);
+    let real = get_real_shim!(REAL_UNLINK, "unlink", IT_UNLINK, UnlinkFn);
     real(path)
 }
 
@@ -2753,7 +2775,7 @@ pub unsafe extern "C" fn rename_shim(oldpath: *const c_char, newpath: *const c_c
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => {
-            let real = std::mem::transmute::<*const (), RenameFn>(IT_RENAME.old_func);
+            let real = get_real_shim!(REAL_RENAME, "rename", IT_RENAME, RenameFn);
             return real(oldpath, newpath);
         }
     };
@@ -2763,10 +2785,10 @@ pub unsafe extern "C" fn rename_shim(oldpath: *const c_char, newpath: *const c_c
         let new_str = CStr::from_ptr(newpath).to_string_lossy();
         let mut buf_old = [0u8; 1024];
         let mut buf_new = [0u8; 1024];
-        
+
         let old_res = resolve_path_with_cwd(&old_str, &mut buf_old);
         let new_res = resolve_path_with_cwd(&new_str, &mut buf_new);
-        
+
         let old_is_vfs = old_res.map_or(false, |len| {
             let p = unsafe { std::str::from_utf8_unchecked(&buf_old[..len]) };
             p.starts_with(&*state.vfs_prefix)
@@ -2782,7 +2804,7 @@ pub unsafe extern "C" fn rename_shim(oldpath: *const c_char, newpath: *const c_c
         }
     }
 
-    let real = std::mem::transmute::<*const (), RenameFn>(IT_RENAME.old_func);
+    let real = get_real_shim!(REAL_RENAME, "rename", IT_RENAME, RenameFn);
     real(oldpath, newpath)
 }
 
@@ -2791,7 +2813,7 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => {
-            let real = std::mem::transmute::<*const (), RmdirFn>(IT_RMDIR.old_func);
+            let real = get_real_shim!(REAL_RMDIR, "rmdir", IT_RMDIR, RmdirFn);
             return real(path);
         }
     };
@@ -2808,7 +2830,7 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
         }
     }
 
-    let real = std::mem::transmute::<*const (), RmdirFn>(IT_RMDIR.old_func);
+    let real = get_real_shim!(REAL_RMDIR, "rmdir", IT_RMDIR, RmdirFn);
     real(path)
 }
 

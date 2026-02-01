@@ -108,27 +108,69 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
         // Connect to daemon and send sweep request
         use vrift_ipc::{VeloRequest, VeloResponse};
         let project_root = std::env::current_dir().context("Failed to get current directory")?;
-        let mut stream = crate::daemon::connect_to_daemon(&project_root).await.context("Daemon not running or unreachable")?;
-        crate::daemon::send_request(&mut stream, VeloRequest::CasSweep {
-            bloom_filter: bloom.bits.clone(),
-        }).await?;
+        let mut stream = crate::daemon::connect_to_daemon(&project_root)
+            .await
+            .context("Daemon not running or unreachable")?;
+        crate::daemon::send_request(
+            &mut stream,
+            VeloRequest::CasSweep {
+                bloom_filter: bloom.bits.clone(),
+            },
+        )
+        .await?;
 
         match crate::daemon::read_response(&mut stream).await? {
-            VeloResponse::CasSweepAck { deleted_count, reclaimed_bytes } => {
+            VeloResponse::CasSweepAck {
+                deleted_count,
+                reclaimed_bytes,
+            } => {
                 let gc_elapsed = gc_start.elapsed().as_secs_f64();
                 println!();
                 println!("╔════════════════════════════════════════╗");
                 println!("║  ✅ GC Complete in {:.2}s              ║", gc_elapsed);
                 println!("╚════════════════════════════════════════╝");
                 println!();
-                println!("   🗑️  {} orphaned blobs deleted", format_number(deleted_count as u64));
+                println!(
+                    "   🗑️  {} orphaned blobs deleted",
+                    format_number(deleted_count as u64)
+                );
                 println!("   💾 {} reclaimed", format_bytes(reclaimed_bytes));
             }
             VeloResponse::Error(e) => return Err(anyhow::anyhow!("Sweep failed: {}", e)),
             _ => return Err(anyhow::anyhow!("Unexpected response from daemon")),
         }
     } else {
-        println!("\n  📋 Dry Run: No changes made to CAS.");
+        println!("\n  📋 Dry Run: Scanning CAS for orphaned blobs...");
+        let cas = CasStore::new(cas_root)?;
+        let mut orphan_count = 0u64;
+        let mut orphan_bytes = 0u64;
+
+        if let Ok(iter) = cas.iter() {
+            for hash_res in iter {
+                if let Ok(hash) = hash_res {
+                    if !keep_set.contains(&hash) {
+                        orphan_count += 1;
+                        if let Some(p) = cas.blob_path_for_hash(&hash) {
+                            if let Ok(meta) = std::fs::metadata(p) {
+                                orphan_bytes += meta.len();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if orphan_count > 0 {
+            println!(
+                "   ⚠️  {} orphans found ({})",
+                format_number(orphan_count),
+                format_bytes(orphan_bytes)
+            );
+        } else {
+            println!("   ✅ No orphans found.");
+        }
+
+        println!();
         println!("     👉 Run with --delete to trigger daemon sweep.");
     }
 

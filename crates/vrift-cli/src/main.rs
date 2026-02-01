@@ -41,7 +41,7 @@ struct Cli {
     #[arg(
         long = "the-source-root",
         env = "VRIFT_CAS_ROOT",
-        default_value = "~/.vrift/the_source"
+        default_value = "~/.vrift/cas"
     )]
     the_source_root: PathBuf,
 
@@ -229,6 +229,8 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    // RFC-0043: Normalize global CAS root early (expands tilde)
+    let cas_root = vrift_manifest::normalize_path(&cli.the_source_root.to_string_lossy());
 
     // Isolation check MUST happen before Tokio runtime starts (single-threaded requirement)
     if let Commands::Run {
@@ -236,19 +238,11 @@ fn main() -> Result<()> {
         command,
         isolate,
         base,
-        daemon: _, // daemon mode logic handled inside cmd_run if we get there
+        daemon: _,
     } = &cli.command
     {
         if *isolate {
-            // Validate inputs early
-            // We can't use cmd_run directly because it might want async eventually,
-            // but current cmd_run for isolation calls isolation::run_isolated which is sync.
-            return isolation::run_isolated(
-                command,
-                manifest,
-                &cli.the_source_root,
-                base.as_deref(),
-            );
+            return isolation::run_isolated(command, manifest, &cas_root, base.as_deref());
         }
     }
 
@@ -257,10 +251,10 @@ fn main() -> Result<()> {
         .enable_all()
         .build()?;
 
-    rt.block_on(async_main(cli))
+    rt.block_on(async_main(cli, cas_root))
 }
 
-async fn async_main(cli: Cli) -> Result<()> {
+async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
     match cli.command {
         Commands::Ingest {
             directory,
@@ -273,8 +267,6 @@ async fn async_main(cli: Cli) -> Result<()> {
             no_security_filter,
             show_excluded,
         } => {
-            // Apply config defaults for mode and tier
-            // Note: Extract values in block so MutexGuard is dropped before await
             let (mode, tier) = {
                 let config = vrift_config::config();
                 (
@@ -284,7 +276,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             };
 
             cmd_ingest(
-                &cli.the_source_root,
+                &cas_root,
                 &directory,
                 &output,
                 prefix.as_deref(),
@@ -304,33 +296,31 @@ async fn async_main(cli: Cli) -> Result<()> {
             base,
             daemon,
         } => cmd_run(
-            &cli.the_source_root,
+            &cas_root,
             &manifest,
             &command,
             isolate,
             base.as_deref(),
             daemon,
-        ), // isolate is false here
+        ),
         Commands::Status {
             manifest,
             session,
             directory,
         } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
-            cmd_status(&cli.the_source_root, manifest.as_deref(), session, &dir)
+            cmd_status(&cas_root, manifest.as_deref(), session, &dir)
         }
-        Commands::Mount(args) => mount::run(args),
-        Commands::Gc(args) => gc::run(&cli.the_source_root, args).await,
-        Commands::Resolve { lockfile } => cmd_resolve(&cli.the_source_root, &lockfile),
+        Commands::Mount(args) => mount::run(args, &cas_root),
+        Commands::Gc(args) => gc::run(&cas_root, args).await,
+        Commands::Resolve { lockfile } => cmd_resolve(&cas_root, &lockfile),
         Commands::Daemon { command } => match command {
             DaemonCommands::Status { directory } => {
                 let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
                 daemon::check_status(&dir).await
             }
         },
-        Commands::Watch { directory, output } => {
-            cmd_watch(&cli.the_source_root, &directory, &output).await
-        }
+        Commands::Watch { directory, output } => cmd_watch(&cas_root, &directory, &output).await,
         Commands::Active { phantom, directory } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
             let mode = if phantom {
@@ -812,7 +802,9 @@ async fn cmd_ingest(
                         new_bytes += ingest_result.size; // Track actual new storage
 
                         // RFC-0043: Notify daemon of new blob for live index sync
-                        let _ = daemon::notify_blob(ingest_result.hash, ingest_result.size, directory).await;
+                        let _ =
+                            daemon::notify_blob(ingest_result.hash, ingest_result.size, directory)
+                                .await;
 
                         // RFC-0039 §5.1.1: If Tier-1, request daemon to strengthen protection (chown + immutable)
                         if is_tier1 {

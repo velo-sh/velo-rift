@@ -19,10 +19,7 @@ pub struct MountArgs {
 }
 
 /// Execute the mount command
-pub fn run(args: MountArgs) -> Result<()> {
-    let cas_root =
-        std::env::var("VR_THE_SOURCE").unwrap_or_else(|_| "~/.vrift/the_source".to_string());
-    let cas_root = Path::new(&cas_root);
+pub fn run(args: MountArgs, cas_root: &Path) -> Result<()> {
     let manifest_path = &args.manifest;
     let mountpoint = &args.mountpoint;
     if !manifest_path.exists() {

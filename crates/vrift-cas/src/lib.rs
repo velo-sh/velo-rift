@@ -230,6 +230,14 @@ impl CasStore {
             return Err(CasError::Io(e));
         }
 
+        // RFC-0039: Ensure CAS blobs are executable by default (0o555)
+        // This ensures binaries hard-linked from CAS are executable in Read-Only jails.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o555));
+        }
+
         Ok(hash)
     }
 
@@ -421,10 +429,10 @@ impl CasStore {
 
         for hash_res in self.iter()? {
             let hash = hash_res?;
-            
+
             // Convert Blake3Hash ([u8; 32]) to hex string for bloom lookup
             let hex = Self::hash_to_hex(&hash);
-            
+
             if !bloom.contains(&hex) {
                 // Potential orphan (not in Bloom Filter)
                 if let Some(path) = self.find_blob_path(&hash) {

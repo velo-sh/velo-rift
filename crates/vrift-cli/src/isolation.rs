@@ -227,7 +227,28 @@ fn setup_mounts(
         merged_dir
     };
 
-    // 4. Pivot Root
+    // 4. Bind-mount CAS root into jail so links/files remain accessible
+    // We map it to the same path inside the jail for consistency
+    let cas_in_jail = root_for_pivot.join(cas_root.strip_prefix("/").unwrap_or(cas_root));
+    fs::create_dir_all(&cas_in_jail).context("Failed to create CAS mountpoint in jail")?;
+
+    use nix::mount::{mount, MsFlags};
+    mount(
+        Some(cas_root),
+        &cas_in_jail,
+        None::<&str>,
+        MsFlags::MS_BIND | MsFlags::MS_RDONLY,
+        None::<&str>,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to bind mount CAS into jail: {} -> {}",
+            cas_root.display(),
+            cas_in_jail.display()
+        )
+    })?;
+
+    // 5. Pivot Root
     let old_root_path = root_for_pivot.join(".old_root");
     fs::create_dir_all(&old_root_path).context("Failed to create .old_root")?;
 

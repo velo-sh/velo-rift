@@ -82,7 +82,7 @@ else
 fi
 
 export VRIFT_MANIFEST="$MANIFEST_PATH"
-export VR_THE_SOURCE="$CAS_ROOT"
+export VRIFT_CAS_ROOT="$CAS_ROOT"
 export VRIFT_VFS_PREFIX="/velo"
 export RUST_LOG="info" # Enable our new tracing!
 

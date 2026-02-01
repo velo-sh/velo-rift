@@ -21,7 +21,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 VRIFT="${PROJECT_ROOT}/target/release/vrift"
-CAS_DIR="${VR_THE_SOURCE:-${HOME}/.vrift/the_source}"
+CAS_DIR="${VRIFT_CAS_ROOT:-${HOME}/.vrift/the_source}"
 BENCH_DIR="/tmp/vrift-bench"
 MANIFEST_DIR="/tmp/vrift-demo"
 

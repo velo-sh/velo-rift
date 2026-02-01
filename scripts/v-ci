@@ -146,7 +146,7 @@ run_in_docker() {
         -v vrift-target-cache:/workspace/target \
         -w /workspace \
         -e CI=true \
-        -e VR_THE_SOURCE=/tmp/vrift_cas \
+        -e VRIFT_CAS_ROOT=/tmp/vrift_cas \
         "$DOCKER_IMAGE" \
         /workspace/scripts/v-ci --local --tier "$TIER" \
         --rust-args ${EXTRA_RUST_ARGS[@]+"${EXTRA_RUST_ARGS[@]}"} \

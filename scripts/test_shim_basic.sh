@@ -31,17 +31,19 @@ VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
 # Detect OS
 OS_TYPE=$(uname -s)
 if [ "$OS_TYPE" == "Darwin" ]; then
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvelo_shim.dylib"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
     PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
 else
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvelo_shim.so"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.so"
     PRELOAD_VAR="LD_PRELOAD"
 fi
 
 # Ensure binaries exist
 if [ ! -f "$VELO_BIN" ] || [ ! -f "$VRIFTD_BIN" ] || [ ! -f "$SHIM_LIB" ]; then
     echo "Building release binaries..."
-    cargo build --release
+    cargo build --release --workspace
+    # Explicitly build shim cdylib (may not be built by --workspace alone)
+    cargo build --release -p vrift-shim
 fi
 
 TEST_DIR=$(mktemp -d)
@@ -61,18 +63,18 @@ echo -n "hello world" > "$TEST_DIR/source/testfile.txt"
 
 # 1. Ingest
 echo "Ingesting source..."
-export VR_THE_SOURCE="$TEST_DIR/cas"
+export VRIFT_CAS_ROOT="$TEST_DIR/cas"
 # Use default output to ensure registration in registry
 "$VELO_BIN" ingest "$TEST_DIR/source" --prefix /vrift > "$TEST_DIR/ingest.log" 2>&1
 
 # 2. Start daemon
 echo "Starting daemon..."
-export VR_THE_SOURCE="$TEST_DIR/cas"
-export VRIFT_MANIFEST_DIR="$TEST_DIR/source/.vrift/manifest.lmdb"
+export VRIFT_CAS_ROOT="$TEST_DIR/cas"
+export VRIFT_MANIFEST="$TEST_DIR/source/.vrift/manifest.lmdb"
 export RUST_LOG=info
 
-if [ ! -d "$VR_THE_SOURCE" ]; then
-    echo "❌ ERROR: CAS dir $VR_THE_SOURCE does not exist before daemon start!"
+if [ ! -d "$VRIFT_CAS_ROOT" ]; then
+    echo "❌ ERROR: CAS dir $VRIFT_CAS_ROOT does not exist before daemon start!"
     ls -la "$TEST_DIR"
     exit 1
 fi
@@ -134,7 +136,7 @@ export "$PRELOAD_VAR"="$SHIM_PATH"
 if [ "$OS_TYPE" == "Darwin" ]; then
     export DYLD_FORCE_FLAT_NAMESPACE=1
 fi
-export VRIFT_MANIFEST_DIR="$TEST_DIR/source/.vrift/manifest.lmdb"
+export VRIFT_MANIFEST="$TEST_DIR/source/.vrift/manifest.lmdb"
 export VRIFT_VFS_PREFIX="/vrift"
 export VRIFT_DEBUG=1
 
