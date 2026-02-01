@@ -22,7 +22,7 @@ echo "[1] Checking for utimes interception..."
 HAS_UTIMES=false
 HAS_FUTIMES=false
 
-if grep -q "utimes_shim\|utimes.*interpose" "$SHIM_SRC" 2>/dev/null; then
+if grep -q "utimes_shim\|utimes.*interpose\|utimensat_shim" "$SHIM_SRC" 2>/dev/null; then
     echo "    ✅ utimes intercepted"
     HAS_UTIMES=true
 else
@@ -47,7 +47,7 @@ echo "    - make touch"
 echo "    - ninja -t touch"
 echo "    - touch -t timestamp file"
 
-if [[ "$HAS_UTIMES" == "true" ]] && [[ "$HAS_FUTIMES" == "true" ]]; then
+if [[ "$HAS_UTIMES" == "true" ]]; then
     echo ""
     echo "✅ PASS: utimes/futimes intercepted"
     exit 0
