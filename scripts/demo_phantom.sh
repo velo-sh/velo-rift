@@ -22,7 +22,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 VRIFT="${PROJECT_ROOT}/target/release/vrift"
-CAS_DIR="${HOME}/.vrift/the_source"
+CAS_DIR="${VRIFT_CAS_ROOT:-${HOME}/.vrift/the_source}"
 DEMO_DIR="/tmp/vrift-phantom-demo"
 
 # Colors
