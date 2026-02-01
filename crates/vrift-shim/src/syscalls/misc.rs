@@ -2,7 +2,9 @@
 #[cfg(target_os = "macos")]
 use crate::interpose::*;
 use crate::state::*;
-use libc::{c_char, c_int, c_void};
+#[cfg(target_os = "macos")]
+use libc::c_void;
+use libc::{c_char, c_int};
 use std::ffi::CStr;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
