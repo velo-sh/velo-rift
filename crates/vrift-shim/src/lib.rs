@@ -20,7 +20,8 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 #[allow(unused_imports)]
 use libc::{
-    c_char, c_int, c_void, flock, mkdir, mode_t, munmap, size_t, ssize_t, symlink, utimensat,
+    c_char, c_int, c_void, flock, link, linkat, mkdir, mmap, mode_t, munmap, renameat, size_t,
+    ssize_t, symlink, utimensat, AT_FDCWD,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -320,6 +321,27 @@ static IT_FLOCK: Interpose = Interpose {
 static IT_READLINK: Interpose = Interpose {
     new_func: readlink_shim as *const (),
     old_func: readlink as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+static IT_LINK: Interpose = Interpose {
+    new_func: link_shim as *const (),
+    old_func: link as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+static IT_LINKAT: Interpose = Interpose {
+    new_func: linkat_shim as *const (),
+    old_func: linkat as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+static IT_RENAMEAT: Interpose = Interpose {
+    new_func: renameat_shim as *const (),
+    old_func: renameat as *const (),
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
@@ -2342,6 +2364,9 @@ type UtimensatFn =
     unsafe extern "C" fn(c_int, *const c_char, *const libc::timespec, c_int) -> c_int;
 type MkdirFn = unsafe extern "C" fn(*const c_char, mode_t) -> c_int;
 type SymlinkFn = unsafe extern "C" fn(*const c_char, *const c_char) -> c_int;
+type LinkFn = unsafe extern "C" fn(*const c_char, *const c_char) -> c_int;
+type LinkatFn = unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char, c_int) -> c_int;
+type RenameatFn = unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char) -> c_int;
 type FlockFn = unsafe extern "C" fn(c_int, c_int) -> c_int;
 
 #[allow(dead_code)] // Will be exported when full readdir support is added
@@ -2696,6 +2721,9 @@ static REAL_UTIMENSAT: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static REAL_MKDIR: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 #[cfg(target_os = "linux")]
 static REAL_SYMLINK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+static REAL_LINK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+static REAL_LINKAT: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+static REAL_RENAMEAT: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 #[cfg(target_os = "linux")]
 static REAL_FLOCK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
@@ -3338,6 +3366,197 @@ pub unsafe extern "C" fn rename_shim(oldpath: *const c_char, newpath: *const c_c
 
     let real = get_real_shim!(REAL_RENAME, "rename", IT_RENAME, RenameFn);
     real(oldpath, newpath)
+}
+
+unsafe fn resolve_path_at(dirfd: c_int, path: *const c_char, out: &mut [u8]) -> Option<usize> {
+    let path_str = CStr::from_ptr(path).to_str().ok()?;
+    if path_str.starts_with('/') {
+        return raw_path_normalize(path_str, out);
+    }
+    if dirfd == AT_FDCWD {
+        return resolve_path_with_cwd(path_str, out);
+    }
+    // Cannot resolve relative path to arbitrary dirfd easily without OS help.
+    // Fallback to None (treat as non-VFS)
+    None
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn renameat_shim(
+    olddirfd: c_int,
+    oldpath: *const c_char,
+    newdirfd: c_int,
+    newpath: *const c_char,
+) -> c_int {
+    #[cfg(target_os = "linux")]
+    extern "C" {
+        fn __errno_location() -> *mut c_int;
+    }
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn __error() -> *mut c_int;
+    }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => {
+            let real = get_real_shim!(REAL_RENAMEAT, "renameat", IT_RENAMEAT, RenameatFn);
+            return real(olddirfd, oldpath, newdirfd, newpath);
+        }
+    };
+
+    if let Some(state) = ShimState::get() {
+        let mut buf_old = [0u8; 1024];
+        let mut buf_new = [0u8; 1024];
+
+        let old_res = resolve_path_at(olddirfd, oldpath, &mut buf_old);
+        let new_res = resolve_path_at(newdirfd, newpath, &mut buf_new);
+
+        let old_is_vfs = old_res.map_or(false, |len| {
+            let p = std::str::from_utf8_unchecked(&buf_old[..len]);
+            p.starts_with(&*state.vfs_prefix)
+        });
+        let new_is_vfs = new_res.map_or(false, |len| {
+            let p = std::str::from_utf8_unchecked(&buf_new[..len]);
+            p.starts_with(&*state.vfs_prefix)
+        });
+
+        if old_is_vfs && new_is_vfs {
+            // Pure VFS renameat
+            let old_resolved = old_res
+                .map(|len| std::str::from_utf8_unchecked(&buf_old[..len]))
+                .unwrap_or("");
+            let new_resolved = new_res
+                .map(|len| std::str::from_utf8_unchecked(&buf_new[..len]))
+                .unwrap_or("");
+            if sync_ipc_manifest_rename(&state.socket_path, old_resolved, new_resolved) {
+                return 0;
+            }
+        } else if old_is_vfs != new_is_vfs {
+            // Cross-Domain
+            #[cfg(target_os = "linux")]
+            let errno_ptr = __errno_location();
+            #[cfg(target_os = "macos")]
+            let errno_ptr = __error();
+            *errno_ptr = libc::EXDEV;
+            return -1;
+        }
+    }
+
+    let real = get_real_shim!(REAL_RENAMEAT, "renameat", IT_RENAMEAT, RenameatFn);
+    real(olddirfd, oldpath, newdirfd, newpath)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn link_shim(oldpath: *const c_char, newpath: *const c_char) -> c_int {
+    #[cfg(target_os = "linux")]
+    extern "C" {
+        fn __errno_location() -> *mut c_int;
+    }
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn __error() -> *mut c_int;
+    }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => {
+            let real = get_real_shim!(REAL_LINK, "link", IT_LINK, LinkFn);
+            return real(oldpath, newpath);
+        }
+    };
+
+    if let Some(state) = ShimState::get() {
+        let mut buf = [0u8; 1024];
+        // Check oldpath (target)
+        if let Some(len) =
+            resolve_path_with_cwd(CStr::from_ptr(oldpath).to_str().unwrap_or(""), &mut buf)
+        {
+            let p = std::str::from_utf8_unchecked(&buf[..len]);
+            if p.starts_with(&*state.vfs_prefix) {
+                // VFS Hard Link -> EXDEV (Block)
+                #[cfg(target_os = "linux")]
+                let errno_ptr = __errno_location();
+                #[cfg(target_os = "macos")]
+                let errno_ptr = __error();
+                *errno_ptr = libc::EXDEV;
+                return -1;
+            }
+        }
+        // Check newpath (destination) - if creating link INSIDE vfs, also block?
+        // Yes, VFS is read-only for structure changes via hardlink.
+        if let Some(len) =
+            resolve_path_with_cwd(CStr::from_ptr(newpath).to_str().unwrap_or(""), &mut buf)
+        {
+            let p = std::str::from_utf8_unchecked(&buf[..len]);
+            if p.starts_with(&*state.vfs_prefix) {
+                #[cfg(target_os = "linux")]
+                let errno_ptr = __errno_location();
+                #[cfg(target_os = "macos")]
+                let errno_ptr = __error();
+                *errno_ptr = libc::EXDEV;
+                return -1;
+            }
+        }
+    }
+
+    let real = get_real_shim!(REAL_LINK, "link", IT_LINK, LinkFn);
+    real(oldpath, newpath)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linkat_shim(
+    olddirfd: c_int,
+    oldpath: *const c_char,
+    newdirfd: c_int,
+    newpath: *const c_char,
+    flags: c_int,
+) -> c_int {
+    #[cfg(target_os = "linux")]
+    extern "C" {
+        fn __errno_location() -> *mut c_int;
+    }
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn __error() -> *mut c_int;
+    }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => {
+            let real = get_real_shim!(REAL_LINKAT, "linkat", IT_LINKAT, LinkatFn);
+            return real(olddirfd, oldpath, newdirfd, newpath, flags);
+        }
+    };
+
+    if let Some(state) = ShimState::get() {
+        let mut buf = [0u8; 1024];
+        if let Some(len) = resolve_path_at(olddirfd, oldpath, &mut buf) {
+            let p = std::str::from_utf8_unchecked(&buf[..len]);
+            if p.starts_with(&*state.vfs_prefix) {
+                #[cfg(target_os = "linux")]
+                let errno_ptr = __errno_location();
+                #[cfg(target_os = "macos")]
+                let errno_ptr = __error();
+                *errno_ptr = libc::EXDEV;
+                return -1;
+            }
+        }
+        if let Some(len) = resolve_path_at(newdirfd, newpath, &mut buf) {
+            let p = std::str::from_utf8_unchecked(&buf[..len]);
+            if p.starts_with(&*state.vfs_prefix) {
+                #[cfg(target_os = "linux")]
+                let errno_ptr = __errno_location();
+                #[cfg(target_os = "macos")]
+                let errno_ptr = __error();
+                *errno_ptr = libc::EXDEV;
+                return -1;
+            }
+        }
+    }
+
+    let real = get_real_shim!(REAL_LINKAT, "linkat", IT_LINKAT, LinkatFn);
+    real(olddirfd, oldpath, newdirfd, newpath, flags)
 }
 
 #[no_mangle]
