@@ -18,7 +18,9 @@ use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use libc::{c_char, c_int, c_void, mkdir, mode_t, size_t, ssize_t, symlink, utimensat};
+use libc::{c_char, c_int, c_void, mode_t, size_t, ssize_t};
+#[cfg(target_os = "macos")]
+use libc::{mkdir, symlink, utimensat};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use vrift_cas::CasStore;
