@@ -248,6 +248,10 @@ impl Default for DaemonConfig {
 mod tests {
     use super::*;
 
+    // Lock for tests that modify environment variables to prevent race conditions
+    // when tests run in parallel
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // ========== Default Values Tests ==========
 
     #[test]
@@ -400,6 +404,7 @@ default_tier = "tier1"
 
     #[test]
     fn test_env_override_the_source() {
+        let _guard = ENV_LOCK.lock().unwrap(); // Serialize env tests
         let mut config = Config::default();
 
         std::env::set_var("VR_THE_SOURCE", "/env/override/path");
@@ -414,6 +419,7 @@ default_tier = "tier1"
 
     #[test]
     fn test_env_override_threads() {
+        let _guard = ENV_LOCK.lock().unwrap(); // Serialize env tests
         let mut config = Config::default();
 
         std::env::set_var("VRIFT_THREADS", "16");
@@ -425,6 +431,7 @@ default_tier = "tier1"
 
     #[test]
     fn test_env_override_invalid_threads_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap(); // Serialize env tests
         let mut config = Config::default();
 
         std::env::set_var("VRIFT_THREADS", "not_a_number");
