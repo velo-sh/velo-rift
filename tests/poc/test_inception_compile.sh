@@ -12,12 +12,13 @@ echo "=== Inception Test: Compile C Project via VFS ==="
 echo "Goal: Fool Clang into believing virtual files are real."
 echo ""
 
-# Setup
+# Setup (chflags first to handle leftover immutable files)
 export VR_THE_SOURCE="/tmp/inception_cas"
 export VRIFT_MANIFEST="/tmp/inception.manifest"
 export VRIFT_VFS_PREFIX="/vrift"
 
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/inception_project
+chflags -R nouchg "$VR_THE_SOURCE" /tmp/inception_project 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/inception_project 2>/dev/null || true
 mkdir -p "$VR_THE_SOURCE" /tmp/inception_project
 
 # Create a simple C project
@@ -93,6 +94,7 @@ else
     EXIT_CODE=1
 fi
 
-# Cleanup
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/inception_project /tmp/inception_hello /tmp/inception_daemon.log
+# Cleanup (chflags to remove immutable flags first)
+chflags -R nouchg "$VR_THE_SOURCE" /tmp/inception_project 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/inception_project /tmp/inception_hello /tmp/inception_daemon.log 2>/dev/null || true
 exit $EXIT_CODE

@@ -12,12 +12,13 @@ echo "=== Rust Build Test: cargo build via VFS ==="
 echo "Goal: Fool cargo/rustc into believing virtual files are real."
 echo ""
 
-# Setup
+# Setup (chflags first to handle leftover immutable files)
 export VR_THE_SOURCE="/tmp/rust_build_cas"
 export VRIFT_MANIFEST="/tmp/rust_build.manifest"
 export VRIFT_VFS_PREFIX="/vrift"
 
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/rust_test_crate
+chflags -R nouchg "$VR_THE_SOURCE" /tmp/rust_test_crate 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/rust_test_crate 2>/dev/null || true
 mkdir -p "$VR_THE_SOURCE" /tmp/rust_test_crate/src
 
 # Create a simple Rust crate
@@ -115,6 +116,7 @@ else
     EXIT_CODE=1
 fi
 
-# Cleanup
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/rust_test_crate /tmp/rust_vfs_target /tmp/rust_build_daemon.log
+# Cleanup (chflags to remove immutable flags first)
+chflags -R nouchg "$VR_THE_SOURCE" /tmp/rust_test_crate 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/rust_test_crate /tmp/rust_vfs_target /tmp/rust_build_daemon.log 2>/dev/null || true
 exit $EXIT_CODE

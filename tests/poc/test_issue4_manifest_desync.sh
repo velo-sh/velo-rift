@@ -15,11 +15,11 @@ export VR_THE_SOURCE="/tmp/test_issue4_cas"
 export VRIFT_MANIFEST="/tmp/test_issue4.manifest"
 SOCKET_PATH="/tmp/vrift.sock"
 
-# Setup
+# Setup (chflags first to handle leftover immutable files)
 killall vriftd 2>/dev/null || true
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" "$SOCKET_PATH"
-mkdir -p "$VR_THE_SOURCE"
-mkdir -p /tmp/test_issue4_dir
+chflags -R nouchg "$VR_THE_SOURCE" /tmp/test_issue4_dir 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" "$SOCKET_PATH" /tmp/test_issue4_dir 2>/dev/null || true
+mkdir -p "$VR_THE_SOURCE" /tmp/test_issue4_dir
 echo "test content" > /tmp/test_issue4_dir/file.txt
 
 # Step 1: Ingest
@@ -45,7 +45,8 @@ else
     EXIT_CODE=0
 fi
 
-# Cleanup
+# Cleanup (use chflags to remove immutable flags first)
 kill $DAEMON_PID 2>/dev/null || true
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" "$SOCKET_PATH" /tmp/test_issue4_dir /tmp/daemon_issue4.log
+chflags -R nouchg "$VR_THE_SOURCE" 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" "$SOCKET_PATH" /tmp/test_issue4_dir /tmp/daemon_issue4.log 2>/dev/null || true
 exit $EXIT_CODE

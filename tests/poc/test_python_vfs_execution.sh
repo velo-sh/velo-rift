@@ -12,12 +12,13 @@ echo "=== Test: Python Script Execution via VFS ==="
 echo "Goal: python /vrift/project/main.py"
 echo ""
 
-# Setup
+# Setup (chflags first to handle leftover immutable files)
 export VR_THE_SOURCE="/tmp/python_vfs_cas"
 export VRIFT_MANIFEST="/tmp/python_vfs.manifest"
 export VRIFT_VFS_PREFIX="/vrift"
 
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/python_test_project
+chflags -R nouchg "$VR_THE_SOURCE" /tmp/python_test_project 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/python_test_project 2>/dev/null || true
 mkdir -p "$VR_THE_SOURCE" /tmp/python_test_project
 
 # Create a simple Python script
@@ -95,6 +96,7 @@ fi
 echo "[PASS] Python script executed successfully via VFS!"
 EXIT_CODE=0
 
-# Cleanup
-rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/python_test_project /tmp/python_vfs_daemon.log
+# Cleanup (chflags to remove immutable flags first)
+chflags -R nouchg "$VR_THE_SOURCE" /tmp/python_test_project 2>/dev/null || true
+rm -rf "$VR_THE_SOURCE" "$VRIFT_MANIFEST" /tmp/python_test_project /tmp/python_vfs_daemon.log 2>/dev/null || true
 exit $EXIT_CODE

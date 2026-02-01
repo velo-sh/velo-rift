@@ -84,10 +84,14 @@ sleep 1
 ./target/debug/vrift --the-source-root "$CAS_ROOT" ingest "$TEST_DIR" --output "$TEST_DIR/fallback.manifest"
 if [ $? -eq 0 ]; then
     echo "[SUCCESS] CLI correctly falls back to direct mode when daemon is offline."
+    EXIT_CODE=0
 else
     echo "[FAIL] CLI failed when daemon was offline."
+    EXIT_CODE=1
 fi
 
 # Cleanup
-# rm -rf "$TEST_DIR" "$CAS_ROOT"
-kill $DAEMON_PID 2>/dev/null
+rm -rf "$TEST_DIR" "$CAS_ROOT" 2>/dev/null || true
+kill $DAEMON_PID 2>/dev/null || true
+
+exit $EXIT_CODE
