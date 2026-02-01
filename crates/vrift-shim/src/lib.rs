@@ -762,10 +762,21 @@ impl ShimState {
     /// Returns true if path should be considered for Hot Stat acceleration
     #[inline(always)]
     fn psfs_applicable(&self, path: &str) -> bool {
+        // RFC-0046: Mandatory exclusion for metadata and CAS root to prevent recursion
+        if path.contains("/.vrift/") || path.starts_with(&*self.cas_root) {
+            return false;
+        }
+
         // RFC-0043: Robust normalization and CWD resolution
         let mut buf = [0u8; 1024];
         if let Some(len) = unsafe { resolve_path_with_cwd(path, &mut buf) } {
             let normalized = unsafe { std::str::from_utf8_unchecked(&buf[..len]) };
+            
+            // RFC-0046: Re-check after normalization
+            if normalized.contains("/.vrift/") || normalized.starts_with(&*self.cas_root) {
+                return false;
+            }
+
             normalized.starts_with(&*self.vfs_prefix)
         } else {
             // Fallback for extremely long paths
