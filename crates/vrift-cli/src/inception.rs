@@ -390,6 +390,10 @@ exec "{}" "$@"
 }
 
 /// Generate a wrapper script for a command
+///
+/// These wrappers exist for SIP bypass on macOS - they allow the shim
+/// to intercept syscalls from system binaries. The wrapper itself just
+/// passes through to the real command; actual VFS logic is in the shim.
 fn generate_wrapper_script(cmd: &str) -> String {
     // Find the real binary path
     let real_path = match cmd {
@@ -401,41 +405,10 @@ fn generate_wrapper_script(cmd: &str) -> String {
 
     format!(
         r#"#!/bin/bash
-# Velo Rift Inception Wrapper for {cmd}
-# Auto-generated - blocks VFS mutations, passthroughs others
+# Velo Rift SIP Bypass Wrapper for {cmd}
+# Auto-generated - passes through to real command
+# VFS interception happens at the shim/syscall level
 
-# Get target path (last argument)
-target=""
-for arg in "$@"; do
-    target="$arg"
-done
-
-# Resolve relative paths and canonicalize (handles /tmp -> /private/tmp on macOS)
-if [[ -n "$target" ]]; then
-    if [[ "$target" != /* ]]; then
-        target="$(pwd -P)/$target"
-    fi
-    # Resolve symlinks in path prefix
-    target_dir=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)
-    if [[ -n "$target_dir" ]]; then
-        target="$target_dir/$(basename "$target")"
-    fi
-fi
-
-# Get canonicalized project root
-vrift_root="$VRIFT_PROJECT_ROOT"
-if [[ -n "$vrift_root" ]] && [[ -d "$vrift_root" ]]; then
-    vrift_root=$(cd "$vrift_root" 2>/dev/null && pwd -P)
-fi
-
-# Check if target is in VFS project
-if [[ -n "$vrift_root" ]] && [[ -n "$target" ]] && [[ "$target" == "$vrift_root"* ]]; then
-    echo "vrift: {cmd} blocked in VFS mode (file is immutable)" >&2
-    echo "       Use 'vrift wake' to exit VFS first" >&2
-    exit 1
-fi
-
-# Passthrough to real binary
 exec {real_path} "$@"
 "#,
         cmd = cmd,
