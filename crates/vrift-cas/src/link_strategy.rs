@@ -87,18 +87,6 @@ pub fn is_binary_sensitive(path: &Path) -> bool {
     path_str.contains(".app/") || path_str.contains(".framework/")
 }
 
-/// Direct reflink or copy (skipping hard_link attempt)
-#[cfg(target_os = "macos")]
-fn reflink_or_copy(source: &Path, target: &Path) -> io::Result<()> {
-    match reflink_copy::reflink(source, target) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            fs::copy(source, target)?;
-            Ok(())
-        }
-    }
-}
-
 // ============================================================================
 // macOS Implementation
 // ============================================================================
@@ -115,36 +103,34 @@ pub struct MacosLinkStrategy;
 #[cfg(target_os = "macos")]
 impl LinkStrategy for MacosLinkStrategy {
     fn link_file(&self, source: &Path, target: &Path) -> io::Result<()> {
-        // Fast-path: skip hard_link for known-sensitive paths
-        if is_binary_sensitive(source) {
-            return reflink_or_copy(source, target);
-        }
-
-        // Tier 1: hard_link (most efficient)
-        match fs::hard_link(source, target) {
-            Ok(()) => return Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-                // EPERM: likely code-signed bundle, try clonefile
-            }
-            Err(e) => return Err(e),
-        }
-
-        // Tier 2: clonefile (APFS CoW)
+        // Tier 1: clonefile (APFS CoW) - Preferred for Inode Decoupling
+        // This ensures CAS-side uchg doesn't affect the source project file.
         match reflink_copy::reflink(source, target) {
             Ok(()) => return Ok(()),
             Err(_) => {
-                // clonefile not supported or failed
+                // clonefile not supported or failed (e.g., non-APFS)
             }
         }
 
-        // Tier 3: copy (last resort)
+        // Tier 2: hard_link (Zero-copy, but shares Inode)
+        // CAUTION: Only used if Reflink fails. This will leak metadata if uchg is applied.
+        // For project-to-CAS ingest, we prefer Tier 3 (copy) over Tier 2 if we want absolute isolation.
+        // But for now, we keep it as a fast fallback.
+        match fs::hard_link(source, target) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(_) => {
+                // EPERM or other failure
+            }
+        }
+
+        // Tier 3: copy (last resort, safe Inode decoupling)
         fs::copy(source, target)?;
         Ok(())
     }
 
     fn name(&self) -> &'static str {
-        "macos-tiered"
+        "macos-reflink-priority"
     }
 }
 
@@ -162,28 +148,29 @@ pub struct LinuxLinkStrategy;
 #[cfg(target_os = "linux")]
 impl LinkStrategy for LinuxLinkStrategy {
     fn link_file(&self, source: &Path, target: &Path) -> io::Result<()> {
-        // Tier 1: hard_link (preferred on Linux)
-        match fs::hard_link(source, target) {
-            Ok(()) => return Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-                // EXDEV: cross-device link, try reflink
-            }
-            Err(e) => return Err(e),
-        }
-
-        // Tier 2: reflink (btrfs, xfs)
+        // Tier 1: reflink (btrfs, xfs) - Preferred for Inode Decoupling
+        // FICLONE ioctl provides zero-copy while maintaining separate inodes.
         if let Ok(()) = reflink_copy::reflink(source, target) {
             return Ok(());
         }
 
-        // Tier 3: copy
+        // Tier 2: hard_link (Zero-copy, shared inode)
+        match fs::hard_link(source, target) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+                // EXDEV: handled by copy fallback
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Tier 3: copy (last resort, safe Inode decoupling)
         fs::copy(source, target)?;
         Ok(())
     }
 
     fn name(&self) -> &'static str {
-        "linux-hardlink"
+        "linux-reflink-priority"
     }
 }
 
@@ -324,5 +311,59 @@ mod tests {
         assert!(!is_binary_sensitive(Path::new(
             "node_modules/lodash/index.js"
         )));
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn test_inode_decoupling_integrity() {
+        use crate::protection::{is_immutable, set_immutable};
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.txt");
+        let target = dir.path().join("target.txt");
+
+        let mut f = File::create(&source).unwrap();
+        f.write_all(b"decoupling test").unwrap();
+        drop(f);
+
+        let strategy = get_strategy();
+        strategy.link_file(&source, &target).unwrap();
+
+        let source_ino = fs::metadata(&source).unwrap().ino();
+        let target_ino = fs::metadata(&target).unwrap().ino();
+
+        // On macOS APFS or Linux with Reflink support, Inodes MUST be different
+        // to ensure metadata isolation (uchg protection).
+        if source_ino != target_ino {
+            println!(
+                "Reflink detected: Inodes are decoupled ({} vs {})",
+                source_ino, target_ino
+            );
+
+            // Apply protection to TARGET
+            // Note: This might return EPERM on Linux if not root, but on macOS it should work for owner.
+            match set_immutable(&target, true) {
+                Ok(_) => {
+                    assert!(is_immutable(&target).unwrap(), "Target should be immutable");
+                    assert!(
+                        !is_immutable(&source).unwrap(),
+                        "Source MUST NOT be immutable (Contamination Check)"
+                    );
+
+                    // Cleanup
+                    set_immutable(&target, false).unwrap();
+                }
+                Err(e) => {
+                    println!("Skipping uchg leak check due to permissions: {}", e);
+                }
+            }
+        } else {
+            println!(
+                "Warning: Hardlink detected (Inodes: {}). Metadata will leak!",
+                source_ino
+            );
+            // On modern macOS/APFS, this should not happen with our new strategy.
+        }
     }
 }

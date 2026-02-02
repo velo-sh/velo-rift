@@ -48,41 +48,22 @@ use crate::{Blake3Hash, CasError, Result};
 /// * Ok(true) if a new file was created
 /// * Ok(false) if file already existed (dedup)
 /// * Err on all fallback methods failed
+///
+/// Tiered file linking strategy for CAS storage
+///
+/// Refactored to use LinkStrategy for Inode Decoupling (Reflink Priority).
 fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
-    // Audit: Check existence first. If it exists, enforce invariant anyway (idempotency fix)
     if target.exists() {
-        // QA Fix: Existing blobs might have wrong permissions from older ingests
-        // Re-enforce CAS invariant to ensure read-only, non-executable state
+        // Idempotency: re-enforce CAS invariant on the TARGET only.
         let _ = crate::protection::enforce_cas_invariant(target);
         return Ok(false);
     }
 
-    // Attempt 1: hard_link (most efficient)
-    match fs::hard_link(source, target) {
-        Ok(()) => return Ok(true), // New file created
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(false), // Already exists
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            // EPERM: likely code-signed bundle OR existing immutable blob
-            // If it's the latter, target.exists() above should have caught it,
-            // but we check again just in case of race conditions.
-            if target.exists() {
-                return Ok(false);
-            }
-        }
-        Err(e) => return Err(e),
-    }
+    // Use platform-optimal LinkStrategy (RFC-0040)
+    // Priority: Reflink -> Hardlink -> Copy
+    crate::link_strategy::get_strategy().link_file(source, target)?;
 
-    // Attempt 2: clonefile (CoW on APFS)
-    match reflink_copy::reflink(source, target) {
-        Ok(()) => return Ok(true), // New file created
-        Err(_) => {
-            // clonefile not supported or failed, fall back to copy
-        }
-    }
-
-    // Attempt 3: full copy (last resort)
-    fs::copy(source, target)?;
-    Ok(true) // New file created
+    Ok(true)
 }
 
 // ============================================================================

@@ -646,10 +646,13 @@ impl CasStore {
             fs::create_dir_all(parent)?;
         }
 
-        // Create hardlink: target shares inode with CAS blob
-        fs::hard_link(&cas_path, target)?;
+        // Use LinkStrategy for Inode Decoupling (Reflink priority)
+        // This ensures CAS-side protection doesn't bleed into the target path
+        // if the target path is intended to be a user-managed project file.
+        get_strategy().link_file(&cas_path, target)?;
 
-        // Set read-only (chmod 444) to catch unintended writes
+        // Set read-only (chmod 444) on the project-side projection
+        // We still keep this to catch accidental writes, but it won't be uchg.
         Self::set_readonly(target)?;
 
         Ok(hash)
@@ -702,7 +705,8 @@ impl CasStore {
             fs::create_dir_all(parent)?;
         }
 
-        fs::hard_link(&cas_path, target)?;
+        // Use LinkStrategy for Inode Decoupling
+        get_strategy().link_file(&cas_path, target)?;
         Self::set_readonly(target)?;
         Ok(())
     }
@@ -962,10 +966,12 @@ mod tests {
 
         let _hash = cas.store_and_link_mutable(data, &target_path).unwrap();
 
-        // Verify hardlink exists (not symlink)
+        // Verify projection exists (not symlink)
         let meta = target_path.metadata().unwrap();
         assert!(meta.file_type().is_file());
-        assert!(meta.nlink() >= 2); // At least 2 links (CAS + target)
+        // nlink() check removed in favor of Inode Decoupling (Reflink)
+        // creates separate inodes despite sharing data blocks.
+        // On non-reflink systems it might still be 2+, but we prioritize decoupling.
 
         // Verify content
         let read_content = fs::read(&target_path).unwrap();
