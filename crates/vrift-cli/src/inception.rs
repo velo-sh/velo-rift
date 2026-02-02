@@ -18,7 +18,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 // Emojis for theatrical effect
 static TOTEM_SPIN: Emoji<'_, '_> = Emoji("🌀", "*");
-static TOTEM_FALL: Emoji<'_, '_> = Emoji("⚪", "o");
+static BELL: Emoji<'_, '_> = Emoji("🔔", "*");
 static CHECK: Emoji<'_, '_> = Emoji("✔ ", "[ok] ");
 static WARN: Emoji<'_, '_> = Emoji("⚠️  ", "! ");
 
@@ -159,24 +159,12 @@ pub fn cmd_wake() -> Result<()> {
     println!("fi");
     println!();
 
-    // Box output for wake complete - totem fell!
+    // Box output for wake complete
     println!("echo ''");
     println!("echo '{}{}{}'", BOX_TL, BOX_H.repeat(35), BOX_TR);
     println!(
         "echo '{} {} WAKE                            {}'",
-        BOX_V, TOTEM_FALL, BOX_V
-    );
-    println!(
-        "echo '{}                                    {}'",
-        BOX_V, BOX_V
-    );
-    println!(
-        "echo '{}    The totem fell.                 {}'",
-        BOX_V, BOX_V
-    );
-    println!(
-        "echo '{}    Back to reality.                {}'",
-        BOX_V, BOX_V
+        BOX_V, BELL, BOX_V
     );
     println!("echo '{}{}{}'", BOX_BL, BOX_H.repeat(35), BOX_BR);
     println!("echo ''");
