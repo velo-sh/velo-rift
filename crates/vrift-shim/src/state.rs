@@ -771,6 +771,10 @@ impl ShimState {
             path_resolver: PathResolver::new(&vfs_prefix, &project_root),
         });
 
+        // RFC-OPT-002: Symbol Prefetching is deferred to first syscall.
+        // Calling dlsym here can still cause issues with some binaries.
+        // The lazy AtomicPtr caching in reals.rs handles this safely.
+
         Some(Box::into_raw(state))
     }
 
@@ -814,8 +818,11 @@ impl ShimState {
 
         // RFC-0039 §82: Record initialization event
         vfs_record!(EventType::VfsInit, 0, 0);
+
         // BUG-004: setup_signal_handler and atexit are dangerous during dyld bootstrap.
         // These can trigger system-level deadlocks (Pattern 2682).
+        // RFC-OPT-003: Attempted two-phase re-enablement still causes SIGKILL on some binaries.
+        // Keeping disabled until a safer approach is found.
         // unsafe { setup_signal_handler() };
         // unsafe { libc::atexit(dump_logs_atexit) };
 

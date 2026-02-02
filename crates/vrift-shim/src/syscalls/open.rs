@@ -226,6 +226,8 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
         let fd = libc::open(blob_cpath.as_ptr(), flags, mode as libc::c_uint);
         vfs_log!("READ session: fd={} blob='{}'", fd, blob_path);
         if fd >= 0 {
+            // RFC-OPT-001: Track read-only VFS FDs for fstat virtual metadata
+            crate::syscalls::io::track_fd(fd, &vpath.manifest_key, true);
             Some(fd)
         } else {
             vfs_log!(

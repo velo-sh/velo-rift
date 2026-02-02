@@ -110,6 +110,30 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
         unsafe extern "C" fn(c_int, *mut libc_stat) -> c_int,
     >(REAL_FSTAT.get());
     passthrough_if_init!(real, fd, buf);
+
+    // RFC-OPT-001: Check if FD is tracked as VFS file
+    if let Some(entry) = crate::syscalls::io::get_fd_entry(fd) {
+        if entry.is_vfs {
+            let _guard = match ShimGuard::enter() {
+                Some(g) => g,
+                None => return real(fd, buf),
+            };
+            // Query manifest for virtual metadata
+            if let Some(state) = ShimState::get() {
+                if let Some(vnode) = state.query_manifest(&entry.path) {
+                    std::ptr::write_bytes(buf, 0, 1);
+                    (*buf).st_size = vnode.size as _;
+                    (*buf).st_mode = vnode.mode as u16;
+                    (*buf).st_mtime = vnode.mtime as _;
+                    (*buf).st_dev = 0x52494654; // "RIFT"
+                    (*buf).st_nlink = 1;
+                    (*buf).st_ino = vrift_ipc::fnv1a_hash(&entry.path) as _;
+                    vfs_record!(EventType::StatHit, (*buf).st_ino, 0);
+                    return 0;
+                }
+            }
+        }
+    }
     real(fd, buf)
 }
 
