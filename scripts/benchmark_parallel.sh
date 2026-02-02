@@ -73,11 +73,7 @@ run_benchmark() {
     
     echo -n "Ingest: "
     START=$(python3 -c "import time; print(time.time())")
-    if ! "$VRIFT" --cas-root "$CAS" ingest node_modules -o /tmp/m.bin 2>&1 | grep -v "^[0-9]"; then
-        echo -e "${YELLOW}(ingest failed, skipping)${NC}"
-        rm -rf "$CAS"
-        return
-    fi
+    "$VRIFT" --the-source-root "$CAS" ingest node_modules -o /tmp/m.bin
     END=$(python3 -c "import time; print(time.time())")
     
     TIME=$(python3 -c "print(f'{$END - $START:.2f}s')")
