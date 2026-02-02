@@ -295,15 +295,18 @@ pub unsafe extern "C" fn mkdir_shim(p: *const c_char, m: mode_t) -> c_int {
 
     mkdir(p, m)
 }
-// NOTE: fcntl is variadic (fn fcntl(fd, cmd, ...) -> c_int) - cannot interpose safely
-// Keeping for documentation but not in interpose table to avoid breaking Tokio/mio
+// Variadic ABI Fix: fcntl() is fn(fd, cmd, ...) - arg only valid for certain cmds
 #[cfg(target_os = "macos")]
 #[no_mangle]
-#[allow(dead_code)]
-pub unsafe extern "C" fn fcntl_shim(f: c_int, c: c_int, a: c_int) -> c_int {
-    // F_SETLK, F_GETLK, F_SETLKW all operate correctly on the underlying FD
-    // VFS awareness: lock is on temp/CoW file, which is correct behavior
-    fcntl(f, c, a)
+pub unsafe extern "C" fn fcntl_shim(fd: c_int, cmd: c_int, arg: c_int) -> c_int {
+    // Variadic ABI safety: third arg only valid for certain commands
+    // F_GETFD, F_GETFL, F_GETOWN, F_GETPATH, etc. don't use arg
+    // F_SETFD, F_SETFL, F_DUPFD, F_SETOWN, etc. do use arg
+    let safe_arg = match cmd {
+        libc::F_GETFD | libc::F_GETFL => 0, // arg not used
+        _ => arg,                           // use provided arg
+    };
+    fcntl(fd, cmd, safe_arg)
 }
 #[cfg(target_os = "macos")]
 #[no_mangle]
@@ -349,10 +352,10 @@ pub unsafe extern "C" fn posix_spawnp_shim(
     posix_spawnp(p, f, fa, at, ar, e)
 }
 
-// NOTE: open() is variadic (fn open(path, flags, ...) -> int) - mode is only
-// present when O_CREAT is set. Cannot safely interpose with fixed-arg shim as
-// mode parameter may be garbage for non-create calls. Same issue as fcntl.
-// TODO: Use libc::open with conditional mode extraction, or use different approach.
+// NOTE: open() variadic ABI cannot work on macOS ARM64!
+// Variadic args go to STACK but non-variadic shim reads from REGISTERS.
+// O_CREAT check cannot fix this - mode is read from wrong location entirely.
+// TODO: Use inline assembly or naked function to handle variadic correctly.
 // #[cfg(target_os = "macos")]
 // #[link_section = "__DATA,__interpose"]
 // #[used]
@@ -591,9 +594,11 @@ pub static IT_READ: Interpose = Interpose {
     new_func: read_shim as *const (),
     old_func: libc::read as *const (),
 };
-// NOTE: fcntl is variadic (fn fcntl(fd, cmd, ...) -> c_int) and cannot be safely
-// interposed with a fixed-arg shim. This breaks Tokio's F_SETFL O_NONBLOCK calls.
-// Removing fcntl interposition to fix cargo/rustup runtime crashes.
+// NOTE: fcntl variadic ABI cannot be fixed with cmd check on macOS ARM64!
+// On macOS ARM64, variadic args are passed on STACK not registers, causing
+// fundamental ABI mismatch when caller passes 2 args but shim reads 3.
+// This breaks Tokio's F_SETFL O_NONBLOCK calls. Keeping fcntl_shim for Solid mode
+// file locking where we call it directly, but NOT interposing.
 // #[cfg(target_os = "macos")]
 // #[link_section = "__DATA,__interpose"]
 // #[used]
@@ -601,7 +606,7 @@ pub static IT_READ: Interpose = Interpose {
 //     new_func: fcntl_shim as *const (),
 //     old_func: libc::fcntl as *const (),
 // };
-// NOTE: openat() is variadic like open() - mode is optional
+// NOTE: openat() has same variadic ABI issue as open() on macOS ARM64
 // #[cfg(target_os = "macos")]
 // #[link_section = "__DATA,__interpose"]
 // #[used]

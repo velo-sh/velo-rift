@@ -238,25 +238,33 @@ pub unsafe extern "C" fn __openat64_2(dirfd: c_int, p: *const c_char, f: c_int) 
 // macOS Shims
 // ============================================================================
 
-// NOTE: open_shim not currently interposed due to variadic ABI issue
-// Kept for future reference when proper variadic interposition is implemented
+// Variadic ABI Fix: open() is fn(path, flags, ...) - mode only valid with O_CREAT
+// Per POSIX, mode is undefined when O_CREAT is not set, so we default to 0
 #[cfg(target_os = "macos")]
 #[no_mangle]
-#[allow(dead_code)]
 pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_int {
     let real = std::mem::transmute::<*const (), OpenFn>(IT_OPEN.old_func);
 
+    // Variadic ABI safety: mode is only defined when O_CREAT or O_TMPFILE is set
+    // When not set, 'm' may be garbage from the stack - use 0 instead
+    let safe_mode = if (f & (libc::O_CREAT | 0x200000)) != 0 {
+        m
+    } else {
+        0
+    };
+    // Note: 0x200000 is O_TMPFILE on Linux, harmless check on macOS
+
     // Early-boot passthrough to avoid deadlock during dyld initialization
     if INITIALIZING.load(Ordering::Relaxed) {
-        return real(p, f, m);
+        return real(p, f, safe_mode);
     }
 
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
-        None => return real(p, f, m),
+        None => return real(p, f, safe_mode),
     };
 
-    open_impl(p, f, m).unwrap_or_else(|| real(p, f, m))
+    open_impl(p, f, safe_mode).unwrap_or_else(|| real(p, f, safe_mode))
 }
 
 #[cfg(target_os = "macos")]
@@ -267,22 +275,29 @@ pub unsafe extern "C" fn openat_shim(
     flags: c_int,
     mode: mode_t,
 ) -> c_int {
+    // Variadic ABI safety: mode only defined when O_CREAT is set
+    let safe_mode = if (flags & (libc::O_CREAT | 0x200000)) != 0 {
+        mode
+    } else {
+        0
+    };
+
     if INITIALIZING.load(Ordering::Relaxed) {
         let f = libc::dlsym(libc::RTLD_NEXT, c"openat".as_ptr());
         let real: OpenatFn = std::mem::transmute(f);
-        return real(dirfd, pathname, flags, mode);
+        return real(dirfd, pathname, flags, safe_mode);
     }
 
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => {
             let real = std::mem::transmute::<*const (), OpenatFn>(IT_OPENAT.old_func);
-            return real(dirfd, pathname, flags, mode);
+            return real(dirfd, pathname, flags, safe_mode);
         }
     };
 
     let real = std::mem::transmute::<*const (), OpenatFn>(IT_OPENAT.old_func);
-    open_impl(pathname, flags, mode).unwrap_or_else(|| real(dirfd, pathname, flags, mode))
+    open_impl(pathname, flags, safe_mode).unwrap_or_else(|| real(dirfd, pathname, flags, safe_mode))
 }
 
 type OpenFn = unsafe extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
