@@ -7,12 +7,13 @@ set -e
 echo "=== Test: Large File mmap Handling ==="
 echo ""
 
-SHIM_SRC="$(dirname "$0")/../../crates/vrift-shim/src/lib.rs"
+SHIM_SRC="$(dirname "$0")/../../crates/vrift-shim/src/syscalls/mmap.rs"
+INTERPOSE_SRC="$(dirname "$0")/../../crates/vrift-shim/src/interpose.rs"
 
 echo "[1] mmap Implementation Analysis:"
 
 # Check if mmap is implemented
-if grep -q "mmap_impl\|mmap_shim" "$SHIM_SRC" 2>/dev/null; then
+if grep -q "mmap_shim" "$SHIM_SRC" 2>/dev/null && grep -q "mmap_shim" "$INTERPOSE_SRC" 2>/dev/null; then
     echo "    ✅ mmap interception found"
 else
     echo "    ❌ mmap NOT intercepted"

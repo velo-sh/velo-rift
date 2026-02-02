@@ -16,7 +16,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== RFC-0047 P0: unlink() Mutation Semantics ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 echo "[1] Checking unlink_shim implementation..."
 

@@ -7,12 +7,12 @@ set -e
 echo "=== Test: Symlink Cycle Detection ==="
 echo ""
 
-SHIM_SRC="$(dirname "$0")/../../crates/vrift-shim/src/lib.rs"
+SHIM_SRC="$(dirname "$0")/../../crates/vrift-shim/src/interpose.rs"
 
 echo "[1] Symlink Resolution Analysis:"
 
 # Check readlink implementation
-if grep -q "readlink_impl\|readlink_shim" "$SHIM_SRC" 2>/dev/null; then
+if grep -q "readlink_shim" "$SHIM_SRC" 2>/dev/null; then
     echo "    ✅ readlink interception found"
 else
     echo "    ❌ readlink NOT intercepted"

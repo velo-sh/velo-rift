@@ -11,12 +11,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P1 Gap Test: st_ino Uniqueness ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/syscalls/stat.rs"
 
 echo "[1] Checking for virtual inode generation..."
 
-# Check if stat returns synthetic inodes
-if grep -A30 "stat_common\|fn stat\|st_ino" "$SHIM_SRC" 2>/dev/null | grep -q "synthetic\|virtual.*ino\|hash.*path\|VFS_INODE"; then
+# Check if stat returns synthetic inodes using hash
+if grep -q "st_ino.*=.*fnv1a_hash\|hash.*path" "$SHIM_SRC" 2>/dev/null; then
     echo "    ✅ stat returns synthetic/virtual inodes"
     HAS_VIRTUAL_INO=true
 else

@@ -15,7 +15,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== RFC-0047 P0: open() Mode Check ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 # Verify the issue exists
 echo "[1] Checking open_impl for mode check..."

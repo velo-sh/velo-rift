@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P2 Gap Test: ctime (Change Time) Update ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 if grep -A20 "chmod_shim\|fchmod_shim" "$SHIM_SRC" 2>/dev/null | grep -q "ctime\|change.*time"; then
     echo "✅ ctime updated on metadata change"

@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P1 Gap Test: fchdir() Bypass ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 if grep -q "fchdir_shim\|fchdir.*interpose" "$SHIM_SRC" 2>/dev/null; then
     echo "✅ fchdir intercepted"

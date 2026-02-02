@@ -16,10 +16,10 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== Compiler Gap: symlink ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 echo "[1] Checking for symlink interception..."
-if grep -q "symlink_shim\|symlink.*interpose" "$SHIM_SRC" 2>/dev/null; then
+if grep -q "symlink_shim" "$SHIM_SRC" 2>/dev/null; then
     echo "    ✅ symlink intercepted"
     exit 0
 else

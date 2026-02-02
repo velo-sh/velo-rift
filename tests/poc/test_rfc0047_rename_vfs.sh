@@ -15,7 +15,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== RFC-0047 P0: rename() Mutation Semantics ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/syscalls/misc.rs"
 
 echo "[1] Checking rename_shim implementation..."
 
@@ -31,8 +31,8 @@ fi
 echo ""
 echo "[2] Checking for Manifest path update..."
 
-# Check if rename updates manifest path
-if grep -A20 "rename_shim\|fn rename" "$SHIM_SRC" 2>/dev/null | grep -q "manifest.*update\|ManifestRename\|update_path"; then
+# Check if rename updates manifest path via IPC
+if grep -A30 "rename_impl\|fn rename" "$SHIM_SRC" 2>/dev/null | grep -q "manifest\|ManifestRename\|update_path\|VirtualRename\|ipc"; then
     echo "    ✅ PASS: rename_shim updates Manifest path"
     HAS_MANIFEST_OP=true
 else

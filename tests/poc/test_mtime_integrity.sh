@@ -45,10 +45,10 @@ echo "[+] Checking Manifest metadata..."
 echo "[+] Verifying shim stat interception capability..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/syscalls/stat.rs"
 
 # Check if shim has stat interception with mtime support
-STAT_MTIME=$(grep -n "st_mtime\|stat_common\|lstat_shim\|stat_shim" "$SHIM_SRC" | head -5)
+STAT_MTIME=$(grep -n "st_mtime\|stat_shim\|lstat_shim" "$SHIM_SRC" | head -5)
 if [ -n "$STAT_MTIME" ]; then
     echo "[PASS] Shim has stat interception with mtime support:"
     echo "$STAT_MTIME"

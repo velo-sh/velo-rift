@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P0 Gap Test: sendfile() Bypass ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 if grep -q "sendfile_shim\|sendfile.*interpose" "$SHIM_SRC" 2>/dev/null; then
     echo "✅ sendfile intercepted"

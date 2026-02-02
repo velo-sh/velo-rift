@@ -12,23 +12,24 @@ echo "=== Test: mmap Interception ==="
 echo "Goal: mmap on VFS files must return virtual content"
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/syscalls/mmap.rs"
+INTERPOSE_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 echo "[ANALYSIS] Checking for mmap interception..."
 
 # Search for mmap-related code
-MMAP_CODE=$(grep -n "mmap\|MmapFn" "$SHIM_SRC" 2>/dev/null | head -10)
+MMAP_CODE=$(grep -n "mmap_shim\|mmap" "$SHIM_SRC" 2>/dev/null | head -10)
 
 if [ -n "$MMAP_CODE" ]; then
     echo "[FOUND] mmap-related code:"
     echo "$MMAP_CODE"
     
-    # Check if it's actually implemented
-    if grep -q "fn mmap_impl\|mmap_shim" "$SHIM_SRC"; then
-        echo "[PASS] mmap implementation found"
+    # Check if it's in interpose table
+    if grep -q "mmap_shim" "$INTERPOSE_SRC"; then
+        echo "[PASS] mmap implementation found and registered"
         EXIT_CODE=0
     else
-        echo "[WARN] mmap referenced but not fully implemented"
+        echo "[WARN] mmap referenced but not in interpose table"
         EXIT_CODE=1
     fi
 else
@@ -43,6 +44,6 @@ fi
 
 echo ""
 echo "[INFO] Interpose table check:"
-grep -n "IT_MMAP\|mmap_shim" "$SHIM_SRC" 2>/dev/null || echo "  No mmap in interpose table"
+grep -n "IT_MMAP\|mmap_shim" "$INTERPOSE_SRC" 2>/dev/null || echo "  No mmap in interpose table"
 
 exit $EXIT_CODE

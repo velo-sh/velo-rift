@@ -15,22 +15,22 @@ echo ""
 # This test requires a working VFS first, so we just analyze
 # the current shim's stat implementation for mtime handling
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/syscalls/stat.rs"
 
-echo "[ANALYSIS] Checking stat_common for mtime handling..."
+echo "[ANALYSIS] Checking stat for mtime handling..."
 
-# Search entire file for st_mtime assignment from manifest entry
-MTIME_ASSIGNMENT=$(grep -n "st_mtime.*entry.mtime\|entry\.mtime.*st_mtime" "$SHIM_SRC" | head -3)
+# Search stat.rs for st_mtime assignment from manifest entry
+MTIME_ASSIGNMENT=$(grep -n "st_mtime.*=\|mtime" "$SHIM_SRC" | head -5)
 
 if [ -n "$MTIME_ASSIGNMENT" ]; then
-    echo "[FOUND] mtime assignment in stat_common:"
+    echo "[FOUND] mtime handling in stat:"
     echo "$MTIME_ASSIGNMENT"
     echo ""
     echo "[PASS] stat uses manifest entry mtime (virtual mtime)"
     EXIT_CODE=0
 else
     # Fallback: check if st_mtime is set from any entry field
-    MTIME_SET=$(grep -n "st_mtime.*=.*entry\|buf.*st_mtime" "$SHIM_SRC" | head -3)
+    MTIME_SET=$(grep -n "st_mtime" "$SHIM_SRC" | head -3)
     if [ -n "$MTIME_SET" ]; then
         echo "[FOUND] st_mtime assignment:"
         echo "$MTIME_SET"

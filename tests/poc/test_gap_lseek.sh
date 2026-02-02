@@ -16,7 +16,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== Compiler Gap: lseek ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 echo "[1] Checking for lseek interception..."
 if grep -q "lseek_shim\|lseek.*interpose" "$SHIM_SRC" 2>/dev/null; then

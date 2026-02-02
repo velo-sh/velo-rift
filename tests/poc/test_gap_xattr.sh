@@ -10,9 +10,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P3 Gap Test: xattr (Extended Attributes) ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
-if grep -q "getxattr_shim\|setxattr_shim\|xattr.*interpose" "$SHIM_SRC" 2>/dev/null; then
+if grep -q "setxattr_shim\|removexattr_shim" "$SHIM_SRC" 2>/dev/null; then
     echo "✅ xattr intercepted"
     exit 0
 else

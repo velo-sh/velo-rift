@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P1 Gap Test: dup/dup2 FD Tracking ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 
 if grep -q "dup_shim\|dup2_shim\|dup.*interpose" "$SHIM_SRC" 2>/dev/null; then
     echo "✅ dup/dup2 intercepted with VFS tracking"

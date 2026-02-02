@@ -10,9 +10,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P2 Gap Test: st_dev Virtualization ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/syscalls/stat.rs"
 
-if grep -A20 "stat_common" "$SHIM_SRC" 2>/dev/null | grep -q "st_dev\|VRIFT.*DEV\|virtual.*dev"; then
+if grep -q "st_dev.*=.*0x52494654\|RIFT" "$SHIM_SRC" 2>/dev/null; then
     echo "✅ st_dev virtualized"
     exit 0
 else
