@@ -12,8 +12,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 #[cfg(target_os = "macos")]
-use crate::interpose::{IT_DUP, IT_DUP2, IT_FCHDIR, IT_FTRUNCATE, IT_LSEEK};
-
+// Symbols imported from reals.rs via crate::reals
 /// Global FD tracking table: fd -> (path, is_vfs_file)
 static FD_TABLE: RwLock<Option<HashMap<c_int, FdEntry>>> = RwLock::new(None);
 
@@ -93,9 +92,9 @@ pub fn is_vfs_fd(fd: c_int) -> bool {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
-    // MUST use IT_DUP.old_func (not libc::dup) because libc::dup is interposed back to us
-    let real =
-        std::mem::transmute::<*const (), unsafe extern "C" fn(c_int) -> c_int>(IT_DUP.old_func);
+    let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(c_int) -> c_int>(
+        crate::reals::REAL_DUP.get(),
+    );
 
     passthrough_if_init!(real, oldfd);
 
@@ -112,9 +111,8 @@ pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
-    // MUST use IT_DUP2.old_func (not libc::dup2) because libc::dup2 is interposed back to us
-    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(c_int, c_int) -> c_int>(
-        IT_DUP2.old_func,
+    let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(c_int, c_int) -> c_int>(
+        crate::reals::REAL_DUP2.get(),
     );
 
     passthrough_if_init!(real, oldfd, newfd);
@@ -139,8 +137,9 @@ pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn fchdir_shim(fd: c_int) -> c_int {
-    let real =
-        std::mem::transmute::<*const (), unsafe extern "C" fn(c_int) -> c_int>(IT_FCHDIR.old_func);
+    let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(c_int) -> c_int>(
+        crate::reals::REAL_FCHDIR.get(),
+    );
 
     passthrough_if_init!(real, fd);
 
@@ -159,9 +158,10 @@ pub unsafe extern "C" fn fchdir_shim(fd: c_int) -> c_int {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn lseek_shim(fd: c_int, offset: off_t, whence: c_int) -> off_t {
-    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(c_int, off_t, c_int) -> off_t>(
-        IT_LSEEK.old_func,
-    );
+    let real = std::mem::transmute::<
+        *mut libc::c_void,
+        unsafe extern "C" fn(c_int, off_t, c_int) -> off_t,
+    >(crate::reals::REAL_LSEEK.get());
 
     passthrough_if_init!(real, fd, offset, whence);
 
@@ -177,8 +177,8 @@ pub unsafe extern "C" fn lseek_shim(fd: c_int, offset: off_t, whence: c_int) -> 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn ftruncate_shim(fd: c_int, length: off_t) -> c_int {
-    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(c_int, off_t) -> c_int>(
-        IT_FTRUNCATE.old_func,
+    let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(c_int, off_t) -> c_int>(
+        crate::reals::REAL_FTRUNCATE.get(),
     );
 
     passthrough_if_init!(real, fd, length);
@@ -199,11 +199,10 @@ pub unsafe extern "C" fn write_shim(
     buf: *const c_void,
     count: libc::size_t,
 ) -> libc::ssize_t {
-    use crate::interpose::IT_WRITE;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(c_int, *const c_void, libc::size_t) -> libc::ssize_t,
-    >(IT_WRITE.old_func);
+    >(crate::reals::REAL_WRITE.get());
     passthrough_if_init!(real, fd, buf, count);
     real(fd, buf, count)
 }
@@ -215,11 +214,10 @@ pub unsafe extern "C" fn read_shim(
     buf: *mut c_void,
     count: libc::size_t,
 ) -> libc::ssize_t {
-    use crate::interpose::IT_READ;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(c_int, *mut c_void, libc::size_t) -> libc::ssize_t,
-    >(IT_READ.old_func);
+    >(crate::reals::REAL_READ.get());
     passthrough_if_init!(real, fd, buf, count);
     real(fd, buf, count)
 }
@@ -227,13 +225,13 @@ pub unsafe extern "C" fn read_shim(
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
-    use crate::interpose::IT_CLOSE;
     use crate::ipc::sync_ipc_manifest_reingest;
     use crate::state::{EventType, ShimGuard, ShimState};
 
-    // CRITICAL: Must use IT_CLOSE.old_func to get the real close function
-    let real =
-        std::mem::transmute::<*const (), unsafe extern "C" fn(c_int) -> c_int>(IT_CLOSE.old_func);
+    // CRITICAL: Must use dlsym(RTLD_NEXT) to get the real close function
+    let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(c_int) -> c_int>(
+        crate::reals::REAL_CLOSE.get(),
+    );
 
     // Pattern 2648/2649: Passthrough during initialization to avoid TLS hazard
     passthrough_if_init!(real, fd);

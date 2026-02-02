@@ -1,5 +1,2 @@
 #include <stdio.h>
-int main() {
-  printf("Hello from minimal test program!\n");
-  return 0;
-}
+int main() { printf("hello from c\n"); return 0; }

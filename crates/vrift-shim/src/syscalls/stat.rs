@@ -1,9 +1,7 @@
+use crate::reals::*;
 use crate::state::*;
 use libc::{c_char, c_int, stat as libc_stat};
 use std::ffi::CStr;
-
-#[cfg(target_os = "macos")]
-use crate::interpose::*;
 
 /// RFC-0044: Virtual stat implementation using Hot Stat Cache
 /// Returns None to fallback to OS, Some(0) on success, Some(-1) on error
@@ -86,9 +84,9 @@ unsafe fn stat_impl(
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn stat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *mut libc_stat) -> c_int,
-    >(IT_STAT.old_func);
+    >(REAL_STAT.get());
     passthrough_if_init!(real, path, buf);
     stat_impl(path, buf, true).unwrap_or_else(|| real(path, buf))
 }
@@ -97,9 +95,9 @@ pub unsafe extern "C" fn stat_shim(path: *const c_char, buf: *mut libc_stat) -> 
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *mut libc_stat) -> c_int,
-    >(IT_LSTAT.old_func);
+    >(REAL_LSTAT.get());
     passthrough_if_init!(real, path, buf);
     stat_impl(path, buf, false).unwrap_or_else(|| real(path, buf))
 }
@@ -107,22 +105,21 @@ pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) ->
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
-    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(c_int, *mut libc_stat) -> c_int>(
-        IT_FSTAT.old_func,
-    );
+    let real = std::mem::transmute::<
+        *mut libc::c_void,
+        unsafe extern "C" fn(c_int, *mut libc_stat) -> c_int,
+    >(REAL_FSTAT.get());
     passthrough_if_init!(real, fd, buf);
-
-    // RFC-0044: fstat currently passthrough since shim doesn't track FDs yet
     real(fd, buf)
 }
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int {
-    use crate::interpose::IT_ACCESS;
-    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*const c_char, c_int) -> c_int>(
-        IT_ACCESS.old_func,
-    );
+    let real = std::mem::transmute::<
+        *mut libc::c_void,
+        unsafe extern "C" fn(*const c_char, c_int) -> c_int,
+    >(REAL_ACCESS.get());
     passthrough_if_init!(real, path, mode);
 
     let _guard = match ShimGuard::enter() {
@@ -135,16 +132,11 @@ pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int 
         Err(_) => return real(path, mode),
     };
 
-    let state = match ShimState::get() {
-        Some(s) => s,
-        None => return real(path, mode),
-    };
-
-    if state.psfs_applicable(path_str) {
-        // VFS file is always accessible if in manifest
-        if state.query_manifest(path_str).is_some() {
-            return 0;
-        }
+    if ShimState::get()
+        .map(|s| s.psfs_applicable(path_str))
+        .unwrap_or(false)
+    {
+        return 0;
     }
 
     real(path, mode)
@@ -159,92 +151,45 @@ pub unsafe extern "C" fn fstatat_shim(
     flags: c_int,
 ) -> c_int {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(c_int, *const c_char, *mut libc_stat, c_int) -> c_int,
-    >(IT_FSTATAT.old_func);
+    >(REAL_FSTATAT.get());
     passthrough_if_init!(real, dirfd, path, buf, flags);
 
-    // Attempt VFS stat if path is absolute or AT_FDCWD
-    if dirfd == libc::AT_FDCWD {
-        if let Some(res) = stat_impl(path, buf, (flags & libc::AT_SYMLINK_NOFOLLOW) == 0) {
-            return res;
+    if dirfd == libc::AT_FDCWD || (!path.is_null() && *path == b'/' as i8) {
+        if let Ok(path_str) = CStr::from_ptr(path).to_str() {
+            if let Some(res) = stat_impl_common(path_str, buf) {
+                return res;
+            }
         }
     }
 
     real(dirfd, path, buf, flags)
 }
 
+/// Linux-specific fstatat shim called from interpose bridge
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn fstatat_shim_linux(
+pub unsafe fn fstatat_shim_linux(
     dirfd: c_int,
     path: *const c_char,
     buf: *mut libc_stat,
     flags: c_int,
 ) -> c_int {
-    #[inline(always)]
-    unsafe fn raw_fstatat(
-        dirfd: c_int,
-        path: *const c_char,
-        buf: *mut libc_stat,
-        flags: c_int,
-    ) -> c_int {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let ret: i64;
-            std::arch::asm!(
-                "syscall", in("rax") 262, in("rdi") dirfd as i64, in("rsi") path, in("rdx") buf, in("r10") flags as i64,
-                lateout("rax") ret,
-            );
-            if ret < 0 {
-                crate::set_errno(-ret as c_int);
-                -1
-            } else {
-                ret as c_int
-            }
-        }
-        #[cfg(target_arch = "aarch64")]
-        {
-            let ret: i64;
-            std::arch::asm!(
-                "svc #0",
-                in("x8") 79i64, // fstatat
-                in("x0") dirfd as i64,
-                in("x1") path,
-                in("x2") buf,
-                in("x3") flags as i64,
-                lateout("x0") ret,
-            );
-            if ret < 0 {
-                crate::set_errno(-ret as c_int);
-                -1
-            } else {
-                ret as c_int
-            }
-        }
-    }
-
     if path.is_null() {
-        return raw_fstatat(dirfd, path, buf, flags);
+        return -libc::EFAULT;
     }
 
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
-        Err(_) => return raw_fstatat(dirfd, path, buf, flags),
+        Err(_) => return -libc::EINVAL,
     };
 
-    if let Some(res) = stat_impl_common(path_str, buf) {
-        return res;
+    if dirfd != libc::AT_FDCWD && !path_str.starts_with('/') {
+        return -2;
     }
 
-    let ret = raw_fstatat(dirfd, path, buf, flags);
-    if ret == 0 {
-        let state = match ShimState::get() {
-            Some(s) => s,
-            None => return ret,
-        };
-        if state.psfs_applicable(path_str) {
-            (*buf).st_dev = 0x52494654; // "RIFT"
-        }
+    match stat_impl_common(path_str, buf) {
+        Some(res) => res,
+        None => -2,
     }
-    ret
 }

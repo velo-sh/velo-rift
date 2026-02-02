@@ -814,10 +814,10 @@ impl ShimState {
 
         // RFC-0039 §82: Record initialization event
         vfs_record!(EventType::VfsInit, 0, 0);
-        // Setup signal handler for on-demand log dumping
-        unsafe { setup_signal_handler() };
-        // Register atexit hook for final log flush
-        unsafe { libc::atexit(dump_logs_atexit) };
+        // BUG-004: setup_signal_handler and atexit are dangerous during dyld bootstrap.
+        // These can trigger system-level deadlocks (Pattern 2682).
+        // unsafe { setup_signal_handler() };
+        // unsafe { libc::atexit(dump_logs_atexit) };
 
         // Activate VFS - now it's safe to call into Rust from C wrappers.
         activate_vfs();

@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
-use crate::interpose::*;
-#[cfg(target_os = "macos")]
 use libc::{c_char, size_t, ssize_t};
+
+// Symbols imported from reals.rs via crate::reals
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
@@ -11,9 +11,9 @@ pub unsafe extern "C" fn readlink_shim(
     bufsiz: size_t,
 ) -> ssize_t {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *mut c_char, size_t) -> ssize_t,
-    >(IT_READLINK.old_func);
+    >(crate::reals::REAL_READLINK.get());
     passthrough_if_init!(real, path, buf, bufsiz);
     real(path, buf, bufsiz)
 }
@@ -25,9 +25,9 @@ pub unsafe extern "C" fn realpath_shim(
     resolved_path: *mut c_char,
 ) -> *mut c_char {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *mut c_char) -> *mut c_char,
-    >(IT_REALPATH.old_func);
+    >(crate::reals::REAL_REALPATH.get());
     passthrough_if_init!(real, path, resolved_path);
     real(path, resolved_path)
 }

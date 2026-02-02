@@ -102,14 +102,9 @@ macro_rules! get_real {
 #[macro_export]
 macro_rules! get_real_shim {
     ($storage:ident, $name:literal, $it:ident, $t:ty) => {{
-        #[cfg(target_os = "macos")]
-        {
-            std::mem::transmute::<*const (), $t>($it.old_func)
-        }
-        #[cfg(target_os = "linux")]
-        {
-            get_real!($storage, $name, $t)
-        }
+        // RFC-0051: Always prefer dlsym(RTLD_NEXT) to avoid interposition loops
+        // during hazardous bootstrap phases (Pattern 2682).
+        $crate::get_real!($storage, $name, $t)
     }};
 }
 

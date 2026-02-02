@@ -33,11 +33,10 @@ unsafe fn rename_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn rename_shim(old: *const c_char, new: *const c_char) -> c_int {
-    use crate::interpose::IT_RENAME;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *const c_char) -> c_int,
-    >(IT_RENAME.old_func);
+    >(crate::reals::REAL_RENAME.get());
     passthrough_if_init!(real, old, new);
     rename_impl(old, new).unwrap_or_else(|| real(old, new))
 }
@@ -206,13 +205,11 @@ pub unsafe extern "C" fn linkat_shim(
 pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
     #[cfg(target_os = "macos")]
     {
-        use crate::interpose::IT_UNLINK;
-        let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*const c_char) -> c_int>(
-            IT_UNLINK.old_func,
-        );
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
-            return real(path);
-        }
+        let real = std::mem::transmute::<
+            *mut libc::c_void,
+            unsafe extern "C" fn(*const c_char) -> c_int,
+        >(crate::reals::REAL_UNLINK.get());
+        passthrough_if_init!(real, path);
         block_vfs_mutation(path).unwrap_or_else(|| real(path))
     }
     #[cfg(target_os = "linux")]
@@ -228,13 +225,11 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
 pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
     #[cfg(target_os = "macos")]
     {
-        use crate::interpose::IT_RMDIR;
-        let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*const c_char) -> c_int>(
-            IT_RMDIR.old_func,
-        );
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
-            return real(path);
-        }
+        let real = std::mem::transmute::<
+            *mut libc::c_void,
+            unsafe extern "C" fn(*const c_char) -> c_int,
+        >(crate::reals::REAL_RMDIR.get());
+        passthrough_if_init!(real, path);
         block_vfs_mutation(path).unwrap_or_else(|| real(path))
     }
     #[cfg(target_os = "linux")]
@@ -247,26 +242,27 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
 }
 
 #[no_mangle]
+#[cfg(target_os = "macos")]
 pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
-    #[cfg(target_os = "macos")]
-    {
-        use crate::interpose::IT_MKDIR;
-        let real = std::mem::transmute::<
-            *const (),
-            unsafe extern "C" fn(*const c_char, libc::mode_t) -> c_int,
-        >(IT_MKDIR.old_func);
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
-            return real(path, mode);
-        }
-        block_vfs_mutation(path).unwrap_or_else(|| real(path, mode))
+    let real = std::mem::transmute::<
+        *mut libc::c_void,
+        unsafe extern "C" fn(*const c_char, libc::mode_t) -> c_int,
+    >(crate::reals::REAL_MKDIR.get());
+    passthrough_if_init!(real, path, mode);
+
+    if let Some(res) = block_vfs_mutation(path) {
+        return res;
     }
-    #[cfg(target_os = "linux")]
-    {
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
-            return crate::syscalls::open::raw_mkdir(path, mode);
-        }
-        block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::open::raw_mkdir(path, mode))
+    real(path, mode)
+}
+
+#[no_mangle]
+#[cfg(target_os = "linux")]
+pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
+    if INITIALIZING.load(Ordering::Relaxed) >= 2 {
+        return crate::syscalls::open::raw_mkdir(path, mode);
     }
+    block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::open::raw_mkdir(path, mode))
 }
 
 /// Helper: Check if path is in VFS and return EPERM if so
