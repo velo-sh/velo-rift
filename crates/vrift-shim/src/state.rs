@@ -258,7 +258,9 @@ pub(crate) fn get_recursion_key() -> libc::pthread_key_t {
 pub(crate) struct ShimGuard(bool); // bool: true = has active TLS guard
 impl ShimGuard {
     pub(crate) fn enter() -> Option<Self> {
-        if (unsafe { INITIALIZING.load(Ordering::Relaxed) }) != 0
+        // RFC-0050: Only return None when actively initializing (state 3), not for early-init (2) or ready (1)
+        // States 1 and 2 should be allowed to proceed so that velo_open_impl can trigger ShimState::get()
+        if (unsafe { INITIALIZING.load(Ordering::Relaxed) }) == 3
             || BOOTSTRAPPING.load(Ordering::Relaxed)
         {
             return None;
