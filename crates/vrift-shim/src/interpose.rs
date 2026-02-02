@@ -20,10 +20,11 @@ use crate::syscalls::open::{open_shim, openat_shim};
 use crate::syscalls::path::{readlink_shim, realpath_shim};
 #[cfg(target_os = "macos")]
 use crate::syscalls::stat::{access_shim, fstat_shim, lstat_shim, stat_shim};
+
+use libc::{c_char, c_int, c_long, c_void, mode_t, size_t, ssize_t};
+
 #[cfg(target_os = "macos")]
-use libc::{
-    c_char, c_int, c_long, c_void, dirent, mode_t, pid_t, size_t, ssize_t, timespec, timeval, DIR,
-};
+use libc::{dirent, pid_t, timespec, timeval, DIR};
 #[cfg(target_os = "macos")]
 use std::ffi::CStr;
 
@@ -311,10 +312,34 @@ pub unsafe extern "C" fn mkdir_shim(p: *const c_char, m: mode_t) -> c_int {
     mkdir(p, m)
 }
 // Called by C variadic wrapper (fcntl_c_wrapper) with clean args
-#[cfg(target_os = "macos")]
 #[no_mangle]
-pub unsafe extern "C" fn velo_fcntl_impl(fd: c_int, cmd: c_int, arg: c_int) -> c_int {
-    fcntl(fd, cmd, arg)
+pub unsafe extern "C" fn velo_fcntl_impl(fd: c_int, cmd: c_int, arg: c_long) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        // Use the global fcntl declared in the extern "C" block above
+        fcntl(fd, cmd, arg)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let ret: i64;
+            std::arch::asm!(
+                "syscall", in("rax") 72, in("rdi") fd as i64, in("rsi") cmd as i64, in("rdx") arg,
+                lateout("rax") ret,
+            );
+            ret as c_int
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let ret: i64;
+            std::arch::asm!(
+                "mov x8, #25", "svc #0", in("x0") fd as i64, in("x1") cmd as i64, in("x2") arg,
+                lateout("x0") ret,
+            );
+            ret as c_int
+        }
+    }
 }
 #[cfg(target_os = "macos")]
 #[no_mangle]

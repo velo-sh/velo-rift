@@ -14,7 +14,6 @@
 #[macro_use]
 pub mod macros;
 
-#[cfg(target_os = "macos")]
 pub mod interpose;
 pub mod ipc;
 pub mod path;
