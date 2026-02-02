@@ -75,6 +75,16 @@ unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) -> Option<c
 
     let is_write = (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_APPEND | libc::O_TRUNC)) != 0;
 
+    // RFC-0047: Check mode permission before allowing write
+    if is_write {
+        // Check if entry.mode allows write (user write bit: 0o200)
+        if (entry.mode & 0o200) == 0 {
+            shim_log!("[Shim] open_impl: EACCES - file is read-only in manifest\n");
+            set_errno(libc::EACCES);
+            return Some(-1);
+        }
+    }
+
     if is_write {
         // CoW: Copy blob to temp file for writes
         let temp_path = format!("/tmp/vrift_cow_{}.tmp", libc::getpid());

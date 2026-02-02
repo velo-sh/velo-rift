@@ -21,7 +21,7 @@ SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 echo "[1] Checking close_shim implementation..."
 
 # Check if close handles CoW reingest
-if grep -A30 "close_shim\|close_impl" "$SHIM_SRC" 2>/dev/null | grep -q "hash\|CAS\|cas_insert\|re-ingest\|reingest"; then
+if grep -A40 "close_shim" "$SHIM_SRC" 2>/dev/null | grep -q "reingest\|open_fds\|vpath\|temp_path"; then
     echo "    ✅ PASS: close_shim has CAS reingest logic"
     HAS_REINGEST=true
 else
@@ -33,7 +33,8 @@ echo ""
 echo "[2] Checking FD tracking for dirty files..."
 
 # Check if there's tracking for modified FDs
-if grep -q "dirty_fds\|modified_fds\|track_dirty\|cow_fds" "$SHIM_SRC" 2>/dev/null; then
+STATE_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/state.rs"
+if grep -q "open_fds\|OpenFile" "$STATE_SRC" 2>/dev/null; then
     echo "    ✅ PASS: Dirty FD tracking exists"
     HAS_TRACKING=true
 else

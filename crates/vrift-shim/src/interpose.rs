@@ -127,11 +127,46 @@ macro_rules! shim {
 // - stat: stat_shim, lstat_shim, fstat_shim
 // - open: open_shim (with CoW logic)
 // - misc: rename_shim (with EXDEV logic)
-
-// Simple I/O passthroughs (no VFS logic needed)
+// RFC-0047: close() with CoW reingest for dirty FDs
+// When closing a VFS file opened for write, we reingest to CAS and update Manifest
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
+    use crate::state::{ShimGuard, SHIM_STATE};
+    use std::sync::atomic::Ordering;
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return close(fd),
+    };
+
+    let state_ptr = SHIM_STATE.load(Ordering::Acquire);
+    if !state_ptr.is_null() {
+        let state = &*state_ptr;
+
+        // Check if this FD is tracked (dirty/CoW file)
+        let maybe_open_file = state
+            .open_fds
+            .lock()
+            .ok()
+            .and_then(|mut fds| fds.remove(&fd));
+
+        if let Some(open_file) = maybe_open_file {
+            // This FD was a CoW file - need to reingest to CAS
+            // ManifestReingest IPC: vpath, temp_path -> daemon hashes+inserts+updates
+            let _ = crate::ipc::sync_ipc_manifest_reingest(
+                &state.socket_path,
+                &open_file.vpath,
+                &open_file.temp_path,
+            );
+            // Clean up temp file
+            let temp_cpath = std::ffi::CString::new(open_file.temp_path.as_str()).ok();
+            if let Some(ref p) = temp_cpath {
+                libc::unlink(p.as_ptr());
+            }
+        }
+    }
+
     close(fd)
 }
 #[cfg(target_os = "macos")]

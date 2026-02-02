@@ -20,8 +20,10 @@ SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/interpose.rs"
 # Verify the issue exists
 echo "[1] Checking open_impl for mode check..."
 
+OPEN_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/syscalls/open.rs"
+
 # Search for mode check in write handling
-if grep -A20 "is_write" "$SHIM_SRC" 2>/dev/null | grep -q "entry.mode\|EACCES\|permission"; then
+if grep -A30 "is_write" "$OPEN_SRC" 2>/dev/null | grep -q "entry.mode\|EACCES\|0o200"; then
     echo "    ✅ PASS: open_impl checks mode before write"
     HAS_MODE_CHECK=true
 else
