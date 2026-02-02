@@ -116,9 +116,23 @@ extern "C" {
 }
 
 extern "C" {
+    // Unified bridge implementations
     fn open_shim_c_impl(path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn openat_shim_c_impl(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn fcntl_shim_c_impl(fd: c_int, cmd: c_int, arg: c_long) -> c_int;
+
+    // RFC-0051: Linux Interception Force-Export Ritual
+    // These declarations ensure the linker includes these symbols in the dynamic symbol table
+    #[cfg(target_os = "linux")]
+    pub fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+    #[cfg(target_os = "linux")]
+    pub fn open64(path: *const c_char, flags: c_int, ...) -> c_int;
+    #[cfg(target_os = "linux")]
+    pub fn openat(dirfd: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
+    #[cfg(target_os = "linux")]
+    pub fn openat64(dirfd: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
+    #[cfg(target_os = "linux")]
+    pub fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
 }
 
 #[cfg(target_os = "macos")]

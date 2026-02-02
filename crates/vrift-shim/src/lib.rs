@@ -20,8 +20,7 @@ pub mod path;
 pub mod state;
 pub mod syscalls;
 
-// Re-export for linkage - interpose table provides all shim symbols
-#[cfg(target_os = "macos")]
+// Re-export for linkage - interpose table (macOS) and unified impls (Linux)
 pub use interpose::*;
 pub use state::LOGGER;
 // Note: syscalls module is used internally by interpose, not re-exported
