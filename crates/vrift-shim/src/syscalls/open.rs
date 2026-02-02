@@ -76,25 +76,74 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
         vfs_log!("open write request for '{}'", vpath.absolute);
 
         // BBW (Break-Before-Write): Always create a CoW temp copy for writes.
-        // RFC-0052: Use mkstemp for atomic thread-safe temp file creation
-        let mut template =
-            format!("/tmp/vrift_cow_{}_XXXXXX\0", unsafe { libc::getpid() }).into_bytes();
-        let temp_fd = unsafe { libc::mkstemp(template.as_mut_ptr() as *mut libc::c_char) };
-        if temp_fd < 0 {
-            vfs_log!("COW FAILED: mkstemp failed (errno={})", crate::get_errno());
+        // RFC-0043: Fix non-atomic mkstemp O_CLOEXEC gap by using manual loop with O_CREAT|O_EXCL|O_CLOEXEC
+
+        let mut attempts = 0;
+        let mut fd = -1;
+        let mut temp_path_string = String::new();
+
+        // Simple Pseudo-Random Context for temp name generation
+        // Note: We avoid heavy rand crates to keep shim lightweight
+        let pid = unsafe { libc::getpid() };
+        // Use address of local var as thread-specific seed component
+        let tid_addr = &attempts as *const _ as usize;
+
+        while attempts < 100 {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+
+            // Generate: /tmp/vrift_cow_{pid}_{timestamp}_{tid}_{attempt}.tmp
+            temp_path_string = format!(
+                "/tmp/vrift_cow_{}_{}_{}_{}.tmp",
+                pid, timestamp, tid_addr, attempts
+            );
+            let c_temp = match std::ffi::CString::new(temp_path_string.as_str()) {
+                Ok(c) => c,
+                Err(_) => break,
+            };
+
+            // Atomic creation with O_CLOEXEC
+            // O_EXCL ensures we don't clobber existing files
+            fd = unsafe {
+                libc::open(
+                    c_temp.as_ptr(),
+                    libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
+                    0o600,
+                )
+            };
+
+            if fd >= 0 {
+                break;
+            }
+
+            if unsafe { crate::get_errno() } != libc::EEXIST {
+                break; // Fatal error
+            }
+
+            attempts += 1;
+        }
+
+        if fd < 0 {
+            vfs_log!(
+                "COW FAILED: could not create temp file (errno={})",
+                crate::get_errno()
+            );
             return None;
         }
 
-        // Safety: mkstemp modifies the template in place, and we ensured \0 terminator
-        let temp_path =
-            match unsafe { CStr::from_ptr(template.as_ptr() as *const libc::c_char).to_str() } {
-                Ok(s) => s.to_string(),
-                Err(_) => {
-                    unsafe { libc::close(temp_fd) };
-                    return None;
-                }
-            };
-        // Close mkstemp fd; subsequent logic opens it with original requested flags
+        // At this point we have an open FD to a unique empty temp file, and it is O_CLOEXEC
+        let temp_fd = fd;
+        let temp_path = temp_path_string; // Take ownership
+
+        // Close the temp_fd because the logic below re-opens it.
+        // Wait! The logic below (L108, L116) expects to perform the COPY.
+        // Current logic: L82 mkstemp (returns fd), L98 close(temp_fd), L109 open(O_TRUNC).
+        // Since we created it empty with O_EXCL, we can just close it and let the logic proceed,
+        // OR we can keep it open and use it?
+        // The original logic closed it at L98 and re-opened at L109.
+        // We will stick to the pattern but ensure re-open uses O_CLOEXEC.
         unsafe { libc::close(temp_fd) };
         let temp_cpath = std::ffi::CString::new(temp_path.as_str()).ok()?;
 
@@ -103,12 +152,14 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
 
         let blob_cpath = std::ffi::CString::new(blob_path.as_str()).ok()?;
 
-        let src_fd = unsafe { libc::open(blob_cpath.as_ptr(), libc::O_RDONLY) };
+        // INTERNAL OPEN: Must be O_CLOEXEC
+        let src_fd = unsafe { libc::open(blob_cpath.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
         if src_fd >= 0 {
+            // INTERNAL OPEN: Must be O_CLOEXEC
             let dst_fd = unsafe {
                 libc::open(
                     temp_cpath.as_ptr(),
-                    libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                    libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
                     0o644,
                 )
             };
@@ -136,10 +187,11 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
                 "COW: CAS blob not found (errno={}), creating empty temp",
                 crate::get_errno()
             );
+            // INTERNAL OPEN: Must be O_CLOEXEC
             let dst_fd = unsafe {
                 libc::open(
                     temp_cpath.as_ptr(),
-                    libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                    libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
                     0o644,
                 )
             };

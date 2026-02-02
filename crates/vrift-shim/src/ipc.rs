@@ -7,12 +7,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Raw Unix socket connect using libc syscalls (avoids recursion through shim)
 pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
-    let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
-    if fd < 0 {
-        return -1;
-    }
-    // RFC-0043: Prevent FD leakage to child processes
-    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    // RFC-0043: Prevent FD leakage to child processes (Atomic CLOEXEC)
+    let fd = {
+        #[cfg(target_os = "linux")]
+        {
+            libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let s = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+            if s >= 0 {
+                // Fallback: Non-atomic but best effort
+                libc::fcntl(s, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+            s
+        }
+    };
 
     let mut addr: libc::sockaddr_un = std::mem::zeroed();
     addr.sun_family = libc::AF_UNIX as libc::sa_family_t;

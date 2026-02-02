@@ -1,7 +1,7 @@
 # RFC-0039: Transparent Virtual Projection & In-place Transmutation
 
 ## 1. Status
-**Partial Implementation** (Updated: 2026-02-01)
+**Partial Implementation** (Updated: 2026-02-03)
 
 ### Implementation Status
 
@@ -13,8 +13,8 @@
 | Ingest Lock (flock) | §5.3 | ✅ Done | `lock_with_retry()` |
 | CAS Sharding | §6 | ✅ Done | `blake3/ab/cd/hash_size.ext` |
 | Parallel Ingest | - | ✅ Done | Rayon, ~14,000 files/sec |
-| Break-Before-Write | §5.1.2 | 🚧 P1 | Required for Tier-2 safety (no-root) |
-| Live Ingest on close() | §3.2 | ⏸️ Deferred | Requires VFS intercept |
+| Break-Before-Write | §5.1.2 | ✅ Done | COW to temp via shim (test verified) |
+| Live Ingest on close() | §3.2 | ✅ Done | `sync_ipc_manifest_reingest` on close |
 | Tier-1 chattr +i | §5.1.1 | ✅ Done | Native implementation (macOS/Linux) |
 | Tier-1 chown | §5.1.1 | ⏸️ Deferred | Deferred: High friction (requires root) |
 

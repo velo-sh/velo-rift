@@ -144,10 +144,12 @@ These are "invisible" behaviors discovered during deep forensic audit that may c
     - **Performance Evolution**: If the shim moves to persistent connections (RFC-0043 recommendation), 100% of children will inherit the daemon IPC handle.
 - **Remediation**: Mandatory `fcntl(fd, F_SETFD, FD_CLOEXEC)` after every `socket()` and `open()` call in the shim.
 
-### 2. Naive Path Matching (Normalization Gap)
-- **Risk**: The shim uses string prefix matching (`starts_with`) without normalization.
-- **Exploit**: Paths like `/vrift/../etc/passwd` or `/vrift//file.txt` may bypass VFS redirection and hit the host OS directly.
-- **Remediation Required**: Port the `path_normalize` logic from `vrift-core` into the shim's hot path.
+### 2. ~~Naive Path Matching (Normalization Gap)~~ ✅ RESOLVED
+- **Status**: Path normalization implemented and verified (Feb 2026)
+- **Implementation**: `raw_path_normalize()` in `path.rs` handles `..`, `.`, `//`
+- **Test**: `test_path_normalization.sh` confirms traversal attacks blocked
+- ~~**Risk**: The shim uses string prefix matching (`starts_with`) without normalization.~~
+- ~~**Exploit**: Paths like `/vrift/../etc/passwd` or `/vrift//file.txt` may bypass VFS redirection.~~
 
 ### 3. Path Virtualization (`getcwd`/`realpath`/`chdir`)
 - **Status**: 🔄 Implemented (Feb 2026) - Needs E2E Verification
