@@ -17,10 +17,18 @@ use console::{style, Emoji};
 use indicatif::{ProgressBar, ProgressStyle};
 
 // Emojis for theatrical effect
-static TOTEM: Emoji<'_, '_> = Emoji("🌀 ", "* ");
+static TOTEM_SPIN: Emoji<'_, '_> = Emoji("🌀", "*");
+static TOTEM_FALL: Emoji<'_, '_> = Emoji("⚪", "o");
 static CHECK: Emoji<'_, '_> = Emoji("✔ ", "[ok] ");
-static WAKE: Emoji<'_, '_> = Emoji("💫 ", "~ ");
 static WARN: Emoji<'_, '_> = Emoji("⚠️  ", "! ");
+
+// Box drawing characters
+const BOX_TL: &str = "╭";
+const BOX_TR: &str = "╮";
+const BOX_BL: &str = "╰";
+const BOX_BR: &str = "╯";
+const BOX_H: &str = "─";
+const BOX_V: &str = "│";
 
 /// Generate shell script for `eval "$(vrift inception)"`
 pub fn cmd_inception(project_dir: &Path) -> Result<()> {
@@ -54,6 +62,12 @@ pub fn cmd_inception(project_dir: &Path) -> Result<()> {
     // Find the shim library
     let shim_path = find_shim_library(&project_root)?;
 
+    // Ensure wrappers exist in .vrift/bin/
+    ensure_wrappers(&vrift_dir)?;
+
+    // Get VFS stats
+    let (file_count, cas_size) = get_vfs_stats(&vrift_dir);
+
     // Theatrical progress (to stderr so it doesn't interfere with eval)
     show_inception_animation();
 
@@ -74,20 +88,39 @@ pub fn cmd_inception(project_dir: &Path) -> Result<()> {
     println!();
     println!("# Update prompt with totem");
     println!("export _VRIFT_OLD_PS1=\"$PS1\"");
-    println!("export PS1=\"(vrift 🌀) $PS1\"");
+    println!("export PS1=\"(vrift {}) $PS1\"", TOTEM_SPIN);
     println!();
+
+    // Box output for inception complete
+    let project_name = project_root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "project".to_string());
+    let stats_line = format!("VFS: {} files │ {}", file_count, cas_size);
+
     println!("echo ''");
+    println!("echo '{}{}{}'", BOX_TL, BOX_H.repeat(35), BOX_TR);
     println!(
-        "echo '{} {}'",
-        TOTEM,
-        style("INCEPTION COMPLETE").green().bold()
+        "echo '{} {} INCEPTION                       {}'",
+        BOX_V, TOTEM_SPIN, BOX_V
     );
     println!(
-        "echo '   {} {}'",
-        style("Status:").dim(),
-        "Reality distorted. Happy hacking."
+        "echo '{}                                    {}'",
+        BOX_V, BOX_V
     );
-    println!("echo '   {} {}'", style("Project:").dim(), project_root_str);
+    println!(
+        "echo '{}    Project: {:<23} {}'",
+        BOX_V,
+        truncate_str(&project_name, 23),
+        BOX_V
+    );
+    println!(
+        "echo '{}    {:<31} {}'",
+        BOX_V,
+        truncate_str(&stats_line, 31),
+        BOX_V
+    );
+    println!("echo '{}{}{}'", BOX_BL, BOX_H.repeat(35), BOX_BR);
     println!("echo ''");
 
     Ok(())
@@ -125,11 +158,28 @@ pub fn cmd_wake() -> Result<()> {
     println!("  unset _VRIFT_OLD_PS1");
     println!("fi");
     println!();
+
+    // Box output for wake complete - totem fell!
+    println!("echo ''");
+    println!("echo '{}{}{}'", BOX_TL, BOX_H.repeat(35), BOX_TR);
     println!(
-        "echo '{} {}'",
-        WAKE,
-        style("Wake: Back to reality.").cyan().bold()
+        "echo '{} {} WAKE                            {}'",
+        BOX_V, TOTEM_FALL, BOX_V
     );
+    println!(
+        "echo '{}                                    {}'",
+        BOX_V, BOX_V
+    );
+    println!(
+        "echo '{}    The totem fell.                 {}'",
+        BOX_V, BOX_V
+    );
+    println!(
+        "echo '{}    Back to reality.                {}'",
+        BOX_V, BOX_V
+    );
+    println!("echo '{}{}{}'", BOX_BL, BOX_H.repeat(35), BOX_BR);
+    println!("echo ''");
 
     Ok(())
 }
@@ -153,8 +203,140 @@ pub fn cmd_hook(shell: &str) -> Result<()> {
 }
 
 // ============================================================================
+// Wrapper Generation (P1: PATH-based command shadowing)
+// ============================================================================
+
+/// Commands that need wrappers for SIP bypass on macOS
+const WRAPPER_COMMANDS: &[&str] = &[
+    "chmod", "chown", "rm", "cp", "mv", "touch", "mkdir", "rmdir",
+];
+
+/// Ensure .vrift/bin/ contains wrapper scripts for SIP-protected commands
+fn ensure_wrappers(vrift_dir: &Path) -> Result<()> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin_dir = vrift_dir.join("bin");
+
+    // Create bin directory if it doesn't exist
+    if !bin_dir.exists() {
+        fs::create_dir_all(&bin_dir)?;
+    }
+
+    for cmd in WRAPPER_COMMANDS {
+        let wrapper_path = bin_dir.join(cmd);
+
+        // Skip if wrapper already exists
+        if wrapper_path.exists() {
+            continue;
+        }
+
+        // Generate wrapper script
+        let wrapper_content = generate_wrapper_script(cmd);
+        fs::write(&wrapper_path, wrapper_content)?;
+
+        // Make executable
+        let mut perms = fs::metadata(&wrapper_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&wrapper_path, perms)?;
+    }
+
+    Ok(())
+}
+
+/// Generate a wrapper script for a command
+fn generate_wrapper_script(cmd: &str) -> String {
+    // Find the real binary path
+    let real_path = match cmd {
+        "chmod" | "chown" | "rm" | "cp" | "mv" | "touch" | "mkdir" | "rmdir" => {
+            format!("/bin/{}", cmd)
+        }
+        _ => format!("/usr/bin/{}", cmd),
+    };
+
+    format!(
+        r#"#!/bin/bash
+# Velo Rift Inception Wrapper for {cmd}
+# Auto-generated - blocks VFS mutations, passthroughs others
+
+# Get target path (last argument)
+target=""
+for arg in "$@"; do
+    target="$arg"
+done
+
+# Resolve relative paths and canonicalize (handles /tmp -> /private/tmp on macOS)
+if [[ -n "$target" ]]; then
+    if [[ "$target" != /* ]]; then
+        target="$(pwd -P)/$target"
+    fi
+    # Resolve symlinks in path prefix
+    target_dir=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)
+    if [[ -n "$target_dir" ]]; then
+        target="$target_dir/$(basename "$target")"
+    fi
+fi
+
+# Get canonicalized project root
+vrift_root="$VRIFT_PROJECT_ROOT"
+if [[ -n "$vrift_root" ]] && [[ -d "$vrift_root" ]]; then
+    vrift_root=$(cd "$vrift_root" 2>/dev/null && pwd -P)
+fi
+
+# Check if target is in VFS project
+if [[ -n "$vrift_root" ]] && [[ -n "$target" ]] && [[ "$target" == "$vrift_root"* ]]; then
+    echo "vrift: {cmd} blocked in VFS mode (file is immutable)" >&2
+    echo "       Use 'vrift wake' to exit VFS first" >&2
+    exit 1
+fi
+
+# Passthrough to real binary
+exec {real_path} "$@"
+"#,
+        cmd = cmd,
+        real_path = real_path
+    )
+}
+
+// ============================================================================
 // Private helpers
 // ============================================================================
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.chars().count() <= max_len {
+        format!("{:<width$}", s, width = max_len)
+    } else {
+        let truncated: String = s.chars().take(max_len - 2).collect();
+        format!("{}..", truncated)
+    }
+}
+
+fn get_vfs_stats(vrift_dir: &Path) -> (String, String) {
+    // Try to get file count from manifest
+    let manifest_path = vrift_dir.join("manifest.lmdb");
+    let file_count = if manifest_path.exists() {
+        // Estimate from file size (rough approximation)
+        if let Ok(meta) = std::fs::metadata(&manifest_path) {
+            let size = meta.len();
+            // Rough estimate: ~200 bytes per entry
+            let estimated = size / 200;
+            if estimated > 0 {
+                format!("{}", estimated)
+            } else {
+                "?".to_string()
+            }
+        } else {
+            "?".to_string()
+        }
+    } else {
+        "0".to_string()
+    };
+
+    // Try to get CAS size
+    let cas_size = "cached".to_string(); // Simplified for now
+
+    (file_count, cas_size)
+}
 
 fn find_shim_library(project_root: &Path) -> Result<std::path::PathBuf> {
     // Check local .vrift directory first
@@ -273,6 +455,15 @@ _vrift_hook() {{
 # Hook into cd
 cd() {{
     builtin cd "$@" && _vrift_hook
+}}
+
+# Also hook pushd/popd for completeness
+pushd() {{
+    builtin pushd "$@" && _vrift_hook
+}}
+
+popd() {{
+    builtin popd "$@" && _vrift_hook
 }}
 
 # Run on shell init
