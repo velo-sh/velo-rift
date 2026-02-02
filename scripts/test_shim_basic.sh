@@ -61,11 +61,19 @@ echo "Testing Shim Basic Interception in $TEST_DIR"
 mkdir -p "$TEST_DIR/source"
 echo -n "hello world" > "$TEST_DIR/source/testfile.txt"
 
+# Ensure clean environment
+unset VRIFT_PROJECT_ROOT
+unset VRIFT_INCEPTION
+unset VRIFT_SOCKET_PATH
+unset VRIFT_CAS_ROOT
+unset VRIFT_MANIFEST
+unset VRIFT_VFS_PREFIX
+
 # 1. Ingest
 echo "Ingesting source..."
 export VRIFT_CAS_ROOT="$TEST_DIR/cas"
-# Use default output to ensure registration in registry
-"$VELO_BIN" ingest "$TEST_DIR/source" --prefix /vrift > "$TEST_DIR/ingest.log" 2>&1
+# Use --prefix / to ensure paths in manifest match what shim expects after stripping VRIFT_VFS_PREFIX
+"$VELO_BIN" ingest "$TEST_DIR/source" --prefix / > "$TEST_DIR/ingest.log" 2>&1
 
 # 2. Start daemon
 echo "Starting daemon..."

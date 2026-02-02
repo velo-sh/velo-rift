@@ -20,31 +20,43 @@ pub mod path;
 pub mod state;
 pub mod syscalls;
 
+extern "C" {
+    fn set_vfs_errno(e: libc::c_int);
+    fn get_vfs_errno() -> libc::c_int;
+}
+
+/// RFC-0051: Platform-agnostic errno access
+#[no_mangle]
+pub unsafe extern "C" fn set_errno(e: libc::c_int) {
+    #[cfg(target_os = "macos")]
+    {
+        if (unsafe { crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) }) == 2 {
+            return;
+        }
+        *libc::__error() = e;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        set_vfs_errno(e);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_errno() -> libc::c_int {
+    #[cfg(target_os = "macos")]
+    {
+        if (unsafe { crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) }) == 2 {
+            return 0;
+        }
+        *libc::__error()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        get_vfs_errno()
+    }
+}
+
 // Re-export for linkage - interpose table (macOS) and unified impls (Linux)
 pub use interpose::*;
 pub use state::LOGGER;
 // Note: syscalls module is used internally by interpose, not re-exported
-
-/// RFC-0049: Static constructor for macOS to signal that the library
-/// has been loaded and symbol resolution is complete.
-/// This safely clears the INITIALIZING flag to enable shims.
-#[cfg(target_os = "macos")]
-#[link_section = "__DATA,__mod_init_func"]
-pub static SET_READY: unsafe extern "C" fn() = {
-    unsafe extern "C" fn ready() {
-        crate::state::INITIALIZING.store(0, std::sync::atomic::Ordering::SeqCst);
-    }
-    ready
-};
-
-/// RFC-0049: Static constructor for Linux to signal that the library
-/// has been loaded via LD_PRELOAD. Uses .init_array section.
-#[cfg(target_os = "linux")]
-#[link_section = ".init_array"]
-#[used]
-pub static SET_READY_LINUX: unsafe extern "C" fn() = {
-    unsafe extern "C" fn ready() {
-        crate::state::INITIALIZING.store(0, std::sync::atomic::Ordering::SeqCst);
-    }
-    ready
-};

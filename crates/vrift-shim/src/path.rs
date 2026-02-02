@@ -47,26 +47,38 @@ impl PathResolver {
             return None;
         }
 
+        // Ensure we match on component boundaries (e.g., /vrift matches /vrift/file but not /vriftfile)
+        if normalized.len() > self.vfs_prefix.len()
+            && !self.vfs_prefix.ends_with('/')
+            && normalized.as_bytes()[self.vfs_prefix.len()] != b'/'
+        {
+            return None;
+        }
+
         // 4. Extract manifest key (relative to project_root, must start with /)
         // If project_root is "/a/b" and normalized is "/a/b/c/d", manifest_key is "/c/d"
         // RFC-0039: vrift ingest always prefixes paths with /
-        let manifest_key =
-            if !self.project_root.is_empty() && normalized.starts_with(&self.project_root) {
-                let key = normalized.strip_prefix(&self.project_root).unwrap_or("");
-                if !key.starts_with('/') {
-                    format!("/{}", key)
-                } else {
-                    key.to_string()
-                }
+        let manifest_key = if !self.project_root.is_empty()
+            && normalized.starts_with(&self.project_root)
+            && (normalized.len() == self.project_root.len()
+                || self.project_root.ends_with('/')
+                || normalized.as_bytes()[self.project_root.len()] == b'/')
+        {
+            let key = normalized.strip_prefix(&self.project_root).unwrap_or("");
+            if !key.starts_with('/') {
+                format!("/{}", key)
             } else {
-                // Fallback: if not under project_root but under vfs_prefix
-                let key = normalized.strip_prefix(&self.vfs_prefix).unwrap_or("");
-                if !key.starts_with('/') {
-                    format!("/{}", key)
-                } else {
-                    key.to_string()
-                }
-            };
+                key.to_string()
+            }
+        } else {
+            // Fallback: if not under project_root but under vfs_prefix
+            let key = normalized.strip_prefix(&self.vfs_prefix).unwrap_or("");
+            if !key.starts_with('/') {
+                format!("/{}", key)
+            } else {
+                key.to_string()
+            }
+        };
 
         let manifest_key_hash = vrift_ipc::fnv1a_hash(&manifest_key);
         Some(VfsPath {

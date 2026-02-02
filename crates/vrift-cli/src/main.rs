@@ -766,10 +766,24 @@ async fn cmd_ingest(
         }
 
         // Build manifest path (RFC-0039: Always starts with /)
-        let manifest_path = if base_prefix.is_empty() {
-            format!("/{}", relative.display())
-        } else {
-            format!("/{}/{}", base_prefix, relative.display())
+        let manifest_path = {
+            let rel_str = relative.to_string_lossy();
+            let mut path = if base_prefix.is_empty() {
+                format!("/{}", rel_str)
+            } else {
+                // Ensure base_prefix is handled correctly
+                let clean_prefix = base_prefix.trim_matches('/');
+                if clean_prefix.is_empty() {
+                    format!("/{}", rel_str)
+                } else {
+                    format!("/{}/{}", clean_prefix, rel_str)
+                }
+            };
+            // Normalize double slashes that might have been introduced
+            while path.contains("//") {
+                path = path.replace("//", "/");
+            }
+            path
         };
 
         let metadata = fs::symlink_metadata(path)?;

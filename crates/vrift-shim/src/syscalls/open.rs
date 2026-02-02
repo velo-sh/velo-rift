@@ -129,14 +129,14 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
             } else {
                 vfs_log!(
                     "COW FAILED: could not create temp file (errno={})",
-                    unsafe { *libc::__error() }
+                    crate::get_errno()
                 );
             }
             unsafe { libc::close(src_fd) };
         } else {
             vfs_log!(
                 "COW: CAS blob not found (errno={}), creating empty temp",
-                unsafe { *libc::__error() }
+                crate::get_errno()
             );
             let dst_fd = unsafe {
                 libc::open(
@@ -151,7 +151,13 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
         }
 
         let fd = unsafe { libc::open(temp_cpath.as_ptr(), flags, mode as libc::c_uint) };
-        if fd >= 0 {
+        if fd < 0 {
+            vfs_log!(
+                "COW FAILED: final open of temp file failed (errno={})",
+                crate::get_errno()
+            );
+            None
+        } else {
             vfs_log!("COW session started: fd={} vpath='{}'", fd, vpath.absolute);
             if let Ok(mut fds) = state.open_fds.lock() {
                 fds.insert(
@@ -163,26 +169,21 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
                     },
                 );
             }
-        } else {
-            vfs_log!(
-                "COW FAILED: final open of temp file failed (errno={})",
-                unsafe { *libc::__error() }
-            );
+            Some(fd)
         }
-        Some(fd)
     } else {
         let blob_cpath = std::ffi::CString::new(blob_path.as_str()).ok()?;
         let fd = libc::open(blob_cpath.as_ptr(), flags, mode as libc::c_uint);
         vfs_log!("READ session: fd={} blob='{}'", fd, blob_path);
         if fd >= 0 {
-            return Some(fd);
+            Some(fd)
+        } else {
+            vfs_log!(
+                "READ FAILED: could not open CAS blob (errno={})",
+                crate::get_errno()
+            );
+            None
         }
-        vfs_log!(
-            "READ FAILED: could not open CAS blob (errno={})",
-            *libc::__error()
-        );
-        set_errno(libc::ENOENT);
-        Some(-1)
     }
 }
 
@@ -229,7 +230,7 @@ pub unsafe extern "C" fn velo_open_impl(p: *const c_char, f: c_int, m: mode_t) -
                 lateout("x0") ret, err = out(reg) err,
             );
             if err != 0 {
-                set_errno(ret as c_int);
+                crate::set_errno(ret as c_int);
                 -1
             } else {
                 ret as c_int
@@ -245,7 +246,7 @@ pub unsafe extern "C" fn velo_open_impl(p: *const c_char, f: c_int, m: mode_t) -
                     lateout("rax") ret,
                 );
                 if ret < 0 {
-                    set_errno(-ret as c_int);
+                    crate::set_errno(-ret as c_int);
                     -1
                 } else {
                     ret as c_int
@@ -255,11 +256,16 @@ pub unsafe extern "C" fn velo_open_impl(p: *const c_char, f: c_int, m: mode_t) -
             {
                 let ret: i64;
                 std::arch::asm!(
-                    "mov x8, #56", "svc #0", in("x0") -100i64, in("x1") path, in("x2") flags as i64, in("x3") mode as i64,
+                    "svc #0",
+                    in("x8") 56i64, // openat
+                    in("x0") -100i64, // AT_FDCWD
+                    in("x1") path,
+                    in("x2") flags as i64,
+                    in("x3") mode as i64,
                     lateout("x0") ret,
                 );
                 if ret < 0 {
-                    set_errno(-ret as c_int);
+                    crate::set_errno(-ret as c_int);
                     -1
                 } else {
                     ret as c_int
@@ -303,7 +309,7 @@ pub unsafe extern "C" fn velo_openat_impl(
                 lateout("x0") ret, err = out(reg) err,
             );
             if err != 0 {
-                set_errno(ret as c_int);
+                crate::set_errno(ret as c_int);
                 -1
             } else {
                 ret as c_int
@@ -319,7 +325,7 @@ pub unsafe extern "C" fn velo_openat_impl(
                     lateout("rax") ret,
                 );
                 if ret < 0 {
-                    set_errno(-ret as c_int);
+                    crate::set_errno(-ret as c_int);
                     -1
                 } else {
                     ret as c_int
@@ -329,11 +335,16 @@ pub unsafe extern "C" fn velo_openat_impl(
             {
                 let ret: i64;
                 std::arch::asm!(
-                    "mov x8, #56", "svc #0", in("x0") dirfd as i64, in("x1") path, in("x2") flags as i64, in("x3") mode as i64,
+                    "svc #0",
+                    in("x8") 56i64, // openat
+                    in("x0") dirfd as i64,
+                    in("x1") path,
+                    in("x2") flags as i64,
+                    in("x3") mode as i64,
                     lateout("x0") ret,
                 );
                 if ret < 0 {
-                    set_errno(-ret as c_int);
+                    crate::set_errno(-ret as c_int);
                     -1
                 } else {
                     ret as c_int
@@ -357,16 +368,42 @@ pub unsafe extern "C" fn velo_openat_impl(
     open_impl(p, f, m).unwrap_or_else(|| raw_openat(dirfd, p, f, m))
 }
 
-#[cfg(target_os = "macos")]
-fn set_errno(e: c_int) {
-    unsafe {
-        *libc::__error() = e;
-    }
-}
-
+/// Raw hardlink syscall for Linux
 #[cfg(target_os = "linux")]
-fn set_errno(e: c_int) {
-    unsafe {
-        *libc::__errno_location() = e;
+pub(crate) unsafe fn raw_link(old: *const c_char, new: *const c_char) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall", in("rax") 86, in("rdi") old, in("rsi") new,
+            lateout("rax") ret,
+        );
+        if ret < 0 {
+            crate::set_errno(-ret as c_int);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // aarch64 uses linkat
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 37i64, // linkat
+            in("x0") -100i64, // AT_FDCWD
+            in("x1") old,
+            in("x2") -100i64, // AT_FDCWD
+            in("x3") new,
+            in("x4") 0,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            crate::set_errno(-ret as c_int);
+            -1
+        } else {
+            ret as c_int
+        }
     }
 }

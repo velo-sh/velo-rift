@@ -22,13 +22,12 @@ use crate::syscalls::open::{open_shim, openat_shim};
 #[cfg(target_os = "macos")]
 use crate::syscalls::path::{readlink_shim, realpath_shim};
 #[cfg(target_os = "macos")]
-use crate::syscalls::stat::{access_shim, fstat_shim, lstat_shim, stat_shim};
+use crate::syscalls::stat::{access_shim, fstat_shim, fstatat_shim, lstat_shim, stat_shim};
 
 use libc::{c_char, c_int, c_long, mode_t};
 
 #[cfg(target_os = "macos")]
 use libc::{c_void, dirent, pid_t, size_t, ssize_t, timespec, timeval, DIR};
-
 #[cfg(target_os = "macos")]
 #[repr(C)]
 pub struct Interpose {
@@ -131,12 +130,153 @@ mod linux_shims {
 
     #[no_mangle]
     pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
+        let init_state =
+            unsafe { crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) };
+        if init_state == 2 || init_state == 3 {
+            #[cfg(target_arch = "x86_64")]
+            {
+                let ret: i64;
+                std::arch::asm!("syscall", in("rax") 2, in("rdi") path, in("rsi") flags as i64, in("rdx") mode as i64, lateout("rax") ret);
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                let ret: i64;
+                std::arch::asm!(
+                    "svc #0",
+                    in("x8") 56i64, // openat
+                    in("x0") -100i64, // AT_FDCWD
+                    in("x1") path,
+                    in("x2") flags as i64,
+                    in("x3") mode as i64,
+                    lateout("x0") ret,
+                );
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+        }
+        let _guard = match crate::state::ShimGuard::enter() {
+            Some(g) => g,
+            None => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!("syscall", in("rax") 2, in("rdi") path, in("rsi") flags as i64, in("rdx") mode as i64, lateout("rax") ret);
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!(
+                        "svc #0",
+                        in("x8") 56i64, // openat
+                        in("x0") -100i64, // AT_FDCWD
+                        in("x1") path,
+                        in("x2") flags as i64,
+                        in("x3") mode as i64,
+                        lateout("x0") ret,
+                    );
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+            }
+        };
         crate::syscalls::open::velo_open_impl(path, flags, mode)
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
-        crate::syscalls::open::velo_open_impl(path, flags, mode)
+        open(path, flags, mode)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn newfstatat(
+        dirfd: c_int,
+        path: *const c_char,
+        buf: *mut libc::stat,
+        flags: c_int,
+    ) -> c_int {
+        // Double-guard: check INITIALIZING first for early-init safety
+        let init_state =
+            unsafe { crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) };
+        if init_state == 2 || init_state == 3 {
+            #[cfg(target_arch = "x86_64")]
+            {
+                let ret: i64;
+                std::arch::asm!("syscall", in("rax") 262, in("rdi") dirfd as i64, in("rsi") path, in("rdx") buf, in("r10") flags as i64, lateout("rax") ret);
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                let ret: i64;
+                std::arch::asm!(
+                    "svc #0",
+                    in("x8") 79i64, // fstatat
+                    in("x0") dirfd as i64,
+                    in("x1") path,
+                    in("x2") buf,
+                    in("x3") flags as i64,
+                    lateout("x0") ret,
+                );
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+        }
+        let _guard = match crate::state::ShimGuard::enter() {
+            Some(g) => g,
+            None => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!("syscall", in("rax") 262, in("rdi") dirfd as i64, in("rsi") path, in("rdx") buf, in("r10") flags as i64, lateout("rax") ret);
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!(
+                        "svc #0",
+                        in("x8") 79i64, // fstatat
+                        in("x0") dirfd as i64,
+                        in("x1") path,
+                        in("x2") buf,
+                        in("x3") flags as i64,
+                        lateout("x0") ret,
+                    );
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+            }
+        };
+        crate::syscalls::stat::fstatat_shim_linux(dirfd, path, buf, flags)
     }
 
     #[no_mangle]
@@ -146,6 +286,72 @@ mod linux_shims {
         flags: c_int,
         mode: mode_t,
     ) -> c_int {
+        // Double-guard: check INITIALIZING first for early-init safety
+        let init_state =
+            unsafe { crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) };
+        if init_state == 2 || init_state == 3 {
+            #[cfg(target_arch = "x86_64")]
+            {
+                let ret: i64;
+                std::arch::asm!("syscall", in("rax") 257, in("rdi") dirfd as i64, in("rsi") path, in("rdx") flags as i64, in("r10") mode as i64, lateout("rax") ret);
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                let ret: i64;
+                std::arch::asm!(
+                    "svc #0",
+                    in("x8") 56i64, // openat
+                    in("x0") dirfd as i64,
+                    in("x1") path,
+                    in("x2") flags as i64,
+                    in("x3") mode as i64,
+                    lateout("x0") ret,
+                );
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+        }
+        let _guard = match crate::state::ShimGuard::enter() {
+            Some(g) => g,
+            None => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!("syscall", in("rax") 257, in("rdi") dirfd as i64, in("rsi") path, in("rdx") flags as i64, in("r10") mode as i64, lateout("rax") ret);
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!(
+                        "svc #0",
+                        in("x8") 56i64, // openat
+                        in("x0") dirfd as i64,
+                        in("x1") path,
+                        in("x2") flags as i64,
+                        in("x3") mode as i64,
+                        lateout("x0") ret,
+                    );
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+            }
+        };
         crate::syscalls::open::velo_openat_impl(dirfd, path, flags, mode)
     }
 
@@ -156,12 +362,131 @@ mod linux_shims {
         flags: c_int,
         mode: mode_t,
     ) -> c_int {
-        crate::syscalls::open::velo_openat_impl(dirfd, path, flags, mode)
+        openat(dirfd, path, flags, mode)
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: c_long) -> c_int {
+        // Double-guard: check INITIALIZING first for early-init safety
+        let init_state =
+            unsafe { crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) };
+        if init_state == 2 || init_state == 3 {
+            #[cfg(target_arch = "x86_64")]
+            {
+                let ret: i64;
+                std::arch::asm!("syscall", in("rax") 72, in("rdi") fd as i64, in("rsi") cmd as i64, in("rdx") arg, lateout("rax") ret);
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                let ret: i64;
+                std::arch::asm!(
+                    "svc #0",
+                    in("x8") 25i64, // fcntl
+                    in("x0") fd as i64,
+                    in("x1") cmd as i64,
+                    in("x2") arg,
+                    lateout("x0") ret,
+                );
+                if ret < 0 {
+                    crate::set_errno(-ret as c_int);
+                    return -1;
+                }
+                return ret as c_int;
+            }
+        }
+        let _guard = match crate::state::ShimGuard::enter() {
+            Some(g) => g,
+            None => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!("syscall", in("rax") 72, in("rdi") fd as i64, in("rsi") cmd as i64, in("rdx") arg, lateout("rax") ret);
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    let ret: i64;
+                    std::arch::asm!(
+                        "svc #0",
+                        in("x8") 25i64, // fcntl
+                        in("x0") fd as i64,
+                        in("x1") cmd as i64,
+                        in("x2") arg,
+                        lateout("x0") ret,
+                    );
+                    if ret < 0 {
+                        crate::set_errno(-ret as c_int);
+                        return -1;
+                    }
+                    return ret as c_int;
+                }
+            }
+        };
         velo_fcntl_impl(fd, cmd, arg)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
+        crate::syscalls::misc::unlink_shim(path)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn rmdir(path: *const c_char) -> c_int {
+        crate::syscalls::misc::rmdir_shim(path)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn mkdir(path: *const c_char, mode: mode_t) -> c_int {
+        crate::syscalls::misc::mkdir_shim(path, mode)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn rename(old: *const c_char, new: *const c_char) -> c_int {
+        let mut ret = crate::syscalls::misc::rename_shim_linux(old, new);
+        if ret == -2 {
+            // Need to call real rename
+            #[cfg(target_arch = "x86_64")]
+            {
+                let r: i64;
+                std::arch::asm!("syscall", in("rax") 82, in("rdi") old, in("rsi") new, lateout("rax") r);
+                if r < 0 {
+                    crate::set_errno(-r as c_int);
+                    ret = -1;
+                } else {
+                    ret = r as c_int;
+                }
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                let r: i64;
+                std::arch::asm!(
+                    "svc #0",
+                    in("x8") 38i64, // renameat
+                    in("x0") -100i64, // AT_FDCWD
+                    in("x1") old,
+                    in("x2") -100i64, // AT_FDCWD
+                    in("x3") new,
+                    in("x4") 0,
+                    lateout("x0") r,
+                );
+                if r < 0 {
+                    crate::set_errno(-r as c_int);
+                    ret = -1;
+                } else {
+                    ret = r as c_int;
+                }
+            }
+        }
+        ret
     }
 }
 
@@ -204,15 +529,11 @@ pub unsafe extern "C" fn dlopen_shim(p: *const c_char, f: c_int) -> *mut c_void 
 pub unsafe extern "C" fn dlsym_shim(h: *mut c_void, s: *const c_char) -> *mut c_void {
     dlsym(h, s)
 }
-// Note: access_shim imported from syscalls/stat.rs with VFS logic
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn faccessat_shim(d: c_int, p: *const c_char, m: c_int, f: c_int) -> c_int {
     faccessat(d, p, m, f)
 }
-// Note: openat_shim imported from syscalls/open.rs
-// Note: link_shim, linkat_shim imported from syscalls/misc.rs with VFS boundary logic
-// Note: renameat_shim imported from syscalls/misc.rs with EXDEV logic
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn symlink_shim(p1: *const c_char, p2: *const c_char) -> c_int {
@@ -225,18 +546,15 @@ pub unsafe extern "C" fn flock_shim(fd: c_int, op: c_int) -> c_int {
     use crate::state::{is_vfs_ready, ShimGuard, ShimState};
     use crate::syscalls::io::get_fd_entry;
 
-    // RFC-0048: VFS Readiness Guard - passthrough if VFS not ready
     if !is_vfs_ready() {
         return flock(fd, op);
     }
 
-    // Check if this FD is tracked as a VFS file
     let entry = match get_fd_entry(fd) {
         Some(e) if e.is_vfs => e,
-        _ => return flock(fd, op), // Non-VFS file, passthrough
+        _ => return flock(fd, op),
     };
 
-    // VFS file - coordinate lock through daemon for semantic isolation
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => return flock(fd, op),
@@ -247,41 +565,33 @@ pub unsafe extern "C" fn flock_shim(fd: c_int, op: c_int) -> c_int {
         None => return flock(fd, op),
     };
 
-    // Use daemon IPC for lock coordination
-    // entry.path is the VFS logical path
     if sync_ipc_flock(&state.socket_path, &entry.path, op) {
-        0 // Success
+        0
     } else {
-        // IPC failed or lock not granted - set errno appropriately
-        unsafe fn set_errno_local(e: c_int) {
-            #[cfg(target_os = "macos")]
-            {
-                extern "C" {
-                    fn __error() -> *mut c_int;
-                }
-                *__error() = e;
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                *libc::__errno_location() = e;
-            }
-        }
         if op & libc::LOCK_NB != 0 {
-            set_errno_local(libc::EWOULDBLOCK);
+            crate::set_errno(libc::EWOULDBLOCK);
         } else {
-            set_errno_local(libc::EINTR); // Interrupted
+            crate::set_errno(libc::EINTR);
         }
         -1
     }
 }
-// utimensat_shim moved to syscalls/misc.rs with VFS blocking logic
-// RFC-0047: VFS-aware mkdir - adds directory entry to Manifest for VFS paths
-// Called by C variadic wrapper (fcntl_c_wrapper) with clean args
+// Note: VFS logic shims are imported from syscalls/ modules:
+// - dir: opendir_shim, readdir_shim, closedir_shim
+// - stat: stat_shim, lstat_shim, fstat_shim
+// - open: open_shim (with CoW logic)
+// - misc: rename_shim (with EXDEV logic)
+// RFC-0047: close() with CoW reingest for dirty FDs
+// NOTE: Reingest logic temporarily disabled pending investigation
+// Note: readlink_shim, realpath_shim imported from syscalls/path.rs
+// Note: getcwd_shim, chdir_shim imported from syscalls/dir.rs
+// RFC-0047: rename_shim, renameat_shim imported from syscalls/misc.rs with EXDEV logic
+// Note: unlink_shim, rmdir_shim, mkdir_shim imported from syscalls/misc.rs
+// Note: close_shim imported from syscalls/io.rs
 #[no_mangle]
 pub unsafe extern "C" fn velo_fcntl_impl(fd: c_int, cmd: c_int, arg: c_long) -> c_int {
     #[cfg(target_os = "macos")]
     {
-        // Use the global fcntl declared in the extern "C" block above
         fcntl(fd, cmd, arg)
     }
     #[cfg(target_os = "linux")]
@@ -293,28 +603,32 @@ pub unsafe extern "C" fn velo_fcntl_impl(fd: c_int, cmd: c_int, arg: c_long) -> 
                 "syscall", in("rax") 72, in("rdi") fd as i64, in("rsi") cmd as i64, in("rdx") arg,
                 lateout("rax") ret,
             );
-            ret as c_int
+            if ret < 0 {
+                crate::set_errno(-ret as c_int);
+                -1
+            } else {
+                ret as c_int
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {
             let ret: i64;
             std::arch::asm!(
-                "mov x8, #25", "svc #0", in("x0") fd as i64, in("x1") cmd as i64, in("x2") arg,
+                "svc #0",
+                in("x8") 25i64, // fcntl
+                in("x0") fd as i64,
+                in("x1") cmd as i64,
+                in("x2") arg,
                 lateout("x0") ret,
             );
-            ret as c_int
+            if ret < 0 {
+                crate::set_errno(-ret as c_int);
+                -1
+            } else {
+                ret as c_int
+            }
         }
     }
-}
-#[cfg(target_os = "macos")]
-#[no_mangle]
-pub unsafe extern "C" fn fstatat_shim(
-    d: c_int,
-    p: *const c_char,
-    b: *mut libc::stat,
-    f: c_int,
-) -> c_int {
-    fstatat(d, p, b, f)
 }
 #[cfg(target_os = "macos")]
 #[no_mangle]
@@ -350,7 +664,6 @@ pub unsafe extern "C" fn posix_spawnp_shim(
     posix_spawnp(p, f, fa, at, ar, e)
 }
 
-// C variadic wrapper handles va_list correctly on macOS ARM64
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
@@ -610,8 +923,6 @@ pub static IT_FSTATAT: Interpose = Interpose {
     new_func: fstatat_shim as *const (),
     old_func: libc::fstatat as *const (),
 };
-
-// Mutation Perimeter Interpositions
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
@@ -661,8 +972,6 @@ pub static IT_UTIMES: Interpose = Interpose {
     new_func: utimes_shim as *const (),
     old_func: utimes as *const (),
 };
-
-// FD Tracking Interpositions
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]

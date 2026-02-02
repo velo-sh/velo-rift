@@ -11,18 +11,6 @@
 use crate::state::ShimState;
 use libc::c_int;
 
-/// Set errno for error returns
-unsafe fn set_errno(e: c_int) {
-    #[cfg(target_os = "macos")]
-    {
-        *libc::__error() = e;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        *libc::__errno_location() = e;
-    }
-}
-
 /// RFC-0047: unlink for VFS paths
 /// Sends ManifestRemove IPC to daemon instead of hitting real FS
 pub(crate) unsafe fn unlink_vfs(path: &str, state: &ShimState) -> Option<c_int> {
@@ -33,7 +21,7 @@ pub(crate) unsafe fn unlink_vfs(path: &str, state: &ShimState) -> Option<c_int> 
 
     // Check if file exists in manifest
     if state.query_manifest(path).is_none() {
-        set_errno(libc::ENOENT);
+        crate::set_errno(libc::ENOENT);
         return Some(-1);
     }
 
@@ -41,7 +29,7 @@ pub(crate) unsafe fn unlink_vfs(path: &str, state: &ShimState) -> Option<c_int> 
     match state.manifest_remove(path) {
         Ok(()) => Some(0),
         Err(_) => {
-            set_errno(libc::EIO);
+            crate::set_errno(libc::EIO);
             Some(-1)
         }
     }
@@ -58,7 +46,7 @@ pub(crate) unsafe fn rmdir_vfs(path: &str, state: &ShimState) -> Option<c_int> {
     // Check if directory exists in manifest
     let entry = state.query_manifest(path);
     if entry.is_none() {
-        set_errno(libc::ENOENT);
+        crate::set_errno(libc::ENOENT);
         return Some(-1);
     }
 
@@ -66,7 +54,7 @@ pub(crate) unsafe fn rmdir_vfs(path: &str, state: &ShimState) -> Option<c_int> {
     match state.manifest_remove(path) {
         Ok(()) => Some(0),
         Err(_) => {
-            set_errno(libc::EIO);
+            crate::set_errno(libc::EIO);
             Some(-1)
         }
     }
@@ -82,7 +70,7 @@ pub(crate) unsafe fn mkdir_vfs(path: &str, mode: libc::mode_t, state: &ShimState
 
     // Check if already exists
     if state.query_manifest(path).is_some() {
-        set_errno(libc::EEXIST);
+        crate::set_errno(libc::EEXIST);
         return Some(-1);
     }
 
@@ -90,7 +78,7 @@ pub(crate) unsafe fn mkdir_vfs(path: &str, mode: libc::mode_t, state: &ShimState
     match state.manifest_mkdir(path, mode) {
         Ok(()) => Some(0),
         Err(_) => {
-            set_errno(libc::EIO);
+            crate::set_errno(libc::EIO);
             Some(-1)
         }
     }

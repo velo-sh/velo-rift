@@ -16,11 +16,10 @@ use crate::ipc::*;
 // ============================================================================
 
 pub(crate) static SHIM_STATE: AtomicPtr<ShimState> = AtomicPtr::new(ptr::null_mut());
-/// Flag to indicate shim is still initializing. All syscalls passthrough during this phase.
-/// RFC-0049: Defaults to 1 (TRUE) to ensure passthrough during extremely early dyld phases.
-/// Exported to C wrapper as a recursion guard.
-#[no_mangle]
-pub static INITIALIZING: AtomicU8 = AtomicU8::new(1);
+// Flag to indicate shim is still initializing. All syscalls passthrough during this phase.
+extern "C" {
+    pub static INITIALIZING: std::sync::atomic::AtomicU8;
+}
 
 /// Flag to prevent recursion during TLS key creation (bootstrap phase)
 pub(crate) static BOOTSTRAPPING: AtomicBool = AtomicBool::new(false);
@@ -238,7 +237,9 @@ pub(crate) fn get_recursion_key() -> libc::pthread_key_t {
 pub(crate) struct ShimGuard(bool); // bool: true = has active TLS guard
 impl ShimGuard {
     pub(crate) fn enter() -> Option<Self> {
-        if INITIALIZING.load(Ordering::Relaxed) != 0 || BOOTSTRAPPING.load(Ordering::Relaxed) {
+        if (unsafe { INITIALIZING.load(Ordering::Relaxed) }) != 0
+            || BOOTSTRAPPING.load(Ordering::Relaxed)
+        {
             return None;
         }
 
@@ -643,11 +644,9 @@ pub(crate) struct ShimState {
 }
 
 impl ShimState {
-    pub(crate) fn init() -> Option<*mut Self> {
-        // CRITICAL: Must not allocate during early dyld init (malloc may not be ready)
-        // Use Cow::Borrowed for static defaults to avoid heap allocation
-
-        if !unsafe { libc::getenv(c"VRIFT_DEBUG".as_ptr()) }.is_null() {
+    pub(crate) unsafe fn init_logger() {
+        let debug_ptr = libc::getenv(c"VRIFT_DEBUG".as_ptr());
+        if !debug_ptr.is_null() {
             DEBUG_ENABLED.store(true, Ordering::Relaxed);
         }
 
@@ -678,6 +677,10 @@ impl ShimState {
                 CIRCUIT_BREAKER_THRESHOLD.store(threshold, Ordering::Relaxed);
             }
         }
+    }
+
+    pub(crate) fn init() -> Option<*mut Self> {
+        unsafe { Self::init_logger() };
         let cas_ptr = unsafe { libc::getenv(c"VRIFT_CAS_ROOT".as_ptr()) };
         let cas_root: std::borrow::Cow<'static, str> = if cas_ptr.is_null() {
             std::borrow::Cow::Borrowed("/tmp/vrift/the_source")
@@ -751,21 +754,34 @@ impl ShimState {
         if !ptr.is_null() {
             return unsafe { Some(&*ptr) };
         }
-
-        if INITIALIZING.swap(1, Ordering::SeqCst) != 0 {
+        // RFC-0050: Four-state initialization lifecycle
+        // 2: Early-Init (Hazardous), 1: Gate Open (Ready), 3: Busy (Initializing), 0: Done
+        let current = unsafe { INITIALIZING.load(Ordering::Acquire) };
+        if current == 2 || current == 3 {
+            // If it was 2 (Early-Init) or 3 (Already init-in-progress), return None
             return None;
         }
 
-        // Initialize state - MUST reset INITIALIZING even on failure
+        // Attempt to transition from 1 (Ready) to 3 (Busy)
+        if unsafe {
+            INITIALIZING
+                .compare_exchange(1, 3, Ordering::SeqCst, Ordering::Acquire)
+                .is_err()
+        } {
+            // Someone else is initializing or we are already Done (0) but raced with SHIM_STATE load
+            return None;
+        }
+
+        // Initialize state - MUST reset INITIALIZING to 0 on success, or back to 1 on failure
         let ptr = match Self::init() {
             Some(p) => p,
             None => {
-                INITIALIZING.store(0, Ordering::SeqCst);
+                unsafe { INITIALIZING.store(1, Ordering::SeqCst) };
                 return None;
             }
         };
         SHIM_STATE.store(ptr, Ordering::Release);
-        INITIALIZING.store(0, Ordering::SeqCst);
+        unsafe { INITIALIZING.store(0, Ordering::SeqCst) };
 
         // RFC-0039 §82: Record initialization event
         vfs_record!(EventType::VfsInit, 0, 0);
@@ -783,9 +799,15 @@ impl ShimState {
     pub(crate) fn query_manifest(&self, path: &str) -> Option<vrift_ipc::VnodeEntry> {
         // Strip VFS prefix to get relative path for manifest lookup
         let rel_path = if path.starts_with(&*self.vfs_prefix) {
-            path.strip_prefix(&*self.vfs_prefix)
-                .unwrap_or(path)
-                .trim_start_matches('/')
+            let rel = &path[self.vfs_prefix.len()..];
+            if rel.is_empty() {
+                "/"
+            } else if !rel.starts_with('/') {
+                // Should not happen with normalized paths, but safety first
+                return None;
+            } else {
+                rel
+            }
         } else {
             path
         };

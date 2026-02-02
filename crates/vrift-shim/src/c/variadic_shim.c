@@ -14,6 +14,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+/* RFC-0051: C-based errno bridge for cross-language consistency */
+void set_vfs_errno(int e) { errno = e; }
+int get_vfs_errno() { return errno; }
+
 /* --- Platform Specific Syscall Numbers --- */
 
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -32,11 +36,13 @@
 extern int velo_open_impl(const char *path, int flags, mode_t mode);
 extern int velo_openat_impl(int dirfd, const char *path, int flags,
                             mode_t mode);
-extern _Atomic char INITIALIZING;
 
-#if defined(__linux__)
-__attribute__((constructor)) void vfs_init_constructor() { INITIALIZING = 0; }
-#endif
+/* RFC-0049: Global initialization state
+ * 2: Early-Init (Hazardous), 1: Rust-Init (Safe TLS), 0: Ready
+ */
+volatile char INITIALIZING = 2;
+
+__attribute__((constructor)) void vfs_init_constructor() { INITIALIZING = 1; }
 
 /* --- Raw Syscall Implementation --- */
 
@@ -100,14 +106,16 @@ static inline long raw_syscall(long number, long arg1, long arg2, long arg3,
 // ABI.
 #if defined(__APPLE__)
 int open_shim_c_impl(const char *path, int flags, mode_t mode) {
-  if (INITIALIZING) {
+  // RFC-0050: State 2 (Early-Init) or 3 (Inside-Init) must use raw syscalls.
+  // State 1 (Ready) transitions to Rust. State 0 (Done) is normal operation.
+  if (INITIALIZING == 2 || INITIALIZING == 3) {
     return (int)raw_syscall(SYS_OPEN, (long)path, (long)flags, (long)mode, 0);
   }
   return velo_open_impl(path, flags, mode);
 }
 
 int openat_shim_c_impl(int dirfd, const char *path, int flags, mode_t mode) {
-  if (INITIALIZING) {
+  if (INITIALIZING == 2 || INITIALIZING == 3) {
     return (int)raw_syscall(SYS_OPENAT, (long)dirfd, (long)path, (long)flags,
                             (long)mode);
   }
