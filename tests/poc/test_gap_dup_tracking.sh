@@ -19,7 +19,15 @@ trap cleanup EXIT
 echo "Test content for dup" > "$TEST_DIR/test.txt"
 
 # Test dup/dup2 with Python
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
+export TEST_FILE="$TEST_DIR/test.txt"
+if [[ "$(uname)" == "Darwin" ]]; then
+    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_FORCE_FLAT_NAMESPACE=1
+else
+    export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
+fi
+
+python3 << 'EOF'
 import os
 import sys
 
@@ -56,32 +64,3 @@ except Exception as e:
     print(f"dup error: {e}")
     sys.exit(1)
 EOF
-
-export TEST_FILE="$TEST_DIR/test.txt"
-
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
-import os
-import sys
-
-test_file = '$TEST_DIR/test.txt'
-fd1 = os.open(test_file, os.O_RDONLY)
-fd2 = os.dup(fd1)
-
-# Read from fd1
-os.lseek(fd1, 0, os.SEEK_SET)
-data1 = os.read(fd1, 10)
-
-# Read from fd2 (should be at same position as fd1)
-os.lseek(fd2, 0, os.SEEK_SET)
-data2 = os.read(fd2, 10)
-
-os.close(fd1)
-os.close(fd2)
-
-if data1 == data2:
-    print('✅ PASS: dup works correctly')
-    sys.exit(0)
-else:
-    print(f'❌ FAIL: data mismatch')
-    sys.exit(1)
-"

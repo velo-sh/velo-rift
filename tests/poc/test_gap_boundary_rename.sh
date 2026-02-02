@@ -80,8 +80,11 @@ DAEMON_PID=$(cat "$TEST_DIR/daemon.pid")
 sleep 2
 
 # Setup Shim
-export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
 if [[ "$(uname)" == "Darwin" ]]; then
+    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_FORCE_FLAT_NAMESPACE=1
+else
+    export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
 fi
 export RUST_LOG=debug
 # Set VFS prefix to the project workspace so psfs_applicable matches correctly

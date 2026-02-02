@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-VRIFT_MANIFEST="/tmp/lmdb_test.manifest"
+VRIFT_MANIFEST="/tmp/lmdb_test_$(date +%s).manifest"
 
 echo "=== Test: LMDB Metadata Access Behavior ==="
 
@@ -18,7 +18,13 @@ TEST_DIR=$(mktemp -d)
 export TEST_DIR
 echo "data" > "$TEST_DIR/file.txt"
 
-if "${PROJECT_ROOT}/target/debug/vrift" ingest "$TEST_DIR" --output "$VRIFT_MANIFEST" --prefix /test 2>&1 | grep -q "Complete"; then
+# Run ingest and capture output
+OUTPUT=$("${PROJECT_ROOT}/target/debug/vrift" ingest "$TEST_DIR" --output "$VRIFT_MANIFEST" --prefix /test 2>&1)
+INGEST_STATUS=$?
+
+echo "$OUTPUT"
+
+if [ $INGEST_STATUS -eq 0 ] && echo "$OUTPUT" | grep -q "VRift Complete"; then
     echo "✅ PASS: Manifest created successfully (LMDB used)"
     
     # Verify we can read it back via status or inspect
@@ -30,6 +36,6 @@ if "${PROJECT_ROOT}/target/debug/vrift" ingest "$TEST_DIR" --output "$VRIFT_MANI
     fi
 fi
 
-rm -rf "$TEST_DIR"
+rm -rf "$TEST_DIR" "$VRIFT_MANIFEST"
 echo "❌ FAIL: Failed to create manifest"
 exit 1

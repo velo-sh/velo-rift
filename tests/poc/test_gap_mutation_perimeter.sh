@@ -93,8 +93,11 @@ mkdir -p "$VELO_PROJECT_ROOT/.vrift"
 echo "PROTECTED_CONTENT_1234567890" > "$VELO_PROJECT_ROOT/mutation_test.txt"
 
 # Setup Shim
-export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
 if [[ "$(uname)" == "Darwin" ]]; then
+    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_FORCE_FLAT_NAMESPACE=1
+else
+    export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
 fi
 export VRIFT_SOCKET_PATH="/tmp/vrift.sock"
 export VRIFT_VFS_PREFIX="$VELO_PROJECT_ROOT"

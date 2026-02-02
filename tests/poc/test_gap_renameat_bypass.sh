@@ -67,8 +67,11 @@ sleep 1
 DAEMON_PID=$(cat "$TEST_DIR/daemon.pid")
 sleep 2
 
-export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
 if [[ "$(uname)" == "Darwin" ]]; then
+    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_FORCE_FLAT_NAMESPACE=1
+else
+    export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
 fi
 export VRIFT_SOCKET_PATH="/tmp/vrift.sock"
 export VRIFT_VFS_PREFIX="$VELO_PROJECT_ROOT"

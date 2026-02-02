@@ -9,10 +9,15 @@ SOCKET_PATH="/tmp/vrift.sock"
 DAEMON_LOG="/tmp/vriftd_isolation.log"
 
 # 1. Start Daemon
-pkill vriftd
+pkill vriftd || true
 export VR_THE_SOURCE="/tmp/vrift_source_isolation"
 mkdir -p "$VR_THE_SOURCE"
-./target/debug/(unset DYLD_INSERT_LIBRARIES && unset DYLD_FORCE_FLAT_NAMESPACE && vriftd start) > "$DAEMON_LOG" 2>&1 &
+(
+    unset DYLD_INSERT_LIBRARIES
+    unset DYLD_FORCE_FLAT_NAMESPACE
+    ./target/debug/vriftd start > "$DAEMON_LOG" 2>&1 &
+    echo $! > /tmp/vriftd_isolation.pid
+)
 sleep 1
 
 # 2. Check if Daemon has any logic to identify the caller

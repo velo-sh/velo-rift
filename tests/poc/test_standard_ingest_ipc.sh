@@ -20,8 +20,13 @@ echo "Hello Velo Functional" > "$TEST_FILE"
 echo "[+] Starting Daemon with RUST_LOG=debug..."
 export VR_THE_SOURCE="$CAS_ROOT"
 # Note: vriftd currently hardcodes /tmp/vrift.sock
-RUST_LOG=debug ./target/debug/(unset DYLD_INSERT_LIBRARIES && unset DYLD_FORCE_FLAT_NAMESPACE && vriftd start) > "$TEST_DIR/daemon.log" 2>&1 &
-DAEMON_PID=$!
+(
+    unset DYLD_INSERT_LIBRARIES
+    unset DYLD_FORCE_FLAT_NAMESPACE
+    RUST_LOG=debug ./target/debug/vriftd start > "$TEST_DIR/daemon.log" 2>&1 &
+    echo $! > "$TEST_DIR/daemon.pid"
+)
+DAEMON_PID=$(cat "$TEST_DIR/daemon.pid")
 sleep 1
 
 # 3. Check Daemon Status via CLI

@@ -14,7 +14,6 @@ use crate::syscalls::misc::{
 #[cfg(target_os = "macos")]
 use crate::syscalls::mmap::{mmap_shim, munmap_shim};
 // C variadic wrappers call velo_*_impl which is defined in syscalls/open.rs
-use crate::syscalls::open::{open_shim, openat_shim};
 #[cfg(target_os = "macos")]
 use crate::syscalls::open::{open_shim, openat_shim};
 #[cfg(target_os = "macos")]

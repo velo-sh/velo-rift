@@ -94,10 +94,10 @@ DAEMON_PID=$(cat "$VELO_PROJECT_ROOT/daemon.pid")
 sleep 2
 
 echo "[3] Running functional test..."
-export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
 if [[ "$(uname)" == "Darwin" ]]; then
-fi
-if [[ "$(uname)" == "Linux" ]]; then
+    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_FORCE_FLAT_NAMESPACE=1
+else
     export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
 fi
 export VRIFT_SOCKET_PATH="${VELO_PROJECT_ROOT}/.vrift/socket"
