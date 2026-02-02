@@ -395,11 +395,12 @@ exec "{}" "$@"
 /// to intercept syscalls from system binaries. The wrapper itself just
 /// passes through to the real command; actual VFS logic is in the shim.
 fn generate_wrapper_script(cmd: &str) -> String {
-    // Find the real binary path
+    // Find the real binary path (varies by platform)
     let real_path = match cmd {
-        "chmod" | "chown" | "rm" | "cp" | "mv" | "touch" | "mkdir" | "rmdir" => {
-            format!("/bin/{}", cmd)
-        }
+        // macOS paths
+        "chmod" | "rm" | "cp" | "mv" | "mkdir" | "rmdir" => format!("/bin/{}", cmd),
+        "chown" => "/usr/sbin/chown".to_string(),
+        "touch" => "/usr/bin/touch".to_string(),
         _ => format!("/usr/bin/{}", cmd),
     };
 
