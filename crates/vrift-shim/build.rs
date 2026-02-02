@@ -4,10 +4,8 @@
 //! C compiler generates proper ABI code for variadic functions.
 
 fn main() {
-    // Compile C shim on macOS and Linux
-    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "macos"
-        || std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "linux"
-    {
+    // Compile C shim on macOS
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "macos" {
         println!("cargo:rerun-if-changed=src/c/variadic_shim.c");
 
         cc::Build::new()

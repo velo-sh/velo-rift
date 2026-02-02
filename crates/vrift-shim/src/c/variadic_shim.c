@@ -95,14 +95,13 @@ static inline long raw_syscall(long number, long arg1, long arg2, long arg3,
 
 /* --- Implementation Functions (called by Rust proxies or direct shims) --- */
 
+// Linux interception is handled in interpose.rs using Rust shims to ensure
+// reliable symbol export. macOS shimming uses this C bridge to handle variadic
+// ABI.
+#if defined(__APPLE__)
 int open_shim_c_impl(const char *path, int flags, mode_t mode) {
   if (INITIALIZING) {
-#if defined(__linux__) && defined(__aarch64__) && !defined(SYS_OPEN)
-    return (int)raw_syscall(SYS_OPENAT, AT_FDCWD, (long)path, (long)flags,
-                            (long)mode);
-#else
     return (int)raw_syscall(SYS_OPEN, (long)path, (long)flags, (long)mode, 0);
-#endif
   }
   return velo_open_impl(path, flags, mode);
 }
@@ -114,57 +113,6 @@ int openat_shim_c_impl(int dirfd, const char *path, int flags, mode_t mode) {
   }
   return velo_openat_impl(dirfd, path, flags, mode);
 }
-
-/* --- Primary Interception Entry Points --- */
-
-// macOS uses open_shim/openat_shim proxies from Rust side for symbol export.
-// Linux uses direct open/openat/open64/openat64 shims.
-
-#if defined(__linux__)
-__attribute__((visibility("default"))) int open(const char *path, int flags,
-                                                ...) {
-  mode_t mode = 0;
-  if (flags & O_CREAT) {
-    va_list ap;
-    va_start(ap, flags);
-    mode = (mode_t)va_arg(ap, int);
-    va_end(ap);
-  }
-  return open_shim_c_impl(path, flags, mode);
-}
-__attribute__((visibility("default"))) int open64(const char *path, int flags,
-                                                  ...) {
-  va_list ap;
-  mode_t mode = 0;
-  if (flags & O_CREAT) {
-    va_start(ap, flags);
-    mode = va_arg(ap, int);
-    va_end(ap);
-  }
-  return open(path, flags, mode);
-}
-__attribute__((visibility("default"))) int openat(int dirfd, const char *path,
-                                                  int flags, ...) {
-  mode_t mode = 0;
-  if (flags & O_CREAT) {
-    va_list ap;
-    va_start(ap, flags);
-    mode = (mode_t)va_arg(ap, int);
-    va_end(ap);
-  }
-  return openat_shim_c_impl(dirfd, path, flags, mode);
-}
-__attribute__((visibility("default"))) int openat64(int dirfd, const char *path,
-                                                    int flags, ...) {
-  va_list ap;
-  mode_t mode = 0;
-  if (flags & O_CREAT) {
-    va_start(ap, flags);
-    mode = va_arg(ap, int);
-    va_end(ap);
-  }
-  return openat(dirfd, path, flags, mode);
-}
 #endif
 
 /* --- fcntl variadic bridge --- */
@@ -173,14 +121,6 @@ extern int velo_fcntl_impl(int fd, int cmd, long arg);
 
 #if defined(__APPLE__)
 int fcntl_shim_c_impl(int fd, int cmd, long arg) {
-  return velo_fcntl_impl(fd, cmd, arg);
-}
-#else
-__attribute__((visibility("default"))) int fcntl(int fd, int cmd, ...) {
-  va_list ap;
-  va_start(ap, cmd);
-  long arg = va_arg(ap, long);
-  va_end(ap);
   return velo_fcntl_impl(fd, cmd, arg);
 }
 #endif
