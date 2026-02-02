@@ -38,6 +38,7 @@ fs2 = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 indicatif = { version = "0.17", features = ["rayon"] }
+console = "0.15"
 
 [features]
 default = []

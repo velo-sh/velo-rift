@@ -167,23 +167,32 @@ enum VeloRequest {
 
 ### Activation Methods
 
-#### Method A: `vrift spawn` (Recommended)
+#### Method A: `vrift inception` (Recommended)
+
+Inspired by the movie *Inception* (盗梦空间):
 
 ```bash
-vrift spawn cargo build
-# Automatically sets up wrappers + shim + env
+# Enter the "dream" (VFS environment)
+eval "$(vrift inception)"
+🌀 Inception: Entering VFS layer...
+
+# Run your build
+cargo build
+
+# Exit the "dream"
+vrift wake
+💫 Wake: Exiting VFS layer
 ```
 
-#### Method B: Manual Setup
+#### Method B: Shell Hook (Auto-Inception)
 
 ```bash
-# 1. Generate wrappers
-vrift init-wrappers --output ~/.vrift/bin
+# Add to ~/.zshrc or ~/.bashrc
+eval "$(vrift hook zsh)"  # or bash/fish
 
-# 2. Add to shell profile
-echo 'export PATH="$HOME/.vrift/bin:$PATH"' >> ~/.zshrc
-echo 'export VRIFT_VFS_PREFIX="/vrift"' >> ~/.zshrc
-source ~/.zshrc
+# Now entering a VFS project auto-activates:
+cd my-project/  # Auto inception if .vrift/ exists
+cd ../          # Auto wake when leaving
 ```
 
 ### Limitations
@@ -244,11 +253,13 @@ source ~/.zshrc
 ## Action Items
 
 1. [ ] Implement `VirtualRename`, `VirtualChmod` etc. in daemon
-2. [ ] Create wrapper script generator (`vrift init-wrappers`)
-3. [ ] Research FUSE-T Rust bindings (`fuser` crate)
-4. [ ] Create `vrift-fuse` crate for FUSE-T integration
-5. [ ] Document SIP limitation in USAGE.md
-6. [ ] Add `vrift mount` CLI command for FUSE-T mode
+2. [ ] Implement `vrift inception` CLI command
+3. [ ] Implement `vrift wake` CLI command
+4. [ ] Implement `vrift hook <shell>` for auto-inception
+5. [ ] Research FUSE-T Rust bindings (`fuser` crate)
+6. [ ] Create `vrift-fuse` crate for FUSE-T integration
+7. [ ] Document SIP limitation in USAGE.md
+8. [ ] Add `vrift mount` CLI command for FUSE-T mode
 
 ---
 

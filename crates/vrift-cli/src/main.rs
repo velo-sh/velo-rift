@@ -23,6 +23,7 @@ use walkdir::WalkDir;
 mod active;
 mod daemon;
 pub mod gc;
+mod inception;
 mod isolation;
 mod mount;
 pub mod registry;
@@ -160,7 +161,7 @@ enum Commands {
         output: PathBuf,
     },
 
-    /// Activate Velo projection mode (RFC-0039)
+    /// Activate Velo projection mode (RFC-0039) [DEPRECATED: use `inception`]
     Active {
         /// Use Phantom mode (pure virtual projection)
         #[arg(long)]
@@ -171,11 +172,34 @@ enum Commands {
         directory: Option<PathBuf>,
     },
 
-    /// Deactivate Velo projection
+    /// Deactivate Velo projection [DEPRECATED: use `wake`]
     Deactivate {
         /// Project directory (default: current directory)
         #[arg(value_name = "DIR")]
         directory: Option<PathBuf>,
+    },
+
+    /// Enter VFS Inception Mode - "Enter the Dream" 🌀
+    ///
+    /// Outputs shell script for eval. Usage: eval "$(vrift inception)"
+    Inception {
+        /// Project directory (default: current directory)
+        #[arg(value_name = "DIR")]
+        directory: Option<PathBuf>,
+    },
+
+    /// Exit VFS Inception Mode - "Wake up" 💫
+    ///
+    /// Outputs shell script for eval. Usage: eval "$(vrift wake)"
+    Wake,
+
+    /// Generate shell hook for auto-inception/wake on cd
+    ///
+    /// Usage: eval "$(vrift hook zsh)"  # or bash/fish
+    Hook {
+        /// Shell type: bash, zsh, or fish
+        #[arg(value_name = "SHELL")]
+        shell: String,
     },
 
     /// Configuration management
@@ -335,6 +359,12 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
             active::deactivate(&dir)
         }
+        Commands::Inception { directory } => {
+            let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
+            inception::cmd_inception(&dir)
+        }
+        Commands::Wake => inception::cmd_wake(),
+        Commands::Hook { shell } => inception::cmd_hook(&shell),
         Commands::Config { command } => cmd_config(command),
     }
 }

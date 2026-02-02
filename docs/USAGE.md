@@ -229,12 +229,25 @@ vrift clean --all --force --yes
 ### 1. Hash(Content) = Identity
 In Velo, identity is tied to **Content**, not path. If 100 projects use the same `libpython.so`, Velo Rift stores only **one** copy in **TheSource** (CAS).
 
-### 2. Two Projection Modes
-Velo Rift chooses the best way to "project" the virtual world based on your OS:
+### 2. Two Inception Modes
+Velo Rift offers two ways to enter the VFS "dream":
 *   **The Shim (macOS/Linux)**: Uses `LD_PRELOAD` to intercept syscalls. Zero disk footprint. Best for local development.
 *   **Link Farm (Linux Isolation)**: Creates a temporary directory of hardlinks. Best for containers and static binaries.
 
-### 3. Absolute Determinism
+### 3. Inception Commands (macOS SIP Bypass)
+On macOS, SIP restricts shim injection for system binaries. Use Inception Mode for full coverage:
+```bash
+# Enter the dream (sets up PATH + shim)
+eval "$(vrift inception)"
+
+# Run your build
+cargo build
+
+# Exit the dream
+vrift wake
+```
+
+### 4. Absolute Determinism
 A `vrift.manifest` uniquely defines an entire environment. If the manifest hash is the same, the execution outcome is guaranteed to be reproducible.
 
 ---

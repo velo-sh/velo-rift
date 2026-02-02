@@ -39,14 +39,15 @@ Implement Transparent Virtual Projection as defined in RFC-0039.
 
 ## P1: CLI & UX
 
-### 6. `vrift active` Command
-- [ ] Activate projection mode
+### 6. `vrift inception` Command
+- [ ] Enter VFS inception mode ("Enter the dream")
 - [ ] Persist Session state to `.vrift/session.json`
 - [ ] Display mode: `[Solid]` or `[Phantom]`
+- [ ] `vrift wake` to exit inception mode
 
 ### 7. Mode Selection
 - [ ] `--solid` (default): Physical files safe
-- [ ] `--phantom`: Virtual projection
+- [ ] `--phantom`: Pure virtual (files in CAS only)
 
 ---
 

@@ -1979,6 +1979,7 @@ dependencies = [
  "bincode",
  "chrono",
  "clap",
+ "console",
  "dirs 5.0.1",
  "fs2",
  "indicatif",

@@ -23,10 +23,10 @@ Velo Rift™ aims to eliminate the friction between "Project Content" and "Disk 
 
 ## 3. Core Concepts
 
-### 3.1 Active Projection
-- **Action**: `vrift active`
-- **Function**: Transitions the workspace into a persistent **Projected State**. Velo Rift™ acts as a "Live Lens" over the project directory.
-- **Dependency Replacement**: Folders like `node_modules` or `target` are projected from the CAS. They appear physically present but are managed virtual assets.
+### 3.1 Inception Mode
+- **Action**: `vrift inception` (Enter the "dream")
+- **Function**: Transitions the workspace into a persistent **VFS Layer**. Velo Rift™ acts as a "Live Lens" over the project directory.
+- **Dependency Replacement**: Folders like `node_modules` or `target` are mapped from the CAS. They appear physically present but are managed virtual assets.
 
 ### 3.2 Live Ingest
 Velo Rift™ automates the existing `ingest` logic:
@@ -65,7 +65,7 @@ Velo Rift™ provides two modes to balance safety and performance.
 - **UX**: `Velo is active in [Solid] mode. Physical files are safe.`
 
 ### 4.2 Phantom Mode (Advanced)
-- **Behavior**: Physical files moved to CAS, replaced by virtual projection.
+- **Behavior**: Physical files moved to CAS, replaced by virtual mapping.
 - **Rollback**: Requires inverse-ingest (Restoration).
 - **UX**: `Velo is active in [Phantom] mode. Project is now purely virtual.`
 
@@ -348,10 +348,10 @@ Velo Rift must survive restarts without losing file mappings.
 > For implementation details (LMDB API, startup recovery code, WAL), see [ARCHITECTURE.md §9.8](./ARCHITECTURE.md#98-persistence--crash-recovery-rfc-0039).
 
 ## 8. Implementation Notes
-- **Persistent State**: `vrift active` creates a long-lived Session.
+- **Persistent State**: `vrift inception` creates a long-lived Session.
 - **ABI Continuity**: The Session persists the **ABI_Context**, ensuring that a long-running development environment remains binary-consistent.
 - **Shim Performance**: Shadow capturing avoids the latency of synchronous hashing during small `write()` calls by deferring the ingest until `close()`.
-- **SIP Compliance**: On macOS, `active` mode handles Entitlements and SIP-stripping for children automatically.
+- **SIP Compliance**: On macOS, `inception` mode handles Entitlements and SIP-stripping for children automatically.
 
 ## 9. Implementation References
 
