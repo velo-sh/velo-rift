@@ -586,6 +586,7 @@ impl ShimState {
     }
 
     /// RFC-0047: Create directory entry in manifest
+    #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
     pub(crate) fn manifest_mkdir(&self, path: &str, mode: libc::mode_t) -> Result<(), ()> {
         if unsafe { sync_ipc_manifest_mkdir(&self.socket_path, path, mode as u32) } {
             Ok(())
