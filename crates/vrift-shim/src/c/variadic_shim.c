@@ -1,27 +1,34 @@
 /**
- * C Variadic Shim for macOS ARM64 - Direct Syscall Design
+ * C Variadic Shim for macOS ARM64
  *
- * Problem: dlsym causes deadlock during dyld initialization.
- * Solution: Use direct syscall instruction, no dynamic resolution.
+ * Problem: Rust can't correctly handle variadic functions (open, openat).
+ * Solution: C wrapper extracts variadic args, checks VFS_READY, then either:
+ *   - If VFS not ready: direct syscall (zero Rust calls during dyld init)
+ *   - If VFS ready: call Rust velo_*_impl for VFS logic
  *
- * macOS syscall numbers:
- *   open:   5
- *   openat: 463
- *
- * NOTE: This is a passthrough-only implementation. VFS logic requires
- * stable TLS/IPC which isn't available during early dyld init.
+ * Architecture:
+ *   libc caller → C shim (va_list) → [VFS check] → Rust/syscall
  */
 
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+/* Rust VFS implementation functions - only called when VFS is ready */
+extern int velo_open_impl(const char *path, int flags, mode_t mode);
+extern int velo_openat_impl(int dirfd, const char *path, int flags,
+                            mode_t mode);
+
+/* VFS_READY flag exported from Rust - atomic bool (1 byte) */
+extern _Atomic bool VFS_READY;
+
 /**
- * open() variadic wrapper - passes through to real syscall
+ * open() variadic wrapper
  */
 int open_c_wrapper(const char *path, int flags, ...) {
   mode_t mode = 0;
@@ -33,8 +40,13 @@ int open_c_wrapper(const char *path, int flags, ...) {
     va_end(ap);
   }
 
-  /* Direct syscall to avoid any interposition */
-  return (int)syscall(SYS_open, path, flags, mode);
+  /* Fast path: VFS not ready - direct syscall, no Rust calls */
+  if (!VFS_READY) {
+    return (int)syscall(SYS_open, path, flags, mode);
+  }
+
+  /* VFS path: call Rust implementation */
+  return velo_open_impl(path, flags, mode);
 }
 
 /**
@@ -50,11 +62,16 @@ int openat_c_wrapper(int dirfd, const char *path, int flags, ...) {
     va_end(ap);
   }
 
+  /* Fast path: VFS not ready - direct syscall, no Rust calls */
+  if (!VFS_READY) {
 #ifdef SYS_openat
-  return (int)syscall(SYS_openat, dirfd, path, flags, mode);
+    return (int)syscall(SYS_openat, dirfd, path, flags, mode);
 #else
-  /* Fallback: use __openat if available */
-  extern int __openat(int, const char *, int, mode_t);
-  return __openat(dirfd, path, flags, mode);
+    extern int __openat(int, const char *, int, mode_t);
+    return __openat(dirfd, path, flags, mode);
 #endif
+  }
+
+  /* VFS path: call Rust implementation */
+  return velo_openat_impl(dirfd, path, flags, mode);
 }

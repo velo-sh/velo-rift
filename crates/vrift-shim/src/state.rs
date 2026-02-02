@@ -22,6 +22,27 @@ pub(crate) static INITIALIZING: AtomicBool = AtomicBool::new(false);
 pub(crate) static BOOTSTRAPPING: AtomicBool = AtomicBool::new(false);
 pub(crate) static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// VFS activation flag - starts FALSE, becomes TRUE when daemon connection is established.
+/// Until VFS_READY is true, all open/openat calls passthrough to kernel directly.
+/// This enables "zero config" UX: boot fast, activate VFS seamlessly when ready.
+/// Exported with no_mangle so C wrapper can check it directly without FFI call.
+#[no_mangle]
+pub static VFS_READY: AtomicBool = AtomicBool::new(false);
+
+/// Activate VFS - called when daemon handshake succeeds
+#[inline]
+pub fn activate_vfs() {
+    VFS_READY.store(true, Ordering::Release);
+    shim_log!("[VFS] Activated - virtual file operations enabled\n");
+}
+
+/// Check if VFS is ready for use
+/// VFS_READY is only set true after daemon handshake, so no need to check other init flags
+#[inline]
+pub fn is_vfs_ready() -> bool {
+    VFS_READY.load(Ordering::Acquire)
+}
+
 // Lock-free recursion key using atomic instead of OnceLock (avoids mutex deadlock during library init)
 static RECURSION_KEY_INIT: AtomicBool = AtomicBool::new(false);
 static RECURSION_KEY_VALUE: AtomicUsize = AtomicUsize::new(0);

@@ -243,21 +243,37 @@ pub unsafe extern "C" fn __openat64_2(dirfd: c_int, p: *const c_char, f: c_int) 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn velo_open_impl(p: *const c_char, f: c_int, m: mode_t) -> c_int {
-    // Get real open via dlsym to avoid recursion (libc::open is interposed!)
-    let real_fn = libc::dlsym(libc::RTLD_NEXT, c"open".as_ptr());
-    let real: OpenFn = std::mem::transmute(real_fn);
+    use crate::state::is_vfs_ready;
 
-    // Early-boot passthrough to avoid deadlock during dyld initialization
-    if INITIALIZING.load(Ordering::Relaxed) {
-        return real(p, f, m);
+    // Raw syscall - no dependencies, always works, even during dyld init
+    #[inline(always)]
+    unsafe fn raw_open(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
+        // macOS ARM64 syscall: open = 5
+        let ret: i64;
+        std::arch::asm!(
+            "mov x16, #5",     // SYS_open = 5
+            "svc #0x80",       // syscall
+            in("x0") path,
+            in("x1") flags as i64,
+            in("x2") mode as i64,
+            lateout("x0") ret,
+            options(nostack)
+        );
+        ret as c_int
     }
 
+    // Fast path: VFS not ready - passthrough directly to kernel
+    if !is_vfs_ready() {
+        return raw_open(p, f, m);
+    }
+
+    // VFS path: full logic with recursion guard
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
-        None => return real(p, f, m),
+        None => return raw_open(p, f, m),
     };
 
-    open_impl(p, f, m).unwrap_or_else(|| real(p, f, m))
+    open_impl(p, f, m).unwrap_or_else(|| raw_open(p, f, m))
 }
 
 // Called by C variadic wrapper (openat_c_wrapper) with clean args
@@ -269,22 +285,38 @@ pub unsafe extern "C" fn velo_openat_impl(
     flags: c_int,
     mode: mode_t,
 ) -> c_int {
-    if INITIALIZING.load(Ordering::Relaxed) {
-        let f = libc::dlsym(libc::RTLD_NEXT, c"openat".as_ptr());
-        let real: OpenatFn = std::mem::transmute(f);
-        return real(dirfd, pathname, flags, mode);
+    use crate::state::is_vfs_ready;
+
+    // Raw syscall - no dependencies, always works, even during dyld init
+    #[inline(always)]
+    unsafe fn raw_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
+        // macOS ARM64 syscall: openat = 463
+        let ret: i64;
+        std::arch::asm!(
+            "mov x16, #463",   // SYS_openat = 463
+            "svc #0x80",       // syscall
+            in("x0") dirfd as i64,
+            in("x1") path,
+            in("x2") flags as i64,
+            in("x3") mode as i64,
+            lateout("x0") ret,
+            options(nostack)
+        );
+        ret as c_int
     }
 
+    // Fast path: VFS not ready - passthrough directly to kernel
+    if !is_vfs_ready() {
+        return raw_openat(dirfd, pathname, flags, mode);
+    }
+
+    // VFS path: full logic with recursion guard
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
-        None => {
-            let real = std::mem::transmute::<*const (), OpenatFn>(IT_OPENAT.old_func);
-            return real(dirfd, pathname, flags, mode);
-        }
+        None => return raw_openat(dirfd, pathname, flags, mode),
     };
 
-    let real = std::mem::transmute::<*const (), OpenatFn>(IT_OPENAT.old_func);
-    open_impl(pathname, flags, mode).unwrap_or_else(|| real(dirfd, pathname, flags, mode))
+    open_impl(pathname, flags, mode).unwrap_or_else(|| raw_openat(dirfd, pathname, flags, mode))
 }
 
 type OpenFn = unsafe extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
