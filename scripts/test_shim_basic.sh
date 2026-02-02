@@ -72,22 +72,16 @@ unset VRIFT_VFS_PREFIX
 # 1. Ingest
 echo "Ingesting source..."
 export VRIFT_CAS_ROOT="$TEST_DIR/cas"
-# Use --prefix / to ensure paths in manifest match what shim expects after stripping VRIFT_VFS_PREFIX
-"$VELO_BIN" ingest "$TEST_DIR/source" --prefix / > "$TEST_DIR/ingest.log" 2>&1
+# Use --prefix "" for correct /testfile.txt mapping
+"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "" -o "$TEST_DIR/source/vrift.manifest" > "$TEST_DIR/ingest.log" 2>&1
 
 # 2. Start daemon
 echo "Starting daemon..."
 export VRIFT_CAS_ROOT="$TEST_DIR/cas"
-export VRIFT_MANIFEST="$TEST_DIR/source/.vrift/manifest.lmdb"
 export RUST_LOG=info
 
-if [ ! -d "$VRIFT_CAS_ROOT" ]; then
-    echo "❌ ERROR: CAS dir $VRIFT_CAS_ROOT does not exist before daemon start!"
-    ls -la "$TEST_DIR"
-    exit 1
-fi
-
 "$VRIFTD_BIN" start > "$TEST_DIR/daemon.log" 2>&1 &
+VRIFTD_PID=$!
 sleep 2
 
 # Verify daemon is running
@@ -98,6 +92,7 @@ if ! pgrep vriftd > /dev/null; then
 fi
 
 # 3. Compile helper C test
+# ... (lines 100-134 omitted for brevity, but I'll keep the block intact)
 echo "Compiling C test program..."
 cat > "$TEST_DIR/test.c" << 'CEOF'
 #include <fcntl.h>
@@ -145,7 +140,7 @@ if [ "$OS_TYPE" == "Darwin" ]; then
     export DYLD_FORCE_FLAT_NAMESPACE=1
 fi
 export VRIFT_CAS_ROOT="$TEST_DIR/cas"
-export VRIFT_MANIFEST="$TEST_DIR/source/.vrift/manifest.lmdb"
+export VRIFT_MANIFEST="$TEST_DIR/source/vrift.manifest"
 export VRIFT_VFS_PREFIX="/vrift"
 export VRIFT_DEBUG=1
 

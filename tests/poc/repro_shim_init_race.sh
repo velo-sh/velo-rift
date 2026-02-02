@@ -1,38 +1,61 @@
 #!/bin/bash
-# repro_shim_init_race.sh
-# Solidifies the bug where early VFS readiness checks cause the first call to passthrough.
+# Test: Shim Initialization Race Reproductive Step
+# Purpose: Verify VFS interception works for the VERY FIRST syscall
 
 set -e
-PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-VELO_BIN="$PROJECT_ROOT/target/release/vrift"
-VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
+
+# Setup paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../" && pwd)"
+VELO_BIN="${PROJECT_ROOT}/target/release/vrift"
+VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
+
 # OS Detection
 if [ "$(uname -s)" == "Darwin" ]; then
-    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
     PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
 else
-    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.so"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.so"
     PRELOAD_VAR="LD_PRELOAD"
 fi
 
 TEST_DIR=$(mktemp -d)
-# trap "rm -rf '$TEST_DIR'" EXIT  <-- Disabled for debugging
-echo "DEBUG: TEST_DIR=$TEST_DIR"
 mkdir -p "$TEST_DIR/source"
+mkdir -p "$TEST_DIR/cas"
+
+# Helper for cleaning up files that might be immutable (Solid hardlinks)
+safe_rm() {
+    local target="$1"
+    if [ -e "$target" ]; then
+        if [ "$(uname -s)" == "Darwin" ]; then
+            chflags -R nouchg "$target" 2>/dev/null || true
+        fi
+        rm -rf "$target"
+    fi
+}
+
+cleanup() {
+    pkill -9 -f "$TEST_DIR" || true
+    safe_rm "$TEST_DIR"
+}
+trap cleanup EXIT
+
+echo "=== Repro Shell: Shim Init Race / Early Call ==="
 
 # 1. Ingest
-export VRIFT_CAS_ROOT="$TEST_DIR/cas"
-# Ingest with prefix / and ensure we are ingesting the right thing
 echo "secret content" > "$TEST_DIR/source/file.txt"
-"$VELO_BIN" ingest "$TEST_DIR/source" --prefix / > "$TEST_DIR/ingest.log" 2>&1
+export VRIFT_CAS_ROOT="$TEST_DIR/cas"
+"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "" -o "$TEST_DIR/source/vrift.manifest" > "$TEST_DIR/ingest.log" 2>&1
 
-# 2. Start daemon
-export VRIFT_MANIFEST="$TEST_DIR/source/.vrift/manifest.lmdb"
+# 2. Start daemon with isolated socket
+echo "Starting daemon..."
+export VRIFT_SOCKET_PATH="$TEST_DIR/vrift.sock"
+export VRIFT_MANIFEST="$TEST_DIR/source/vrift.manifest"
 "$VRIFTD_BIN" start > "$TEST_DIR/daemon.log" 2>&1 &
+VRIFT_PID=$!
 sleep 2
 
 # 3. Reproductive Step: Try to cat the virtual file
-# Avoid SIP and Signature issues by compiling a tiny cat
 cat <<EOF > "$TEST_DIR/tiny_cat.c"
 #include <stdio.h>
 #include <fcntl.h>
@@ -49,23 +72,28 @@ int main(int argc, char** argv) {
 }
 EOF
 gcc "$TEST_DIR/tiny_cat.c" -o "$TEST_DIR/cat"
+codesign -s - -f "$TEST_DIR/cat" || true
+codesign -s - -f "$SHIM_LIB" || true
 
 echo "--- Proof Analysis ---"
+set +e
 # We expect success now because the race/deadlock is fixed.
 # If it fails with "No such file", it means interception is NOT working.
-# If it fails with "No such file", it means interception is NOT working.
-if env "$PRELOAD_VAR"="$SHIM_LIB" VRIFT_VFS_PREFIX="/vrift" "$TEST_DIR/cat" /vrift/file.txt | grep -q "secret content"; then
-    echo "SUCCESS: VFS Interception worked for early call!"
+env "$PRELOAD_VAR"="$SHIM_LIB" \
+DYLD_FORCE_FLAT_NAMESPACE=1 \
+VRIFT_SOCKET_PATH="$TEST_DIR/vrift.sock" \
+VRIFT_VFS_PREFIX="/vrift" \
+"$TEST_DIR/cat" /vrift/file.txt > "$TEST_DIR/output.txt" 2>&1
+RET=$?
+set -e
+
+if grep -q "secret content" "$TEST_DIR/output.txt"; then
+    echo "✅ SUCCESS: VFS Interception worked for early call!"
 else
-    echo "FAILURE: VFS Interception failed."
-    # Dump logs for diagnostics
+    echo "❌ FAILURE: VFS Interception failed."
+    cat "$TEST_DIR/output.txt"
     cat "$TEST_DIR/daemon.log"
     exit 1
 fi
 
-# Cleanup
-pkill vriftd || true
-if [ "$(uname -s)" == "Darwin" ]; then
-    chflags -R nouchg "$TEST_DIR" || true
-fi
-rm -rf "$TEST_DIR"
+exit 0

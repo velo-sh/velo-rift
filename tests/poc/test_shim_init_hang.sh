@@ -21,6 +21,8 @@ trap cleanup EXIT
 # Copy a simple binary to bypass SIP
 cp /bin/echo "$TEST_DIR/echo"
 cp /bin/chmod "$TEST_DIR/chmod"
+codesign -s - -f "$TEST_DIR/echo" 2>/dev/null || true
+codesign -s - -f "$TEST_DIR/chmod" 2>/dev/null || true
 
 SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
 if [[ ! -f "$SHIM_PATH" ]]; then
