@@ -24,6 +24,10 @@ for i in $(seq 1 100); do
 done
 echo "    Created 100 test files"
 
+get_time() {
+    python3 -c 'import time; print(time.time())'
+}
+
 echo ""
 echo "[2] Concurrent Stat Stress Test:"
 CONCURRENT=10
@@ -38,12 +42,12 @@ stress_stat() {
     done
 }
 
-START=$(date +%s.%N)
+START=$(get_time)
 for i in $(seq 1 $CONCURRENT); do
     stress_stat $i &
 done
 wait
-END=$(date +%s.%N)
+END=$(get_time)
 
 DURATION=$(echo "$END - $START" | bc)
 TOTAL_OPS=$((CONCURRENT * ITERATIONS * 100))
@@ -65,12 +69,12 @@ stress_open() {
     done
 }
 
-START=$(date +%s.%N)
+START=$(get_time)
 for i in $(seq 1 $CONCURRENT); do
     stress_open $i &
 done
 wait
-END=$(date +%s.%N)
+END=$(get_time)
 
 DURATION=$(echo "$END - $START" | bc)
 echo "    Duration: ${DURATION}s"
