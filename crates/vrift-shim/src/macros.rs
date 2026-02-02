@@ -1,3 +1,27 @@
+/// Pattern 2648/2649: Passthrough guard for shim initialization safety.
+/// Use this at the start of every shim function to bypass VFS logic during dyld bootstrap.
+///
+/// # INITIALIZING State Machine:
+/// - State 2: Early-Init (dyld loading) - TLS unsafe, MUST passthrough
+/// - State 3: Busy (ShimState initializing) - TLS unsafe, MUST passthrough  
+/// - State 1: C constructor ran - TLS safe, can run Rust
+/// - State 0: Fully initialized - TLS safe, can run Rust
+///
+/// # Usage:
+/// ```ignore
+/// passthrough_if_init!(real, arg1, arg2);  // Expands to early return if state >= 2
+/// ```
+#[macro_export]
+macro_rules! passthrough_if_init {
+    ($real:expr $(, $arg:expr)*) => {
+        if $crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) >= 2
+            || $crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return $real($($arg),*);
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! shim_log {
     ($msg:expr) => {

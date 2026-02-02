@@ -14,10 +14,53 @@ When loaded via `DYLD_INSERT_LIBRARIES`, the shim's code executes **before** dyl
 | `std::thread::current()` | `ID` / `CURRENT` TLS | Avoid entirely |
 | `println!` / `eprintln!` | `OUTPUT_CAPTURE` TLS | `libc::write(2, ...)` |
 | `panic!` | `LOCAL_PANIC_COUNT` TLS | `libc::abort()` |
+| `std::env::var()` | Internal Mutex/TLS | `libc::getenv()` ✅ |
 
 ## Golden Rules
 
-### 1. Never modify init-path code without testing
+### 1. Use `passthrough_if_init!` Macro (Pattern 2648/2649)
+
+Every shim entry point MUST use this macro:
+
+```rust
+#[no_mangle]
+pub unsafe extern "C" fn my_shim(arg: i32) -> i32 {
+    let real = /* get real function */;
+    passthrough_if_init!(real, arg);  // Early return if TLS unsafe
+    
+    // ... VFS logic here (only runs when TLS is safe)
+}
+```
+
+### 2. INITIALIZING State Check: Use `>= 2`, NOT `!= 0`
+
+```
+State 2 (Early-Init) → TLS unmapped, MUST passthrough
+State 3 (Busy)       → ShimState initializing, MUST passthrough
+State 1 (Rust-Init)  → C constructor ran, TLS SAFE ✅
+State 0 (Ready)      → Full VFS active, TLS SAFE ✅
+```
+
+❌ **WRONG**: `if INITIALIZING.load(Relaxed) != 0 { return real(); }`
+✅ **CORRECT**: `if INITIALIZING.load(Relaxed) >= 2 { return real(); }`
+
+### 3. Environment Variables: Use `libc::getenv()`
+
+❌ **WRONG** (triggers TLS):
+```rust
+if let Ok(val) = std::env::var("VRIFT_VFS_PREFIX") { ... }
+```
+
+✅ **CORRECT** (TLS-free):
+```rust
+let env_name = b"VRIFT_VFS_PREFIX\0";
+let ptr = libc::getenv(env_name.as_ptr() as *const c_char);
+if !ptr.is_null() {
+    let val = CStr::from_ptr(ptr).to_str().ok();
+}
+```
+
+### 4. Never modify init-path code without testing
 
 ```bash
 # Always test after changes to state.rs, lib.rs, or any shim entry point:
@@ -26,37 +69,14 @@ DYLD_INSERT_LIBRARIES=target/debug/libvrift_shim.dylib /tmp/test_minimal
 
 If the process hangs, your change introduced a TLS trigger.
 
-### 2. Check for hidden dependencies
+### 5. Check for hidden dependencies
 
 ```bash
 # Audit TLS symbols before merging:
 nm target/debug/libvrift_shim.dylib | grep -i tlv
 ```
 
-Expected output should show only these 6 internal Rust TLS (which are safe because they're only accessed *after* `TLS_READY`):
-- `OUTPUT_CAPTURE`, `DTORS`, `ID`, `CURRENT`, `LOCAL_PANIC_COUNT`, `REGISTERED`
-
-### 3. Do NOT replace std types without careful analysis
-
-❌ **What I tried (caused regression):**
-```rust
-// Replacing std::sync::Mutex with spin::Mutex broke lazy initialization
-use spin::Mutex;  // Different API: .lock() returns guard directly, not Result
-```
-
-The issue wasn't just API difference—it was that the initialization order changed.
-
-### 4. Use the three-state initialization guard
-
-```
-State 2 (Early-Init) → TLS unmapped, use raw syscalls only
-State 1 (Rust-Init)  → Shim initializing, bounded spin-wait
-State 0 (Ready)      → Full VFS active
-```
-
-All shim entry points must check `TLS_READY` before using any Rust features.
-
-### 5. Framework pollution check
+### 6. Framework pollution check
 
 ```bash
 # Ensure no hidden framework linkage:
@@ -72,7 +92,8 @@ otool -L target/debug/libvrift_shim.dylib
 |------|--------------|-------|
 | `lib.rs` SET_READY | 🔴 CRITICAL | Constructor runs during dyld bootstrap |
 | `state.rs` init() | 🔴 CRITICAL | Must use only libc, no Rust allocator |
-| `syscalls/*.rs` entry | 🟡 CAUTION | Must check TLS_READY before Rust code |
+| `macros.rs` | 🟡 CAUTION | `passthrough_if_init!` must be correct |
+| `syscalls/*.rs` entry | 🟡 CAUTION | Must use `passthrough_if_init!` |
 | Other internal code | 🟢 SAFE | Only called after initialization |
 
 ## Reference
