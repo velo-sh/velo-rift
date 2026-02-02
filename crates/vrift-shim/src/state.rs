@@ -587,7 +587,7 @@ impl ShimState {
 
     /// RFC-0047: Create directory entry in manifest
     pub(crate) fn manifest_mkdir(&self, path: &str, mode: libc::mode_t) -> Result<(), ()> {
-        if unsafe { sync_ipc_manifest_mkdir(&self.socket_path, path, mode.into()) } {
+        if unsafe { sync_ipc_manifest_mkdir(&self.socket_path, path, mode as u32) } {
             Ok(())
         } else {
             Err(())

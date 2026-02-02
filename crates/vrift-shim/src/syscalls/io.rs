@@ -3,12 +3,17 @@
 //! Provides file descriptor tracking for VFS files, enabling proper
 //! handling of dup/dup2, fchdir, lseek, ftruncate, etc.
 
-use libc::{c_int, off_t};
+use libc::c_int;
+#[cfg(target_os = "macos")]
+use libc::off_t;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+#[cfg(target_os = "macos")]
 use crate::interpose::{IT_DUP, IT_DUP2, IT_FCHDIR, IT_FTRUNCATE, IT_LSEEK};
+#[cfg(target_os = "macos")]
 use crate::state::INITIALIZING;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
 
 /// Global FD tracking table: fd -> (path, is_vfs_file)
