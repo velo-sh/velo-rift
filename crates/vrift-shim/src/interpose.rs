@@ -349,9 +349,20 @@ pub unsafe extern "C" fn posix_spawnp_shim(
     posix_spawnp(p, f, fa, at, ar, e)
 }
 
+// NOTE: open() is variadic (fn open(path, flags, ...) -> int) - mode is only
+// present when O_CREAT is set. Cannot safely interpose with fixed-arg shim as
+// mode parameter may be garbage for non-create calls. Same issue as fcntl.
+// TODO: Use libc::open with conditional mode extraction, or use different approach.
+// #[cfg(target_os = "macos")]
+// #[link_section = "__DATA,__interpose"]
+// #[used]
+// pub static IT_OPEN: Interpose = Interpose {
+//     new_func: open_shim as *const (),
+//     old_func: open as *const (),
+// };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__interpose"]
 #[used]
+#[allow(dead_code)]
 pub static IT_OPEN: Interpose = Interpose {
     new_func: open_shim as *const (),
     old_func: open as *const (),
@@ -590,9 +601,17 @@ pub static IT_READ: Interpose = Interpose {
 //     new_func: fcntl_shim as *const (),
 //     old_func: libc::fcntl as *const (),
 // };
+// NOTE: openat() is variadic like open() - mode is optional
+// #[cfg(target_os = "macos")]
+// #[link_section = "__DATA,__interpose"]
+// #[used]
+// pub static IT_OPENAT: Interpose = Interpose {
+//     new_func: openat_shim as *const (),
+//     old_func: openat as *const (),
+// };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__interpose"]
 #[used]
+#[allow(dead_code)]
 pub static IT_OPENAT: Interpose = Interpose {
     new_func: openat_shim as *const (),
     old_func: openat as *const (),

@@ -238,8 +238,11 @@ pub unsafe extern "C" fn __openat64_2(dirfd: c_int, p: *const c_char, f: c_int) 
 // macOS Shims
 // ============================================================================
 
+// NOTE: open_shim not currently interposed due to variadic ABI issue
+// Kept for future reference when proper variadic interposition is implemented
 #[cfg(target_os = "macos")]
 #[no_mangle]
+#[allow(dead_code)]
 pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_int {
     let real = std::mem::transmute::<*const (), OpenFn>(IT_OPEN.old_func);
 

@@ -56,9 +56,7 @@ else
     echo "Output (last 10 lines):"
     echo "$OUTPUT" | tail -10
     echo ""
-    echo "KNOWN ISSUES:"
-    echo "1. FIXED: Tokio runtime crash (fcntl variadic ABI)"
-    echo "2. OPEN: rustc incremental compile file access issues"
-    echo "This is tracked for investigation"
+    echo "KNOWN ISSUES (should be fixed):"
+    echo "- Variadic ABI: open/openat/fcntl cannot be safely interposed"
     exit 1
 fi
