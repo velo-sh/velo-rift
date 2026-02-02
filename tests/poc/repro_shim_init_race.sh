@@ -6,7 +6,14 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VELO_BIN="$PROJECT_ROOT/target/release/vrift"
 VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+# OS Detection
+if [ "$(uname -s)" == "Darwin" ]; then
+    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+    PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
+else
+    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.so"
+    PRELOAD_VAR="LD_PRELOAD"
+fi
 
 TEST_DIR=$(mktemp -d)
 # trap "rm -rf '$TEST_DIR'" EXIT  <-- Disabled for debugging
@@ -46,7 +53,8 @@ gcc "$TEST_DIR/tiny_cat.c" -o "$TEST_DIR/cat"
 echo "--- Proof Analysis ---"
 # We expect success now because the race/deadlock is fixed.
 # If it fails with "No such file", it means interception is NOT working.
-if DYLD_INSERT_LIBRARIES="$SHIM_LIB" VRIFT_VFS_PREFIX="/vrift" "$TEST_DIR/cat" /vrift/file.txt | grep -q "secret content"; then
+# If it fails with "No such file", it means interception is NOT working.
+if env "$PRELOAD_VAR"="$SHIM_LIB" VRIFT_VFS_PREFIX="/vrift" "$TEST_DIR/cat" /vrift/file.txt | grep -q "secret content"; then
     echo "SUCCESS: VFS Interception worked for early call!"
 else
     echo "FAILURE: VFS Interception failed."

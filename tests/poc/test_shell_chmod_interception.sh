@@ -10,11 +10,22 @@ VELO_PROJECT_ROOT="$TEST_DIR/workspace"
 
 echo "=== Test: Shell chmod Interception ==="
 
+# OS Detection
+if [ "$(uname -s)" == "Darwin" ]; then
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
+    PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
+    STAT_MODE_FLAG="-f %Lp"
+else
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.so"
+    PRELOAD_VAR="LD_PRELOAD"
+    STAT_MODE_FLAG="-c %a"
+fi
+
 # Prepare workspace
 mkdir -p "$VELO_PROJECT_ROOT/.vrift"
 echo "PROTECTED" > "$VELO_PROJECT_ROOT/test.txt"
 chmod 444 "$VELO_PROJECT_ROOT/test.txt"
-ORIGINAL_MODE=$(stat -f "%Lp" "$VELO_PROJECT_ROOT/test.txt")
+ORIGINAL_MODE=$(stat $STAT_MODE_FLAG "$VELO_PROJECT_ROOT/test.txt")
 echo "Original mode: $ORIGINAL_MODE"
 
 # Avoid SIP and Signature issues by compiling a tiny chmod
@@ -37,19 +48,21 @@ gcc "$TEST_DIR/tiny_chmod.c" -o "$TEST_DIR/bin/chmod"
 CHMOD_CMD="$TEST_DIR/bin/chmod"
 
 # Setup Shim
-export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
-export DYLD_FORCE_FLAT_NAMESPACE=1
+export "$PRELOAD_VAR"="$SHIM_LIB"
+if [ "$(uname -s)" == "Darwin" ]; then
+    export DYLD_FORCE_FLAT_NAMESPACE=1
+fi
 export VRIFT_VFS_PREFIX="$VELO_PROJECT_ROOT"
 
 # Test: Run chmod
 echo "Running: $CHMOD_CMD 644 $VELO_PROJECT_ROOT/test.txt"
 
 if "$CHMOD_CMD" 644 "$VELO_PROJECT_ROOT/test.txt" 2>/dev/null; then
-    NEW_MODE=$(stat -f "%Lp" "$VELO_PROJECT_ROOT/test.txt")
+    NEW_MODE=$(stat $STAT_MODE_FLAG "$VELO_PROJECT_ROOT/test.txt")
     echo "chmod succeeded. New mode: $NEW_MODE"
     if [[ "$NEW_MODE" != "$ORIGINAL_MODE" ]]; then
         echo "❌ FAIL: chmod changed file mode (not intercepted)"
-        unset DYLD_INSERT_LIBRARIES DYLD_FORCE_FLAT_NAMESPACE
+        unset "$PRELOAD_VAR" DYLD_FORCE_FLAT_NAMESPACE
         rm -rf "$TEST_DIR"
         exit 1
     else
@@ -60,6 +73,6 @@ else
     echo "✅ PASS: Shell chmod properly blocked"
 fi
 
-unset DYLD_INSERT_LIBRARIES DYLD_FORCE_FLAT_NAMESPACE
+unset "$PRELOAD_VAR" DYLD_FORCE_FLAT_NAMESPACE
 rm -rf "$TEST_DIR"
 exit 0
