@@ -24,22 +24,33 @@ cp /bin/chmod "$TEST_DIR/chmod"
 codesign -s - -f "$TEST_DIR/echo" 2>/dev/null || true
 codesign -s - -f "$TEST_DIR/chmod" 2>/dev/null || true
 
-SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
-if [[ ! -f "$SHIM_PATH" ]]; then
-    echo "❌ SKIP: Shim not built. Run 'cargo build' first."
-    exit 0
+# Prefer release shim, fallback to debug
+RELEASE_SHIM="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
+DEBUG_SHIM="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+
+if [[ -f "$RELEASE_SHIM" ]]; then
+    SHIM_PATH="$RELEASE_SHIM"
+    echo "Using RELEASE shim: $SHIM_PATH"
+elif [[ -f "$DEBUG_SHIM" ]]; then
+    SHIM_PATH="$DEBUG_SHIM"
+    echo "Using DEBUG shim: $SHIM_PATH"
+else
+    echo "❌ FAIL: Shim library not found in target/release or target/debug."
+    exit 1
 fi
 
 echo "[1] Testing echo with shim (simplest case)..."
 # echo should complete immediately - no file operations
+# We use perl for a hard timeout because macOS lacks GNU timeout
 RESULT=$(DYLD_INSERT_LIBRARIES="$SHIM_PATH" DYLD_FORCE_FLAT_NAMESPACE=1 \
-    perl -e 'alarm 3; exec @ARGV' "$TEST_DIR/echo" "hello" 2>&1) || true
+    perl -e 'alarm 5; exec @ARGV' "$TEST_DIR/echo" "hello" 2>&1) || EXIT_CODE=$?
 
 if [[ "$RESULT" == "hello" ]]; then
     echo "✅ PASS: echo with shim works"
 else
-    echo "❌ FAIL: echo with shim failed or hung"
+    echo "❌ FAIL: echo with shim failed or hung (Exit Code: ${EXIT_CODE:-0})"
     echo "   Output: $RESULT"
+    echo "   Diagnosis: If output is empty and it took 5s, it is a dyld-level deadlock."
     exit 1
 fi
 
