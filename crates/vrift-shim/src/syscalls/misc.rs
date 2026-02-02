@@ -53,7 +53,7 @@ pub unsafe extern "C" fn rename_shim(old: *const c_char, new: *const c_char) -> 
         *const (),
         unsafe extern "C" fn(*const c_char, *const c_char) -> c_int,
     >(IT_RENAME.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(old, new);
     }
     rename_impl(old, new).unwrap_or_else(|| real(old, new))
@@ -71,7 +71,7 @@ pub unsafe extern "C" fn renameat_shim(
         *const (),
         unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char) -> c_int,
     >(IT_RENAMEAT.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(oldfd, old, newfd, new);
     }
 
@@ -160,7 +160,7 @@ pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_
         *const (),
         unsafe extern "C" fn(*const c_char, *const c_char) -> c_int,
     >(IT_LINK.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(old, new);
     }
     link_impl(old, new).unwrap_or_else(|| real(old, new))
@@ -179,7 +179,7 @@ pub unsafe extern "C" fn linkat_shim(
         *const (),
         unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char, c_int) -> c_int,
     >(IT_LINKAT.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(oldfd, old, newfd, new, flags);
     }
     link_impl(old, new).unwrap_or_else(|| real(oldfd, old, newfd, new, flags))
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> 
         *const (),
         unsafe extern "C" fn(*const c_char, libc::mode_t) -> c_int,
     >(IT_CHMOD.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, mode);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(path, mode))
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn fchmodat_shim(
         *const (),
         unsafe extern "C" fn(c_int, *const c_char, libc::mode_t, c_int) -> c_int,
     >(IT_FCHMODAT.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(dirfd, path, mode, flags);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, mode, flags))
@@ -248,7 +248,7 @@ pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t)
         *const (),
         unsafe extern "C" fn(*const c_char, libc::off_t) -> c_int,
     >(IT_TRUNCATE.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, length);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(path, length))
@@ -263,7 +263,7 @@ pub unsafe extern "C" fn chflags_shim(path: *const c_char, flags: libc::c_uint) 
         *const (),
         unsafe extern "C" fn(*const c_char, libc::c_uint) -> c_int,
     >(IT_CHFLAGS.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, flags);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(path, flags))
@@ -292,7 +292,7 @@ pub unsafe extern "C" fn setxattr_shim(
             c_int,
         ) -> c_int,
     >(IT_SETXATTR.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, name, value, size, position, options);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(path, name, value, size, position, options))
@@ -309,7 +309,7 @@ pub unsafe extern "C" fn removexattr_shim(
         *const (),
         unsafe extern "C" fn(*const c_char, *const c_char, c_int) -> c_int,
     >(IT_REMOVEXATTR.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, name, options);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(path, name, options))
@@ -327,7 +327,7 @@ pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::ti
         *const (),
         unsafe extern "C" fn(*const c_char, *const libc::timeval) -> c_int,
     >(IT_UTIMES.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, times);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(path, times))
@@ -346,7 +346,7 @@ pub unsafe extern "C" fn utimensat_shim(
         *const (),
         unsafe extern "C" fn(c_int, *const c_char, *const libc::timespec, c_int) -> c_int,
     >(IT_UTIMENSAT.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(dirfd, path, times, flags);
     }
     block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, times, flags))

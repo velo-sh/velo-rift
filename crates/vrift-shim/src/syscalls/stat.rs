@@ -75,7 +75,7 @@ pub unsafe extern "C" fn stat_shim(path: *const c_char, buf: *mut libc_stat) -> 
         *const (),
         unsafe extern "C" fn(*const c_char, *mut libc_stat) -> c_int,
     >(IT_STAT.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, buf);
     }
     stat_impl(path, buf, real).unwrap_or_else(|| real(path, buf))
@@ -88,7 +88,7 @@ pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) ->
         *const (),
         unsafe extern "C" fn(*const c_char, *mut libc_stat) -> c_int,
     >(IT_LSTAT.old_func);
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, buf);
     }
     stat_impl(path, buf, real).unwrap_or_else(|| real(path, buf))
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
     let real = std::mem::transmute::<*const (), unsafe extern "C" fn(c_int, *mut libc_stat) -> c_int>(
         IT_FSTAT.old_func,
     );
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(fd, buf);
     }
 
@@ -118,7 +118,7 @@ pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int 
     let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*const c_char, c_int) -> c_int>(
         IT_ACCESS.old_func,
     );
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path, mode);
     }
 

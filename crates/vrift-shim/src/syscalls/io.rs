@@ -98,7 +98,7 @@ pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
     let real =
         std::mem::transmute::<*const (), unsafe extern "C" fn(c_int) -> c_int>(IT_DUP.old_func);
 
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(oldfd);
     }
 
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
         IT_DUP2.old_func,
     );
 
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(oldfd, newfd);
     }
 
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn fchdir_shim(fd: c_int) -> c_int {
     let real =
         std::mem::transmute::<*const (), unsafe extern "C" fn(c_int) -> c_int>(IT_FCHDIR.old_func);
 
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(fd);
     }
 
@@ -169,7 +169,7 @@ pub unsafe extern "C" fn lseek_shim(fd: c_int, offset: off_t, whence: c_int) -> 
         IT_LSEEK.old_func,
     );
 
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(fd, offset, whence);
     }
 
@@ -189,7 +189,7 @@ pub unsafe extern "C" fn ftruncate_shim(fd: c_int, length: off_t) -> c_int {
         IT_FTRUNCATE.old_func,
     );
 
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(fd, length);
     }
 

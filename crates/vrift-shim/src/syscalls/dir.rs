@@ -18,7 +18,7 @@ pub unsafe extern "C" fn opendir_shim(path: *const libc::c_char) -> *mut c_void 
     >(IT_OPENDIR.old_func);
 
     // Early-boot passthrough
-    if INITIALIZING.load(Ordering::Relaxed) {
+    if INITIALIZING.load(Ordering::Relaxed) != 0 {
         return real(path);
     }
 
