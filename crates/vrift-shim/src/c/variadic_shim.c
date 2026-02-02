@@ -7,6 +7,9 @@
  * macOS syscall numbers:
  *   open:   5
  *   openat: 463
+ *
+ * NOTE: This is a passthrough-only implementation. VFS logic requires
+ * stable TLS/IPC which isn't available during early dyld init.
  */
 
 #include <fcntl.h>
@@ -47,8 +50,6 @@ int openat_c_wrapper(int dirfd, const char *path, int flags, ...) {
     va_end(ap);
   }
 
-  /* macOS doesn't have SYS_openat, use open_nocancel or similar */
-  /* For now, fall back to syscall(SYS_openat, ...) if available */
 #ifdef SYS_openat
   return (int)syscall(SYS_openat, dirfd, path, flags, mode);
 #else
