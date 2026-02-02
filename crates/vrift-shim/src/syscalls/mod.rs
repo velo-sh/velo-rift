@@ -3,6 +3,8 @@ pub mod dir;
 pub mod io;
 #[cfg(target_os = "linux")]
 pub mod linux_raw;
+#[cfg(target_os = "macos")]
+pub mod macos_raw;
 pub mod mem;
 pub mod misc;
 pub mod mmap;

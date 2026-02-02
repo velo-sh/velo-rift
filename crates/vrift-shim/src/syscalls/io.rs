@@ -227,13 +227,17 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
     use crate::ipc::sync_ipc_manifest_reingest;
     use crate::state::{EventType, ShimGuard, ShimState};
 
-    // CRITICAL: Must use dlsym(RTLD_NEXT) to get the real close function
+    // BUG-007: close is called during __malloc_init before dlsym is safe.
+    // Use raw syscall to completely bypass libc.
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state >= 2 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
+        return crate::syscalls::macos_raw::raw_close(fd);
+    }
+
+    // After init, we can safely use dlsym-cached version
     let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(c_int) -> c_int>(
         crate::reals::REAL_CLOSE.get(),
     );
-
-    // Pattern 2648/2649: Passthrough during initialization to avoid TLS hazard
-    passthrough_if_init!(real, fd);
 
     let _guard = match ShimGuard::enter() {
         Some(g) => g,

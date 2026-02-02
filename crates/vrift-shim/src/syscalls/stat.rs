@@ -106,19 +106,22 @@ pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) ->
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(c_int, *mut libc_stat) -> c_int,
-    >(REAL_FSTAT.get());
-    passthrough_if_init!(real, fd, buf);
+    // BUG-007: Use raw syscall during early init AND whenever in recursion.
+    // The recursion guard (ShimGuard) uses TLS which is safe only after INITIALIZING < 2.
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state >= 2 {
+        return crate::syscalls::macos_raw::raw_fstat64(fd, buf);
+    }
+
+    // After early init, check recursion guard before accessing any complex state
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return crate::syscalls::macos_raw::raw_fstat64(fd, buf), // In recursion, use raw
+    };
 
     // RFC-OPT-001: Check if FD is tracked as VFS file
     if let Some(entry) = crate::syscalls::io::get_fd_entry(fd) {
         if entry.is_vfs {
-            let _guard = match ShimGuard::enter() {
-                Some(g) => g,
-                None => return real(fd, buf),
-            };
             // Query manifest for virtual metadata
             if let Some(state) = ShimState::get() {
                 if let Some(vnode) = state.query_manifest(&entry.path) {
@@ -135,17 +138,23 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
             }
         }
     }
-    real(fd, buf)
+    // Default: use raw syscall (safer than dlsym-based real)
+    crate::syscalls::macos_raw::raw_fstat64(fd, buf)
 }
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int {
+    // BUG-007: Use raw syscall during early init to avoid recursion
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state >= 2 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
+        return crate::syscalls::macos_raw::raw_access(path, mode);
+    }
+
     let real = std::mem::transmute::<
         *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, c_int) -> c_int,
     >(REAL_ACCESS.get());
-    passthrough_if_init!(real, path, mode);
 
     let _guard = match ShimGuard::enter() {
         Some(g) => g,

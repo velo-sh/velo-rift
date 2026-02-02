@@ -22,6 +22,31 @@ macro_rules! passthrough_if_init {
     };
 }
 
+/// BUG-007 Pattern: Safe early passthrough using interpose old_func.
+/// This MUST be called BEFORE any dlsym call to avoid malloc recursion deadlock.
+///
+/// During __malloc_init, syscalls like fstat, mmap, close are called before dlsym is safe.
+/// This macro uses the interpose table's old_func pointer directly (resolved by dyld).
+///
+/// # Usage:
+/// ```ignore
+/// safe_early_passthrough!(IT_FSTAT, fn(c_int, *mut libc_stat) -> c_int, fd, buf);
+/// ```
+#[macro_export]
+macro_rules! safe_early_passthrough {
+    ($interpose:expr, fn($($ptype:ty),*) -> $rtype:ty $(, $arg:expr)*) => {
+        if $crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) >= 2
+            || $crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let real_fn = std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn($($ptype),*) -> $rtype,
+            >($interpose.old_func);
+            return real_fn($($arg),*);
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! shim_log {
     ($msg:expr) => {
