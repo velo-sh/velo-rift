@@ -58,11 +58,10 @@ pub unsafe extern "C" fn renameat_shim(
 ) -> c_int {
     #[cfg(target_os = "macos")]
     {
-        use crate::interpose::IT_RENAMEAT;
         let real = std::mem::transmute::<
-            *const (),
+            *mut libc::c_void,
             unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char) -> c_int,
-        >(IT_RENAMEAT.old_func);
+        >(crate::reals::REAL_RENAMEAT.get());
         passthrough_if_init!(real, oldfd, old, newfd, new);
 
         // Resolve relative paths using getcwd for AT_FDCWD case
@@ -182,13 +181,14 @@ pub unsafe extern "C" fn linkat_shim(
 ) -> c_int {
     #[cfg(target_os = "macos")]
     {
-        use crate::interpose::IT_LINKAT;
         let real = std::mem::transmute::<
-            *const (),
+            *mut libc::c_void,
             unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char, c_int) -> c_int,
-        >(IT_LINKAT.old_func);
+        >(crate::reals::REAL_LINKAT.get());
         passthrough_if_init!(real, oldfd, old, newfd, new, flags);
-        link_impl(old, new).unwrap_or_else(|| real(oldfd, old, newfd, new, flags))
+        block_vfs_mutation(old)
+            .or_else(|| block_vfs_mutation(new))
+            .unwrap_or_else(|| real(oldfd, old, newfd, new, flags))
     }
     #[cfg(target_os = "linux")]
     {
@@ -309,11 +309,10 @@ pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
-    use crate::interpose::IT_CHMOD;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, libc::mode_t) -> c_int,
-    >(IT_CHMOD.old_func);
+    >(crate::reals::REAL_CHMOD.get());
     passthrough_if_init!(real, path, mode);
     block_vfs_mutation(path).unwrap_or_else(|| real(path, mode))
 }
@@ -326,11 +325,10 @@ pub unsafe extern "C" fn fchmodat_shim(
     mode: libc::mode_t,
     flags: c_int,
 ) -> c_int {
-    use crate::interpose::IT_FCHMODAT;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(c_int, *const c_char, libc::mode_t, c_int) -> c_int,
-    >(IT_FCHMODAT.old_func);
+    >(crate::reals::REAL_FCHMODAT.get());
     passthrough_if_init!(real, dirfd, path, mode, flags);
     block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, mode, flags))
 }
@@ -340,11 +338,10 @@ pub unsafe extern "C" fn fchmodat_shim(
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t) -> c_int {
-    use crate::interpose::IT_TRUNCATE;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, libc::off_t) -> c_int,
-    >(IT_TRUNCATE.old_func);
+    >(crate::reals::REAL_TRUNCATE.get());
     passthrough_if_init!(real, path, length);
     block_vfs_mutation(path).unwrap_or_else(|| real(path, length))
 }
@@ -354,11 +351,10 @@ pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t)
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn chflags_shim(path: *const c_char, flags: libc::c_uint) -> c_int {
-    use crate::interpose::IT_CHFLAGS;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, libc::c_uint) -> c_int,
-    >(IT_CHFLAGS.old_func);
+    >(crate::reals::REAL_CHFLAGS.get());
     passthrough_if_init!(real, path, flags);
     block_vfs_mutation(path).unwrap_or_else(|| real(path, flags))
 }
@@ -375,9 +371,8 @@ pub unsafe extern "C" fn setxattr_shim(
     position: u32,
     options: c_int,
 ) -> c_int {
-    use crate::interpose::IT_SETXATTR;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(
             *const c_char,
             *const c_char,
@@ -386,7 +381,7 @@ pub unsafe extern "C" fn setxattr_shim(
             u32,
             c_int,
         ) -> c_int,
-    >(IT_SETXATTR.old_func);
+    >(crate::reals::REAL_SETXATTR.get());
     passthrough_if_init!(real, path, name, value, size, position, options);
     block_vfs_mutation(path).unwrap_or_else(|| real(path, name, value, size, position, options))
 }
@@ -398,11 +393,10 @@ pub unsafe extern "C" fn removexattr_shim(
     name: *const c_char,
     options: c_int,
 ) -> c_int {
-    use crate::interpose::IT_REMOVEXATTR;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *const c_char, c_int) -> c_int,
-    >(IT_REMOVEXATTR.old_func);
+    >(crate::reals::REAL_REMOVEXATTR.get());
     passthrough_if_init!(real, path, name, options);
     block_vfs_mutation(path).unwrap_or_else(|| real(path, name, options))
 }
@@ -415,31 +409,29 @@ pub unsafe extern "C" fn removexattr_shim(
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::timeval) -> c_int {
-    use crate::interpose::IT_UTIMES;
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *const libc::timeval) -> c_int,
-    >(IT_UTIMES.old_func);
+    >(crate::reals::REAL_UTIMES.get());
     passthrough_if_init!(real, path, times);
     block_vfs_mutation(path).unwrap_or_else(|| real(path, times))
 }
 
 /// utimensat_shim: Block timestamp modifications on VFS files (at variant)
 pub unsafe extern "C" fn utimensat_shim(
-    _dirfd: c_int,
-    _path: *const c_char,
-    _times: *const libc::timespec,
-    _flags: c_int,
+    dirfd: c_int,
+    path: *const c_char,
+    times: *const libc::timespec,
+    flags: c_int,
 ) -> c_int {
     #[cfg(target_os = "macos")]
     {
-        use crate::interpose::IT_UTIMENSAT;
         let real = std::mem::transmute::<
-            *const (),
+            *mut libc::c_void,
             unsafe extern "C" fn(c_int, *const c_char, *const libc::timespec, c_int) -> c_int,
-        >(IT_UTIMENSAT.old_func);
-        passthrough_if_init!(real, _dirfd, _path, _times, _flags);
-        block_vfs_mutation(_path).unwrap_or_else(|| real(_dirfd, _path, _times, _flags))
+        >(crate::reals::REAL_UTIMENSAT.get());
+        passthrough_if_init!(real, dirfd, path, times, flags);
+        block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, times, flags))
     }
     #[cfg(target_os = "linux")]
     {

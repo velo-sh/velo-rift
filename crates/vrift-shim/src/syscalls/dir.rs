@@ -1,5 +1,4 @@
-#[cfg(target_os = "macos")]
-use crate::interpose::*;
+// Symbols imported from reals.rs via crate::reals
 #[cfg(target_os = "macos")]
 use crate::state::*;
 #[cfg(target_os = "macos")]
@@ -11,9 +10,9 @@ use std::ffi::CStr;
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn opendir_shim(path: *const libc::c_char) -> *mut c_void {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*const libc::c_char) -> *mut c_void,
-    >(IT_OPENDIR.old_func);
+    >(crate::reals::REAL_OPENDIR.get());
 
     // Early-boot passthrough
     passthrough_if_init!(real, path);
@@ -82,9 +81,9 @@ static mut DIRENT_BUF: libc::dirent = libc::dirent {
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn readdir_shim(dir: *mut c_void) -> *mut libc::dirent {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*mut c_void) -> *mut libc::dirent,
-    >(IT_READDIR.old_func);
+    >(crate::reals::REAL_READDIR.get());
 
     // Pattern 2648/2649: Passthrough during initialization to avoid TLS hazard
     passthrough_if_init!(real, dir);
@@ -140,8 +139,8 @@ pub unsafe extern "C" fn readdir_shim(dir: *mut c_void) -> *mut libc::dirent {
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn closedir_shim(dir: *mut c_void) -> c_int {
-    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*mut c_void) -> c_int>(
-        IT_CLOSEDIR.old_func,
+    let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
+        crate::reals::REAL_CLOSEDIR.get(),
     );
 
     // Pattern 2648/2649: Passthrough during initialization to avoid TLS hazard
@@ -177,9 +176,9 @@ pub unsafe extern "C" fn getcwd_shim(
     size: libc::size_t,
 ) -> *mut libc::c_char {
     let real = std::mem::transmute::<
-        *const (),
+        *mut libc::c_void,
         unsafe extern "C" fn(*mut libc::c_char, libc::size_t) -> *mut libc::c_char,
-    >(IT_GETCWD.old_func);
+    >(crate::reals::REAL_GETCWD.get());
     passthrough_if_init!(real, buf, size);
     real(buf, size)
 }
@@ -187,9 +186,10 @@ pub unsafe extern "C" fn getcwd_shim(
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn chdir_shim(path: *const libc::c_char) -> c_int {
-    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*const libc::c_char) -> c_int>(
-        IT_CHDIR.old_func,
-    );
+    let real = std::mem::transmute::<
+        *mut libc::c_void,
+        unsafe extern "C" fn(*const libc::c_char) -> c_int,
+    >(crate::reals::REAL_CHDIR.get());
     passthrough_if_init!(real, path);
     real(path)
 }
