@@ -14,6 +14,27 @@ use crate::ipc::*;
 // ============================================================================
 // Global State & Recursion Guards
 // ============================================================================
+//
+// ⚠️ TLS SAFETY CRITICAL SECTION (Pattern 2648/2649)
+//
+// This module manages initialization state during the hazardous dyld bootstrap
+// phase. The following invariants MUST be maintained:
+//
+// 1. INITIALIZING starts at 1 (passthrough mode) - set to 0 only after dyld
+//    completes loading all symbols (via SET_READY in lib.rs)
+//
+// 2. TLS_READY starts at false - set to true only after pthread TLS is
+//    confirmed working (also in SET_READY)
+//
+// 3. All shim entry points MUST check these flags BEFORE using any Rust
+//    features that might trigger TLS (String, HashMap, Mutex, etc.)
+//
+// 4. ShimState::init() uses ONLY libc primitives (malloc, memcpy) to avoid
+//    touching Rust allocator which may trigger TLS
+//
+// Violation of these invariants will cause process deadlock on macOS ARM64.
+// See docs/SHIM_SAFETY_GUIDE.md for details.
+// ============================================================================
 
 pub(crate) static SHIM_STATE: AtomicPtr<ShimState> = AtomicPtr::new(ptr::null_mut());
 // Flag to indicate shim is still initializing. All syscalls passthrough during this phase.

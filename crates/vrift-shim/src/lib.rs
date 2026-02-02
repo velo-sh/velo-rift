@@ -2,6 +2,24 @@
 //!
 //! LD_PRELOAD / DYLD_INSERT_LIBRARIES shim for Velo Rift virtual filesystem.
 //! Industrial-grade, zero-allocation, and recursion-safe.
+//!
+//! # ⚠️ TLS SAFETY WARNING (Pattern 2648/2649)
+//!
+//! This shim runs during macOS `dyld` bootstrap phase. **ANY Rust TLS access
+//! before `TLS_READY` flag is set will deadlock the process.**
+//!
+//! ## Forbidden during init phase:
+//! - `String`, `Cow<str>`, `Vec` → use `*const libc::c_char` + `libc::malloc`
+//! - `HashMap` → use raw pointers, lazy init after `TLS_READY`
+//! - `println!`/`eprintln!` → use `libc::write(2, ...)`
+//! - `panic!` → use `libc::abort()`
+//!
+//! ## Required testing after ANY change to init path:
+//! ```bash
+//! DYLD_INSERT_LIBRARIES=target/debug/libvrift_shim.dylib /tmp/test_minimal
+//! ```
+//!
+//! See `docs/SHIM_SAFETY_GUIDE.md` for full documentation.
 
 // Allow dead code during incremental restoration - functions will be connected in later phases
 #![allow(dead_code)]
