@@ -3,9 +3,11 @@
 //! Provides file descriptor tracking for VFS files, enabling proper
 //! handling of dup/dup2, fchdir, lseek, ftruncate, etc.
 
+use libc::c_int;
+#[cfg(target_os = "macos")]
+use libc::c_void;
 #[cfg(target_os = "macos")]
 use libc::off_t;
-use libc::{c_int, c_void};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
