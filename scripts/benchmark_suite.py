@@ -102,6 +102,19 @@ def count_files(directory: Path) -> int:
     return count
 
 
+def rmtree_onerror(func, path, exc_info):
+    """Handler for shutil.rmtree to skip permission errors during cleanup."""
+    import stat
+
+    if not os.access(path, os.W_OK):
+        # Try to make it writable
+        try:
+            os.chmod(path, stat.S_IWUSR)
+            func(path)
+        except Exception:
+            pass  # Skip if we still can't delete it (likely VFS protected)
+
+
 def get_dir_size(directory: Path) -> int:
     """Get directory size in bytes."""
     total = 0
@@ -142,7 +155,7 @@ def benchmark_vrift_ingest(
     # Clear any previous metadata
     vrift_meta = source_dir / ".vrift"
     if vrift_meta.exists():
-        shutil.rmtree(vrift_meta)
+        shutil.rmtree(vrift_meta, onerror=rmtree_onerror)
 
     start = time.time()
     code, stdout, stderr = run_cmd(
@@ -223,7 +236,7 @@ def run_dataset_benchmark(name: str, config: dict[str, str], work_dir: Path) -> 
     print("  Benchmarking re-ingest (CAS hit)...")
     vrift_meta = node_modules / ".vrift"
     if vrift_meta.exists():
-        shutil.rmtree(vrift_meta)
+        shutil.rmtree(vrift_meta, onerror=rmtree_onerror)
     result2 = benchmark_vrift_ingest(node_modules, cas_dir, work_dir / f"{name}_reingest.manifest")
     result2.name = "vrift (reingest)"
     suite.add(result2)
@@ -347,15 +360,20 @@ def main() -> None:
 
     suites: dict[str, BenchmarkSuite] = {}
 
-    with tempfile.TemporaryDirectory(prefix="vrift-bench-") as tmp:
-        work_dir = Path(tmp)
+    try:
+        with tempfile.TemporaryDirectory(prefix="vrift-bench-") as tmp:
+            work_dir = Path(tmp)
 
-        for name, config in datasets.items():
-            print(f"═══ {name.upper()} ═══")
-            suite = run_dataset_benchmark(name, config, work_dir)
-            if suite.results:
-                suites[name] = suite
-            print()
+            for name, config in datasets.items():
+                print(f"═══ {name.upper()} ═══")
+                suite = run_dataset_benchmark(name, config, work_dir)
+                if suite.results:
+                    suites[name] = suite
+                print()
+    except PermissionError:
+        # Expected if VFS protected files are in the temp dir and we're on 3.10
+        # The OS will eventually clean /tmp anyway
+        pass
 
     # Generate report
     if suites:

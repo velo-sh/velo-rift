@@ -66,17 +66,21 @@ int main(int argc, char* argv[]) {
 }
 CEOF
 
-clang -o /tmp/test_dup_gap "$TEST_DIR/test_dup.c" 2>/dev/null || {
-    echo "❌ FAIL: Could not compile test program"
+cc -o /tmp/test_dup_gap "$TEST_DIR/test_dup.c" 2>/dev/null || clang -o /tmp/test_dup_gap "$TEST_DIR/test_dup.c" 2>/dev/null || {
+    echo "❌ FAIL: Could not compile test program (neither cc nor clang found)"
     exit 1
 }
 
-# Run with shim
+# Resolve shim path
 if [[ "$(uname)" == "Darwin" ]]; then
-    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
+    [[ -f "$SHIM_LIB" ]] || SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_INSERT_LIBRARIES="$SHIM_LIB"
     export DYLD_FORCE_FLAT_NAMESPACE=1
 else
-    export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.so"
+    [[ -f "$SHIM_LIB" ]] || SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_shim.so"
+    export LD_PRELOAD="$SHIM_LIB"
 fi
 
 /tmp/test_dup_gap "$TEST_DIR/test.txt"
