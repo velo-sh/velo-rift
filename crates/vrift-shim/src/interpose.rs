@@ -471,14 +471,14 @@ mod linux_shims {
         let init_state =
             unsafe { crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) };
         if init_state >= 2 {
-            return crate::syscalls::open::raw_chmod(path, mode);
+            return crate::syscalls::linux_raw::raw_chmod(path, mode);
         }
 
         // Pass through if VFS mutation is NOT blocked
         if let Some(res) = crate::syscalls::misc::block_vfs_mutation(path) {
             return res;
         }
-        crate::syscalls::open::raw_chmod(path, mode)
+        crate::syscalls::linux_raw::raw_chmod(path, mode)
     }
 
     #[no_mangle]
