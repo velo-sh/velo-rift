@@ -47,7 +47,7 @@ if command -v timeout &> /dev/null; then
         EXIT_CODE=$?
         if [ $EXIT_CODE -eq 124 ]; then
             echo "🔥 BUG DETECTED: Multithreaded HANG (Timed out after 10s)"
-            exit 0
+            exit 1
         fi
         exit $EXIT_CODE
     fi
@@ -58,12 +58,12 @@ else
     if kill -0 $PID 2>/dev/null; then
         echo "🔥 BUG DETECTED: Multithreaded HANG (Still running after 10s)"
         kill -9 $PID 2>/dev/null || true
-        exit 0
+        exit 1
     else
         echo "✅ Test Finished (No Hang detected)"
         wait $PID || true
     fi
 fi
 
-echo "⚠️  Reproduction failed: Bug not found. (The bug might be intermittent or OS-version specific)"
-exit 1
+echo "✅ Test Finished: No deadlock detected."
+exit 0

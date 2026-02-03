@@ -13,9 +13,21 @@ echo "=== Test: Concurrent Write Behavior ==="
 cleanup() { rm -rf "$TEST_DIR"; }
 trap cleanup EXIT
 
+# Build directory logic
+if [ -d "$PROJECT_ROOT/target/release" ]; then
+    BUILD_DIR="$PROJECT_ROOT/target/release"
+else
+    BUILD_DIR="$PROJECT_ROOT/target/debug"
+fi
+
+case "$(uname -s)" in
+    Darwin) SHIM_LIB="$BUILD_DIR/libvrift_shim.dylib" ;;
+    Linux) SHIM_LIB="$BUILD_DIR/libvrift_shim.so" ;;
+esac
+
 # Test with Python
 export TEST_DIR="$TEST_DIR"
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
+DYLD_INSERT_LIBRARIES="$SHIM_LIB" LD_PRELOAD="$SHIM_LIB" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
 import os
 import sys
 import threading
@@ -61,7 +73,7 @@ EOF
 
 export TEST_DIR="$TEST_DIR"
 
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
+DYLD_INSERT_LIBRARIES="$SHIM_LIB" LD_PRELOAD="$SHIM_LIB" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
 import os
 import sys
 f = '$TEST_DIR/concurrent.txt'

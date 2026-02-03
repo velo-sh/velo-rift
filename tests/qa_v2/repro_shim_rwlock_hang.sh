@@ -47,7 +47,7 @@ if command -v timeout &> /dev/null; then
         if [ $EXIT_CODE -eq 124 ]; then
             echo "🔥 BUG DETECTED: Process HANGED (Timed out after 5s)"
             echo "   This confirms the RwLock deadlock in Shim bootstrap."
-            exit 0 # Success for a reproduction test means finding the bug
+            exit 1
         else
             echo "❌ Unexpected failure (Exit Code: $EXIT_CODE)"
             cat "$WORK_DIR/output.log"
@@ -62,12 +62,12 @@ else
     if kill -0 $PID 2>/dev/null; then
         echo "🔥 BUG DETECTED: Process HANGED (Still running after 5s)"
         kill -9 $PID 2>/dev/null || true
-        exit 0
+        exit 1
     else
         echo "✅ Test Finished (No Hang detected)"
         wait $PID || true
     fi
 fi
 
-echo "⚠️  Reproduction failed: Bug not found. Ensure io.rs is using RwLock."
-exit 1
+echo "✅ Test Finished: No bootstrap deadlock detected."
+exit 0

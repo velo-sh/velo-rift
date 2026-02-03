@@ -61,14 +61,14 @@ fi
 if grep -q "panicked" "$WORK_DIR/stderr.log"; then
     echo "🔥 BUG DETECTED: CLI Panicked with Broken Pipe!"
     cat "$WORK_DIR/stderr.log"
-    exit 0
+    exit 1
 fi
 
 if grep -q "Broken pipe" "$WORK_DIR/stderr.log"; then
      echo "🔥 BUG DETECTED: CLI reported Broken pipe!"
      cat "$WORK_DIR/stderr.log"
-     exit 0
+     exit 1
 fi
 
-echo "✅ Test Finished: No panic detected. (The bug may already be patched or this environment handles EPIPE differently)"
-exit 1
+echo "✅ Test Finished: No panic detected."
+exit 0
