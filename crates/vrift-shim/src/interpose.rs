@@ -661,6 +661,180 @@ mod linux_shims {
         // dup3 with flags=0 is essentially dup2
         dup2(oldfd, newfd)
     }
+
+    // ========================================================================
+    // P2: Path & Memory Operations
+    // ========================================================================
+
+    #[no_mangle]
+    pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state >= 2 {
+            return crate::syscalls::linux_raw::raw_access(path, mode);
+        }
+        crate::syscalls::linux_raw::raw_access(path, mode)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn faccessat(
+        dirfd: c_int,
+        path: *const c_char,
+        mode: c_int,
+        _flags: c_int,
+    ) -> c_int {
+        // Simplified: use raw_access with AT_FDCWD behavior
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state >= 2 || dirfd == libc::AT_FDCWD {
+            return crate::syscalls::linux_raw::raw_access(path, mode);
+        }
+        crate::syscalls::linux_raw::raw_access(path, mode)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn readlink(
+        path: *const c_char,
+        buf: *mut c_char,
+        bufsiz: libc::size_t,
+    ) -> libc::ssize_t {
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state >= 2 {
+            return crate::syscalls::linux_raw::raw_readlink(path, buf, bufsiz);
+        }
+        crate::syscalls::linux_raw::raw_readlink(path, buf, bufsiz)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: libc::size_t) -> *mut c_char {
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state >= 2 {
+            return crate::syscalls::linux_raw::raw_getcwd(buf, size);
+        }
+        crate::syscalls::linux_raw::raw_getcwd(buf, size)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn chdir(path: *const c_char) -> c_int {
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state >= 2 {
+            return crate::syscalls::linux_raw::raw_chdir(path);
+        }
+        crate::syscalls::linux_raw::raw_chdir(path)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn mmap(
+        addr: *mut c_void,
+        len: libc::size_t,
+        prot: c_int,
+        flags: c_int,
+        fd: c_int,
+        offset: libc::off_t,
+    ) -> *mut c_void {
+        // mmap always uses raw syscall to avoid recursion
+        crate::syscalls::linux_raw::raw_mmap(addr, len, prot, flags, fd, offset)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn mmap64(
+        addr: *mut c_void,
+        len: libc::size_t,
+        prot: c_int,
+        flags: c_int,
+        fd: c_int,
+        offset: libc::off_t,
+    ) -> *mut c_void {
+        mmap(addr, len, prot, flags, fd, offset)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn munmap(addr: *mut c_void, len: libc::size_t) -> c_int {
+        // munmap always uses raw syscall
+        crate::syscalls::linux_raw::raw_munmap(addr, len)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn lseek(fd: c_int, offset: libc::off_t, whence: c_int) -> libc::off_t {
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state >= 2 {
+            return crate::syscalls::linux_raw::raw_lseek(fd, offset, whence);
+        }
+        crate::syscalls::linux_raw::raw_lseek(fd, offset, whence)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn lseek64(fd: c_int, offset: libc::off_t, whence: c_int) -> libc::off_t {
+        lseek(fd, offset, whence)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn ftruncate(fd: c_int, length: libc::off_t) -> c_int {
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state >= 2 {
+            return crate::syscalls::linux_raw::raw_ftruncate(fd, length);
+        }
+        crate::syscalls::linux_raw::raw_ftruncate(fd, length)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn ftruncate64(fd: c_int, length: libc::off_t) -> c_int {
+        ftruncate(fd, length)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn truncate(path: *const c_char, length: libc::off_t) -> c_int {
+        // Block VFS mutation
+        if let Some(res) = crate::syscalls::misc::block_vfs_mutation(path) {
+            return res;
+        }
+        // Call via raw syscall pattern (truncate syscall = 76 on x86_64, ftruncateat on aarch64)
+        #[cfg(target_arch = "x86_64")]
+        {
+            let ret: i64;
+            std::arch::asm!(
+                "syscall",
+                in("rax") 76i64,
+                in("rdi") path,
+                in("rsi") length,
+                lateout("rax") ret,
+                lateout("rcx") _,
+                lateout("r11") _,
+            );
+            if ret < 0 {
+                crate::set_errno(-ret as c_int);
+                return -1;
+            }
+            return ret as c_int;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            // aarch64 doesn't have truncate, use openat + ftruncate
+            let fd =
+                crate::syscalls::linux_raw::raw_openat(libc::AT_FDCWD, path, libc::O_WRONLY, 0);
+            if fd < 0 {
+                return -1;
+            }
+            let ret = crate::syscalls::linux_raw::raw_ftruncate(fd, length);
+            crate::syscalls::linux_raw::raw_close(fd);
+            ret
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn truncate64(path: *const c_char, length: libc::off_t) -> c_int {
+        truncate(path, length)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn link(oldpath: *const c_char, newpath: *const c_char) -> c_int {
+        // Block VFS mutation
+        if let Some(res) = crate::syscalls::misc::block_vfs_mutation(oldpath) {
+            return res;
+        }
+        if let Some(res) = crate::syscalls::misc::block_vfs_mutation(newpath) {
+            return res;
+        }
+        crate::syscalls::linux_raw::raw_link(oldpath, newpath)
+    }
 }
 
 #[cfg(target_os = "macos")]

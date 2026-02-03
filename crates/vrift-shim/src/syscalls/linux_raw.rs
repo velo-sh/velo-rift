@@ -961,3 +961,132 @@ pub unsafe fn raw_munmap(addr: *mut c_void, len: size_t) -> c_int {
         }
     }
 }
+
+// =============================================================================
+// Path Operations (for P2 Linux shim parity)
+// =============================================================================
+
+/// Raw readlink syscall
+#[inline(always)]
+pub unsafe fn raw_readlink(path: *const c_char, buf: *mut c_char, bufsiz: size_t) -> ssize_t {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 89i64, // SYS_readlink
+            in("rdi") path,
+            in("rsi") buf,
+            in("rdx") bufsiz as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // AArch64 uses readlinkat
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 78i64, // SYS_readlinkat
+            in("x0") -100i64, // AT_FDCWD
+            in("x1") path,
+            in("x2") buf,
+            in("x3") bufsiz as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+}
+
+/// Raw getcwd syscall
+#[inline(always)]
+pub unsafe fn raw_getcwd(buf: *mut c_char, size: size_t) -> *mut c_char {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 79i64, // SYS_getcwd
+            in("rdi") buf,
+            in("rsi") size as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            std::ptr::null_mut()
+        } else {
+            buf
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 17i64, // SYS_getcwd
+            in("x0") buf,
+            in("x1") size as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            std::ptr::null_mut()
+        } else {
+            buf
+        }
+    }
+}
+
+/// Raw chdir syscall
+#[inline(always)]
+pub unsafe fn raw_chdir(path: *const c_char) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 80i64, // SYS_chdir
+            in("rdi") path,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 49i64, // SYS_chdir
+            in("x0") path,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
