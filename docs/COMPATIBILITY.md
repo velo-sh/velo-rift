@@ -124,18 +124,33 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 | **`symlinkat`** | Mutation | ⏳ | ⏳ | ⏳ | - | **GAP: Can bypass VFS via dirfd** |
 | **`fchmod`** | Permission | ⏳ | ⏳ | ⏳ | - | **GAP: Can chmod via FD** |
 | **`futimens`** | Time | ⏳ | ⏳ | ⏳ | - | **GAP: Can modify times via FD** |
+| **`sendfile`** | I/O | ⏳ | ⏳ | ⏳ | - | **GAP: Copy data between FDs** |
+| **`copy_file_range`** | I/O | ⏳ | N/A | ⏳ | - | **GAP: Copy data between FDs (Linux)** |
 
-### 🚨 Critical Gaps (5 syscalls pending)
+### 🚨 Critical Gaps (7 syscalls pending)
 
 > **These syscalls can bypass VFS mutation protection.** Implementation required for 100% coverage.
 
-| Syscall | Risk | Priority |
-|---------|------|----------|
-| `unlinkat` | Delete VFS files via dirfd | **P0** |
-| `mkdirat` | Create dirs in VFS via dirfd | **P0** |
-| `symlinkat` | Create symlinks in VFS | **P1** |
-| `fchmod` | Change perms via FD | **P1** |
-| `futimens` | Modify times via FD | **P2** |
+| Syscall | Risk | Priority | Category |
+|---------|------|----------|----------|
+| `unlinkat` | Delete VFS files via dirfd | **P0** | Mutation |
+| `mkdirat` | Create dirs in VFS via dirfd | **P0** | Mutation |
+| `symlinkat` | Create symlinks in VFS | **P1** | Mutation |
+| `fchmod` | Change perms via FD | **P1** | Permission |
+| `futimens` | Modify times via FD | **P2** | Time |
+| `sendfile` | Copy data between FDs bypassing VFS | **P2** | I/O |
+| `copy_file_range` | Copy data between FDs bypassing VFS | **P2** | I/O |
+
+### Passthrough by Design (No VFS Risk)
+
+| Syscall | Reason |
+|---------|--------|
+| `pread`, `pwrite` | Uses already-intercepted FDs |
+| `readv`, `writev` | Uses already-intercepted FDs |
+| `fchown`, `lchown`, `fchownat` | Output files, not VFS |
+| `openat2` | Linux 5.6+, rare, can use openat fallback |
+| `execveat` | Linux-only, rare |
+| `splice`, `tee`, `vmsplice` | Kernel pipe operations |
 
 ---
 
@@ -257,7 +272,7 @@ These are "invisible" behaviors discovered during deep forensic audit that may c
 | Category | Compliance | Status | Key Missing Operations |
 | :--- | :---: | :--- | :--- |
 | **Basic Metadata** | 100% | ✅ Full | `statx` (Linux-only, pending) |
-| **File I/O** | 100% | ✅ Full | None (preadv/pwritev use intercepted FDs) |
+| **File I/O** | 92% | ⚠️ Gaps | `sendfile`, `copy_file_range` **PENDING** |
 | **Directory Ops** | 100% | ✅ Full | None (Read-only traversal complete) |
 | **Namespace/Path** | 100% | ✅ Full | None (`fchdir` ✅, `getcwd` ✅, `chdir` ✅) |
 | **Mutation** | 85% | ⚠️ Gaps | `unlinkat`, `mkdirat`, `symlinkat` **PENDING** |
@@ -266,7 +281,7 @@ These are "invisible" behaviors discovered during deep forensic audit that may c
 | **Dynamic Loading**| 100% | ✅ Full | None |
 | **Memory Management**| 100% | ✅ Full | None |
 
-> **Overall macOS Coverage**: 91% (45/50 syscalls) - 5 gaps to reach 100%
+> **Overall macOS Coverage**: 87% (45/52 syscalls) - 7 gaps to reach 100%
 
 ---
 
