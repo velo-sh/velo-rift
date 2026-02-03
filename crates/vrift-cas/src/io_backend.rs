@@ -49,10 +49,6 @@ mod uring {
         pub fn new() -> Self {
             Self { concurrency: 256 }
         }
-
-        pub fn with_concurrency(concurrency: usize) -> Self {
-            Self { concurrency }
-        }
     }
 
     impl IngestBackend for UringBackend {
@@ -94,10 +90,10 @@ mod uring {
                     // Collect results from this chunk
                     for handle in handles {
                         let hash = handle.await.map_err(|e| {
-                            crate::CasError::Io(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("Task join error: {:?}", e),
-                            ))
+                            crate::CasError::Io(std::io::Error::other(format!(
+                                "Task join error: {:?}",
+                                e
+                            )))
                         })??;
                         hashes.push(hash);
                     }
