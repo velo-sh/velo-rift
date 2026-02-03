@@ -100,11 +100,42 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 | **`mkdir`** | Mutation | ✅ | ✅ | ✅ | `test_mkdir_recursive`, `test_rfc0047_mkdir_vfs` | VFS: EROFS guard |
 | **`rmdir`** | Mutation | ✅ | ✅ | ✅ | `test_rfc0047_rmdir_vfs` | VFS: EROFS guard |
 | **`chmod`** | Mutation | ✅ | ✅ | ⏳ | `test_shell_chmod_interception` | VFS: EROFS guard |
+| **`fchmodat`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
 | **`chown`** | Mutation | ➖ | ➖ | ➖ | (via `test_gap_mutation_perimeter`) | Passthrough by design |
 | **`utimes`** | Mutation | ✅ | ✅ | ⏳ | `test_gap_utimes` | VFS mtime via IPC |
+| **`utimensat`** | Mutation | ✅ | ✅ | ⏳ | - | VFS time via IPC |
+| **`renameat`** | Mutation | ✅ | ✅ | ⏳ | `test_gap_renameat_bypass` | VFS: EROFS guard |
+| **`link`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
+| **`linkat`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
+| **`symlink`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
+| **`truncate`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
+| **`ftruncate`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
+| **`chflags`** | Mutation | ✅ | ✅ | N/A | - | macOS-only, VFS: EROFS |
+| **`setxattr`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
+| **`removexattr`** | Mutation | ✅ | ✅ | ⏳ | - | VFS: EROFS guard |
+| **`dup`** | FD Ops | ✅ | ✅ | ⏳ | `test_gap_dup_tracking` | FD tracking |
+| **`dup2`** | FD Ops | ✅ | ✅ | ⏳ | - | FD tracking |
+| **`lseek`** | FD Ops | ✅ | ✅ | ⏳ | - | FD passthrough |
+| **`fchdir`** | Namespace | ✅ | ✅ | ⏳ | - | Virtual CWD via FD |
 | **`statx`** | Metadata | ⏳ | N/A | ⏳ | `test_statx_interception` | Linux-only (macOS has no statx) |
 | **`getdents`** | Discovery | ⏳ | N/A | ⏳ | (via `test_opendir_*`) | Linux raw syscall (macOS via readdir) |
+| **`unlinkat`** | Mutation | ⏳ | ⏳ | ⏳ | - | **GAP: Can bypass VFS via dirfd** |
+| **`mkdirat`** | Mutation | ⏳ | ⏳ | ⏳ | - | **GAP: Can bypass VFS via dirfd** |
+| **`symlinkat`** | Mutation | ⏳ | ⏳ | ⏳ | - | **GAP: Can bypass VFS via dirfd** |
+| **`fchmod`** | Permission | ⏳ | ⏳ | ⏳ | - | **GAP: Can chmod via FD** |
+| **`futimens`** | Time | ⏳ | ⏳ | ⏳ | - | **GAP: Can modify times via FD** |
 
+### 🚨 Critical Gaps (5 syscalls pending)
+
+> **These syscalls can bypass VFS mutation protection.** Implementation required for 100% coverage.
+
+| Syscall | Risk | Priority |
+|---------|------|----------|
+| `unlinkat` | Delete VFS files via dirfd | **P0** |
+| `mkdirat` | Create dirs in VFS via dirfd | **P0** |
+| `symlinkat` | Create symlinks in VFS | **P1** |
+| `fchmod` | Change perms via FD | **P1** |
+| `futimens` | Modify times via FD | **P2** |
 
 ---
 
@@ -225,14 +256,17 @@ These are "invisible" behaviors discovered during deep forensic audit that may c
 
 | Category | Compliance | Status | Key Missing Operations |
 | :--- | :---: | :--- | :--- |
-| **Basic Metadata** | 95% | ✅ Strong | `statx` (Linux-only, pending) |
-| **File I/O** | 90% | ✅ Strong | `preadv`/`pwritev`, `sendfile` |
-| **Directory Ops** | 100% | ✅ Strong | None (Read-only traversal complete) |
-| **Namespace/Path** | 95% | ✅ Strong | `fchdir` ✅ implemented |
-| **Mutation** | 90% | ✅ Strong | `chown` (Passthrough by design) |
-| **Permissions** | 90% | ✅ Strong | `chmod` ✅ implemented |
+| **Basic Metadata** | 100% | ✅ Full | `statx` (Linux-only, pending) |
+| **File I/O** | 100% | ✅ Full | None (preadv/pwritev use intercepted FDs) |
+| **Directory Ops** | 100% | ✅ Full | None (Read-only traversal complete) |
+| **Namespace/Path** | 100% | ✅ Full | None (`fchdir` ✅, `getcwd` ✅, `chdir` ✅) |
+| **Mutation** | 85% | ⚠️ Gaps | `unlinkat`, `mkdirat`, `symlinkat` **PENDING** |
+| **Permissions** | 75% | ⚠️ Gaps | `fchmod` **PENDING** |
+| **Time Ops** | 67% | ⚠️ Gaps | `futimens` **PENDING** |
 | **Dynamic Loading**| 100% | ✅ Full | None |
 | **Memory Management**| 100% | ✅ Full | None |
+
+> **Overall macOS Coverage**: 91% (45/50 syscalls) - 5 gaps to reach 100%
 
 ---
 
