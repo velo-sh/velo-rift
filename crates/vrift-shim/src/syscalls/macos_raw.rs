@@ -83,6 +83,56 @@ const SYS_MUNMAP: i64 = 73;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_ACCESS: i64 = 33;
 
+/// SYS_stat64 = 338 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_STAT64: i64 = 338;
+
+/// SYS_lstat64 = 340 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_LSTAT64: i64 = 340;
+
+/// Raw stat64 syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_stat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_STAT64,
+        in("x0") path as i64,
+        in("x1") buf as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw lstat64 syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_lstat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_LSTAT64,
+        in("x0") path as i64,
+        in("x1") buf as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
 /// Raw fstat64 syscall for macOS ARM64.
 /// Returns 0 on success, -1 on error (with errno-style negative return).
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -218,6 +268,58 @@ const SYS_MUNMAP_X64: i64 = 73;
 /// SYS_access on macOS x86_64 = 33
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const SYS_ACCESS_X64: i64 = 33;
+
+/// SYS_stat64 on macOS x86_64 = 338
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_STAT64_X64: i64 = 338;
+
+/// SYS_lstat64 on macOS x86_64 = 340
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_LSTAT64_X64: i64 = 340;
+
+/// Raw stat64 syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_stat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_STAT64_X64 | 0x2000000,
+        in("rdi") path as i64,
+        in("rsi") buf as i64,
+        lateout("rax") ret,
+        lateout("rcx") _,
+        lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw lstat64 syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_lstat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_LSTAT64_X64 | 0x2000000,
+        in("rdi") path as i64,
+        in("rsi") buf as i64,
+        lateout("rax") ret,
+        lateout("rcx") _,
+        lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
 
 /// Raw fstat64 syscall for macOS x86_64.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -369,4 +471,14 @@ pub unsafe fn raw_munmap(addr: *mut libc::c_void, len: libc::size_t) -> libc::c_
 #[cfg(target_os = "linux")]
 pub unsafe fn raw_access(path: *const libc::c_char, mode: libc::c_int) -> libc::c_int {
     crate::syscalls::linux_raw::raw_access(path, mode)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_stat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_stat(path, buf)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_lstat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_lstat(path, buf)
 }

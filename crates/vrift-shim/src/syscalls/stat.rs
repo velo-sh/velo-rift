@@ -84,23 +84,35 @@ unsafe fn stat_impl(
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn stat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(*const c_char, *mut libc_stat) -> c_int,
-    >(REAL_STAT.get());
-    passthrough_if_init!(real, path, buf);
-    stat_impl(path, buf, true).unwrap_or_else(|| real(path, buf))
+    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state >= 2 {
+        return crate::syscalls::macos_raw::raw_stat(path, buf);
+    }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return crate::syscalls::macos_raw::raw_stat(path, buf),
+    };
+
+    stat_impl(path, buf, true).unwrap_or_else(|| crate::syscalls::macos_raw::raw_stat(path, buf))
 }
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(*const c_char, *mut libc_stat) -> c_int,
-    >(REAL_LSTAT.get());
-    passthrough_if_init!(real, path, buf);
-    stat_impl(path, buf, false).unwrap_or_else(|| real(path, buf))
+    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state >= 2 {
+        return crate::syscalls::macos_raw::raw_lstat(path, buf);
+    }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return crate::syscalls::macos_raw::raw_lstat(path, buf),
+    };
+
+    stat_impl(path, buf, false).unwrap_or_else(|| crate::syscalls::macos_raw::raw_lstat(path, buf))
 }
 
 #[no_mangle]
