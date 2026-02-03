@@ -181,7 +181,7 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
             // 🔥 Build and cache stat for VFS file
             let mut cached_stat: libc::stat = unsafe { std::mem::zeroed() };
             cached_stat.st_size = entry.size as _;
-            cached_stat.st_mode = entry.mode as u16;
+            cached_stat.st_mode = entry.mode as _;
             cached_stat.st_mtime = entry.mtime as _;
             cached_stat.st_dev = 0x52494654; // "RIFT"
             cached_stat.st_nlink = 1;
