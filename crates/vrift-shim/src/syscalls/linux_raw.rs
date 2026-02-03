@@ -896,7 +896,7 @@ pub unsafe fn raw_mmap(
             in("rdx") prot as i64,
             in("r10") flags as i64,
             in("r8") fd as i64,
-            in("r9") offset as i64,
+            in("r9") offset,
             lateout("rax") ret,
             lateout("rcx") _,
             lateout("r11") _,
