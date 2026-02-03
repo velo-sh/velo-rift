@@ -7,7 +7,7 @@ struct CachePadded<T>(T);
 
 pub enum Task {
     // Metadata reclamation (High Priority)
-    ReclaimFd(usize, *mut crate::syscalls::io::FdEntry),
+    ReclaimFd(u32, *mut crate::syscalls::io::FdEntry),
     // IPC/Telemetry (Low Priority)
     Reingest { vpath: String, temp_path: String },
     Log(String),

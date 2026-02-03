@@ -42,12 +42,12 @@ pub fn track_fd(fd: c_int, path: &str, is_vfs: bool) {
     // Safety: Reactor is guaranteed to be initialized after ShimState::init()
     unsafe {
         let reactor = crate::sync::get_reactor_unchecked();
-        let old = reactor.fd_table.set(fd as usize, entry);
+        let old = reactor.fd_table.set(fd as u32, entry);
         if !old.is_null() {
             // Push old entry to RingBuffer for safe reclamation by Worker
             let _ = reactor
                 .ring_buffer
-                .push(crate::sync::Task::ReclaimFd(fd as usize, old));
+                .push(crate::sync::Task::ReclaimFd(fd as u32, old));
         }
     }
 }
@@ -60,11 +60,11 @@ pub fn untrack_fd(fd: c_int) {
     }
     unsafe {
         let reactor = crate::sync::get_reactor_unchecked();
-        let old = reactor.fd_table.remove(fd as usize);
+        let old = reactor.fd_table.remove(fd as u32);
         if !old.is_null() {
             let _ = reactor
                 .ring_buffer
-                .push(crate::sync::Task::ReclaimFd(fd as usize, old));
+                .push(crate::sync::Task::ReclaimFd(fd as u32, old));
         }
     }
 }
@@ -77,7 +77,7 @@ pub fn get_fd_entry(fd: c_int) -> Option<FdEntry> {
     }
     unsafe {
         let reactor = crate::sync::get_reactor_unchecked();
-        let entry_ptr = reactor.fd_table.get(fd as usize);
+        let entry_ptr = reactor.fd_table.get(fd as u32);
         if !entry_ptr.is_null() {
             // Safety: We assume the grace period in the RingBuffer is sufficient
             // to prevent UAF during this clone.

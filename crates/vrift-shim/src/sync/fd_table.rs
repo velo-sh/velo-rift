@@ -38,13 +38,13 @@ impl FdTable {
 
     /// Set the entry for a given FD. Returns the OLD entry if any.
     #[inline(always)]
-    pub fn set(&self, fd: usize, entry: *mut FdEntry) -> *mut FdEntry {
-        if fd >= MAX_FDS {
+    pub fn set(&self, fd: u32, entry: *mut FdEntry) -> *mut FdEntry {
+        if fd >= MAX_FDS as u32 {
             return ptr::null_mut();
         }
 
-        let i1 = fd / TIER2_SIZE;
-        let i2 = fd % TIER2_SIZE;
+        let i1 = (fd / TIER2_SIZE as u32) as usize;
+        let i2 = (fd % TIER2_SIZE as u32) as usize;
 
         let mut tier2_ptr = self.table[i1].load(Ordering::Acquire);
         if tier2_ptr.is_null() {
@@ -75,13 +75,13 @@ impl FdTable {
 
     /// Get a clone of the entry for a given FD.
     #[inline(always)]
-    pub fn get(&self, fd: usize) -> *mut FdEntry {
-        if fd >= MAX_FDS {
+    pub fn get(&self, fd: u32) -> *mut FdEntry {
+        if fd >= MAX_FDS as u32 {
             return ptr::null_mut();
         }
 
-        let i1 = fd / TIER2_SIZE;
-        let i2 = fd % TIER2_SIZE;
+        let i1 = (fd / TIER2_SIZE as u32) as usize;
+        let i2 = (fd % TIER2_SIZE as u32) as usize;
 
         // Use Relaxed for reads - we don't need synchronization for lookups
         let tier2_ptr = self.table[i1].load(Ordering::Relaxed);
@@ -94,7 +94,7 @@ impl FdTable {
 
     /// Remove an entry. Returns the removed entry.
     #[inline(always)]
-    pub fn remove(&self, fd: usize) -> *mut FdEntry {
+    pub fn remove(&self, fd: u32) -> *mut FdEntry {
         self.set(fd, ptr::null_mut())
     }
 }
