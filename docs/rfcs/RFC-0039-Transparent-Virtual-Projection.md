@@ -17,6 +17,10 @@
 | Live Ingest on close() | §3.2 | ✅ Done | `sync_ipc_manifest_reingest` on close |
 | Tier-1 chattr +i | §5.1.1 | ✅ Done | Native implementation (macOS/Linux) |
 | Tier-1 chown | §5.1.1 | ⏸️ Deferred | Deferred: High friction (requires root) |
+| **CLI: `vrift inception`** | §3.1 | ✅ Done | Enter VFS mode via `eval` |
+| **CLI: `vrift wake`** | §3.1 | ✅ Done | Exit VFS mode |
+| **CLI: `vrift hook`** | - | ✅ Done | Auto-inception on `cd` (bash/zsh/fish) |
+| **CLI: `vrift init`** | - | ✅ Done | Initialize .vrift/ directory |
 
 ## 2. Context & Objectives
 Velo Rift™ aims to eliminate the friction between "Project Content" and "Disk Storage." This RFC proposes a **Transparent Projection Model** where the VFS layer replaces heavy-duty physical directories (e.g., `node_modules`, `target`, `.venv`) with a dynamic virtual lens. The environment is intended to be **long-lived**, becoming the primary state of the workspace rather than a transient execution context.
