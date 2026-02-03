@@ -205,16 +205,29 @@ pub unsafe extern "C" fn linkat_shim(
 pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
     #[cfg(target_os = "macos")]
     {
+        // BUG-007: Use raw syscall when shim not fully ready to avoid TLS deadlock
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2
+            || crate::state::SHIM_STATE
+                .load(std::sync::atomic::Ordering::Acquire)
+                .is_null()
+        {
+            return crate::syscalls::macos_raw::raw_unlink(path);
+        }
         let real = std::mem::transmute::<
             *mut libc::c_void,
             unsafe extern "C" fn(*const c_char) -> c_int,
         >(crate::reals::REAL_UNLINK.get());
-        passthrough_if_init!(real, path);
         block_vfs_mutation(path).unwrap_or_else(|| real(path))
     }
     #[cfg(target_os = "linux")]
     {
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2
+            || crate::state::SHIM_STATE
+                .load(std::sync::atomic::Ordering::Acquire)
+                .is_null()
+        {
             return crate::syscalls::linux_raw::raw_unlink(path);
         }
         block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_unlink(path))
@@ -225,16 +238,28 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
 pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
     #[cfg(target_os = "macos")]
     {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2
+            || crate::state::SHIM_STATE
+                .load(std::sync::atomic::Ordering::Acquire)
+                .is_null()
+        {
+            return crate::syscalls::macos_raw::raw_rmdir(path);
+        }
         let real = std::mem::transmute::<
             *mut libc::c_void,
             unsafe extern "C" fn(*const c_char) -> c_int,
         >(crate::reals::REAL_RMDIR.get());
-        passthrough_if_init!(real, path);
         block_vfs_mutation(path).unwrap_or_else(|| real(path))
     }
     #[cfg(target_os = "linux")]
     {
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2
+            || crate::state::SHIM_STATE
+                .load(std::sync::atomic::Ordering::Acquire)
+                .is_null()
+        {
             return crate::syscalls::linux_raw::raw_rmdir(path);
         }
         block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_rmdir(path))
@@ -244,22 +269,30 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
+        return crate::syscalls::macos_raw::raw_mkdir(path, mode);
+    }
     let real = std::mem::transmute::<
         *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, libc::mode_t) -> c_int,
     >(crate::reals::REAL_MKDIR.get());
-    passthrough_if_init!(real, path, mode);
-
-    if let Some(res) = block_vfs_mutation(path) {
-        return res;
-    }
-    real(path, mode)
+    block_vfs_mutation(path).unwrap_or_else(|| real(path, mode))
 }
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
 pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
-    if INITIALIZING.load(Ordering::Relaxed) >= 2 {
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::linux_raw::raw_mkdir(path, mode);
     }
     block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_mkdir(path, mode))
@@ -348,11 +381,18 @@ pub unsafe extern "C" fn fchmodat_shim(
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t) -> c_int {
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
+        return crate::syscalls::macos_raw::raw_truncate(path, length);
+    }
     let real = std::mem::transmute::<
         *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, libc::off_t) -> c_int,
     >(crate::reals::REAL_TRUNCATE.get());
-    passthrough_if_init!(real, path, length);
     block_vfs_mutation(path).unwrap_or_else(|| real(path, length))
 }
 

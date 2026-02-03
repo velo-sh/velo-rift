@@ -103,6 +103,22 @@ const SYS_FCNTL: i64 = 92;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_CHMOD: i64 = 15;
 
+/// SYS_unlink = 10 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_UNLINK: i64 = 10;
+
+/// SYS_rmdir = 137 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_RMDIR: i64 = 137;
+
+/// SYS_mkdir = 136 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_MKDIR: i64 = 136;
+
+/// SYS_truncate = 200 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_TRUNCATE: i64 = 200;
+
 /// Raw stat64 syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
@@ -466,6 +482,88 @@ pub unsafe fn raw_chmod(path: *const libc::c_char, mode: libc::mode_t) -> libc::
         syscall = in(reg) SYS_CHMOD,
         in("x0") path as i64,
         in("x1") mode as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw unlink syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_unlink(path: *const libc::c_char) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_UNLINK,
+        in("x0") path as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw rmdir syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_rmdir(path: *const libc::c_char) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_RMDIR,
+        in("x0") path as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw mkdir syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_mkdir(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_MKDIR,
+        in("x0") path as i64,
+        in("x1") mode as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw truncate syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_truncate(path: *const libc::c_char, length: libc::off_t) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_TRUNCATE,
+        in("x0") path as i64,
+        in("x1") length,
         lateout("x0") ret,
         options(nostack)
     );
@@ -908,6 +1006,97 @@ pub unsafe fn raw_chmod(path: *const libc::c_char, mode: libc::mode_t) -> libc::
     }
 }
 
+/// SYS_unlink = 10 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_UNLINK_X64: i64 = 10;
+/// SYS_rmdir = 137 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_RMDIR_X64: i64 = 137;
+/// SYS_mkdir = 136 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_MKDIR_X64: i64 = 136;
+/// SYS_truncate = 200 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_TRUNCATE_X64: i64 = 200;
+
+/// Raw unlink syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_unlink(path: *const libc::c_char) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_UNLINK_X64 | 0x2000000,
+        in("rdi") path as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw rmdir syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_rmdir(path: *const libc::c_char) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_RMDIR_X64 | 0x2000000,
+        in("rdi") path as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw mkdir syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_mkdir(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_MKDIR_X64 | 0x2000000,
+        in("rdi") path as i64,
+        in("rsi") mode as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw truncate syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_truncate(path: *const libc::c_char, length: libc::off_t) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_TRUNCATE_X64 | 0x2000000,
+        in("rdi") path as i64,
+        in("rsi") length as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
 // =============================================================================
 // Linux fallback (redirects to linux_raw.rs)
 // =============================================================================
@@ -1010,4 +1199,24 @@ pub unsafe fn raw_fcntl(fd: libc::c_int, cmd: libc::c_int, arg: libc::c_int) -> 
 #[cfg(target_os = "linux")]
 pub unsafe fn raw_chmod(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int {
     crate::syscalls::linux_raw::raw_chmod(path, mode)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_unlink(path: *const libc::c_char) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_unlink(path)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_rmdir(path: *const libc::c_char) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_rmdir(path)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_mkdir(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_mkdir(path, mode)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_truncate(path: *const libc::c_char, length: libc::off_t) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_truncate(path, length)
 }

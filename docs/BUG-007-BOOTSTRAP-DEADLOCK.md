@@ -102,9 +102,27 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut stat) -> c_int {
 | `read_shim` | `raw_read` | 3 |
 | `write_shim` | `raw_write` | 4 |
 | `close_shim` | `raw_close` | 6 |
+| `dup_shim` | `raw_dup` | 41 |
+| `dup2_shim` | `raw_dup2` | 90 |
+| `chmod_shim` | `raw_chmod` | 15 |
 | `mmap_shim` | `raw_mmap` | 197 |
 | `munmap_shim` | `raw_munmap` | 73 |
 | `access_shim` | `raw_access` | 33 |
+| `openat_shim` | `raw_openat` | 463 |
+| `fcntl_shim` | `raw_fcntl` | 92 |
+| `lseek_shim` | `raw_lseek` | 199 |
+| `ftruncate_shim` | `raw_ftruncate` | 201 |
+
+### Additional Guard: SHIM_STATE Check
+
+For shims that call `block_vfs_mutation()` (chmod, unlink, rmdir, etc.), an extra check 
+for `SHIM_STATE.is_null()` is required to avoid TLS pthread deadlocks:
+
+```rust
+if init_state >= 2 || SHIM_STATE.load(Ordering::Acquire).is_null() {
+    return raw_chmod(path, mode);
+}
+```
 
 ## Testing
 
