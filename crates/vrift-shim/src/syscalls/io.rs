@@ -91,9 +91,14 @@ pub fn is_vfs_fd(fd: c_int) -> bool {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
-    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+    // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 {
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::macos_raw::raw_dup(oldfd);
     }
 
@@ -114,9 +119,14 @@ pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
-    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+    // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 {
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::macos_raw::raw_dup2(oldfd, newfd);
     }
 
@@ -206,9 +216,14 @@ pub unsafe extern "C" fn write_shim(
     buf: *const c_void,
     count: libc::size_t,
 ) -> libc::ssize_t {
-    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+    // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 {
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::macos_raw::raw_write(fd, buf, count);
     }
 
@@ -226,9 +241,14 @@ pub unsafe extern "C" fn read_shim(
     buf: *mut c_void,
     count: libc::size_t,
 ) -> libc::ssize_t {
-    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+    // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 {
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::macos_raw::raw_read(fd, buf, count);
     }
 
