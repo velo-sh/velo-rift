@@ -678,6 +678,8 @@ pub(crate) struct ShimState {
     /// Packed warning state: [32-bit threshold | 32-bit timestamp] (RFC-0051)
     /// Allows atomic updates of both values without locks.
     pub last_usage_alert: std::sync::atomic::AtomicU64,
+    /// RingBuffer for background tasks
+    pub tasks: &'static crate::sync::RingBuffer,
 }
 
 impl ShimState {
@@ -852,6 +854,7 @@ impl ShimState {
             path_resolver: PathResolver::new(&vfs_prefix, &project_root),
             cached_soft_limit: AtomicUsize::new(soft_limit),
             last_usage_alert: std::sync::atomic::AtomicU64::new(0),
+            tasks: Self::init_reactor(),
         });
 
         // RFC-OPT-002: Symbol Prefetching is deferred to first syscall.
@@ -859,6 +862,82 @@ impl ShimState {
         // The lazy AtomicPtr caching in reals.rs handles this safely.
 
         Some(Box::into_raw(state))
+    }
+
+    fn init_reactor() -> &'static crate::sync::RingBuffer {
+        unsafe {
+            if crate::sync::get_reactor().is_none() {
+                let reactor = crate::sync::Reactor {
+                    fd_table: crate::sync::FdTable::new(),
+                    ring_buffer: crate::sync::RingBuffer::new(),
+                    started: std::sync::atomic::AtomicBool::new(true),
+                };
+                *crate::sync::REACTOR.get() = Some(reactor);
+
+                // Start Worker Thread via pthread
+                Self::spawn_worker();
+            }
+            &crate::sync::get_reactor().unwrap().ring_buffer
+        }
+    }
+
+    fn spawn_worker() {
+        unsafe {
+            let mut thread: libc::pthread_t = std::mem::zeroed();
+            libc::pthread_create(
+                &mut thread,
+                std::ptr::null(),
+                Self::worker_entry,
+                std::ptr::null_mut(),
+            );
+            libc::pthread_detach(thread);
+        }
+    }
+
+    extern "C" fn worker_entry(_: *mut libc::c_void) -> *mut libc::c_void {
+        // Block all signals in worker thread
+        unsafe {
+            let mut mask: libc::sigset_t = std::mem::zeroed();
+            libc::sigfillset(&mut mask);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
+        }
+
+        let reactor = match crate::sync::get_reactor() {
+            Some(r) => r,
+            None => return std::ptr::null_mut(),
+        };
+
+        loop {
+            if let Some(task) = reactor.ring_buffer.pop() {
+                Self::process_task(task);
+            } else {
+                std::thread::yield_now(); // Minimal backoff
+            }
+        }
+    }
+
+    fn process_task(task: crate::sync::Task) {
+        match task {
+            crate::sync::Task::ReclaimFd(_fd, entry) => {
+                if !entry.is_null() {
+                    unsafe { drop(Box::from_raw(entry)) };
+                }
+            }
+            crate::sync::Task::Reingest { vpath, temp_path } => {
+                if let Some(state) = ShimState::get() {
+                    unsafe {
+                        crate::ipc::sync_ipc_manifest_reingest(
+                            &state.socket_path,
+                            &vpath,
+                            &temp_path,
+                        );
+                    }
+                }
+            }
+            crate::sync::Task::Log(msg) => {
+                unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len()) };
+            }
+        }
     }
 
     pub(crate) fn get() -> Option<&'static Self> {

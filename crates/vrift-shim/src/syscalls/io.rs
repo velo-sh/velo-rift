@@ -5,21 +5,18 @@
 
 #[cfg(target_os = "macos")]
 use crate::state::ShimGuard;
-use crate::sync::RecursiveMutex;
 use libc::c_int;
 #[cfg(target_os = "macos")]
 use libc::c_void;
 #[cfg(target_os = "macos")]
 use libc::off_t;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Global counter for open FDs to monitor saturation (RFC-0051)
 pub static OPEN_FD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-// Symbols imported from reals.rs via crate::reals
-/// Global FD tracking table: fd -> (path, is_vfs_file)
-static FD_TABLE: RecursiveMutex<Option<HashMap<c_int, FdEntry>>> = RecursiveMutex::new(None);
+// RFC-0051 / Pattern 2648: Lock-Free FD tracking via Tiered Atomic Array.
+// The legacy Mutex-protected Map is replaced by REACTOR.fd_table.
 
 #[derive(Clone, Debug)]
 pub struct FdEntry {
@@ -36,40 +33,49 @@ pub fn track_fd(fd: c_int, path: &str, is_vfs: bool) {
         return;
     }
 
-    // Pattern 2648: Allocate BEFORE acquiring lock to avoid recursing through malloc -> fstat -> FD_TABLE
-    let entry = FdEntry {
+    let entry = Box::into_raw(Box::new(FdEntry {
         path: path.to_string(),
         is_vfs,
-    };
+    }));
 
-    let mut table_guard = FD_TABLE.lock();
-    if table_guard.is_none() {
-        *table_guard = Some(HashMap::new());
-    }
-    if let Some(ref mut map) = *table_guard {
-        map.insert(fd, entry);
+    if let Some(reactor) = crate::sync::get_reactor() {
+        let old = reactor.fd_table.set(fd as usize, entry);
+        if !old.is_null() {
+            // Push old entry to RingBuffer for safe reclamation by Worker
+            let _ = reactor
+                .ring_buffer
+                .push(crate::sync::Task::ReclaimFd(fd as usize, old));
+        }
     }
 }
 
-/// Untrack FD on close
+/// Stop tracking an FD
 pub fn untrack_fd(fd: c_int) {
     if fd < 0 {
         return;
     }
-    let mut table = FD_TABLE.lock();
-    if let Some(ref mut map) = *table {
-        map.remove(&fd);
+    if let Some(reactor) = crate::sync::get_reactor() {
+        let old = reactor.fd_table.remove(fd as usize);
+        if !old.is_null() {
+            let _ = reactor
+                .ring_buffer
+                .push(crate::sync::Task::ReclaimFd(fd as usize, old));
+        }
     }
 }
 
-/// Get entry for an FD
+/// Get a copy of the FD entry if it exists
 pub fn get_fd_entry(fd: c_int) -> Option<FdEntry> {
     if fd < 0 {
         return None;
     }
-    let table = FD_TABLE.lock();
-    if let Some(ref map) = *table {
-        return map.get(&fd).cloned();
+    if let Some(reactor) = crate::sync::get_reactor() {
+        let entry_ptr = reactor.fd_table.get(fd as usize);
+        if !entry_ptr.is_null() {
+            // Safety: We assume the grace period in the RingBuffer is sufficient
+            // to prevent UAF during this clone.
+            return Some(unsafe { (&*entry_ptr).clone() });
+        }
     }
     None
 }
@@ -231,7 +237,6 @@ pub unsafe extern "C" fn read_shim(
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
-    use crate::ipc::sync_ipc_manifest_reingest;
     use crate::state::{EventType, ShimGuard, ShimState};
 
     // BUG-007 / RFC-0051: Use raw syscall to completely bypass libc/dlsym during critical phases.
@@ -268,6 +273,10 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
     let file_id = 0; // Simplified for general close
     vfs_record!(EventType::Close, file_id, fd);
 
+    // Final close of the file
+    let res = crate::syscalls::macos_raw::raw_close(fd);
+
+    // Offload IPC task to Worker (asynchronous)
     if let Some(info) = cow_info {
         vfs_log!(
             "COW CLOSE: fd={} vpath='{}' temp='{}'",
@@ -276,28 +285,13 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
             info.temp_path
         );
 
-        // Final close of the temp file before reingest
-        let res = crate::syscalls::macos_raw::raw_close(fd);
-
-        // Trigger reingest IPC
-        // RFC-0047: ManifestReingest updates the CAS and Manifest
-        if sync_ipc_manifest_reingest(&state.socket_path, &info.vpath, &info.temp_path) {
-            vfs_record!(
-                EventType::ReingestSuccess,
-                vrift_ipc::fnv1a_hash(&info.vpath),
-                res
-            );
-        } else {
-            vfs_log!("REINGEST FAILED: IPC error for '{}'", info.vpath);
-            vfs_record!(
-                EventType::ReingestFail,
-                vrift_ipc::fnv1a_hash(&info.vpath),
-                -1
-            );
+        // Offload reingest to Worker (non-blocking)
+        if let Some(reactor) = crate::sync::get_reactor() {
+            let _ = reactor.ring_buffer.push(crate::sync::Task::Reingest {
+                vpath: info.vpath.clone(),
+                temp_path: info.temp_path.clone(),
+            });
         }
-
-        // Note: info.temp_path is cleaned up by the daemon (zero-copy move)
-        // or discarded if IPC failed (though that leaves an orphan temp file)
 
         res
     } else {

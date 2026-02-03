@@ -1,17 +1,13 @@
-//! Recursive Mutex Implementation for macOS/Linux Shim.
-//!
-//! Pattern 2648/2649 safety: Uses raw pthread primitives to avoid
-//! Rust's standard Mutex which is not recursive on all platforms
-//! and can deadlock during dyld bootstrap.
-
-use libc::{pthread_mutex_t, pthread_mutexattr_t, PTHREAD_MUTEX_RECURSIVE};
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
-
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// A Recursive Mutex using raw pthread primitives.
+///
+/// This allows a thread to acquire the same lock multiple times without deadlocking.
+/// Designed for use in shim's deep call chains.
 pub struct RecursiveMutex<T> {
-    inner: UnsafeCell<pthread_mutex_t>,
+    inner: UnsafeCell<libc::pthread_mutex_t>,
     data: UnsafeCell<T>,
     initialized: AtomicBool,
     init_lock: AtomicBool,
@@ -35,9 +31,10 @@ impl<T> RecursiveMutex<T> {
             return;
         }
 
+        // Spinlock to serialize initialization
         while self
             .init_lock
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
             std::hint::spin_loop();
@@ -45,13 +42,13 @@ impl<T> RecursiveMutex<T> {
 
         if !self.initialized.load(Ordering::Relaxed) {
             unsafe {
-                let mut attr: pthread_mutexattr_t = std::mem::zeroed();
+                let mut attr: libc::pthread_mutexattr_t = std::mem::zeroed();
                 libc::pthread_mutexattr_init(&mut attr);
-                libc::pthread_mutexattr_settype(&mut attr, PTHREAD_MUTEX_RECURSIVE);
+                libc::pthread_mutexattr_settype(&mut attr, libc::PTHREAD_MUTEX_RECURSIVE);
                 libc::pthread_mutex_init(self.inner.get(), &attr);
                 libc::pthread_mutexattr_destroy(&mut attr);
+                self.initialized.store(true, Ordering::Release);
             }
-            self.initialized.store(true, Ordering::Release);
         }
 
         self.init_lock.store(false, Ordering::Release);
@@ -66,24 +63,35 @@ impl<T> RecursiveMutex<T> {
     }
 }
 
+impl<T> Drop for RecursiveMutex<T> {
+    fn drop(&mut self) {
+        if self.initialized.load(Ordering::Acquire) {
+            unsafe {
+                libc::pthread_mutex_destroy(self.inner.get());
+            }
+        }
+    }
+}
+
 pub struct RecursiveMutexGuard<'a, T> {
     mutex: &'a RecursiveMutex<T>,
 }
 
-impl<T> Deref for RecursiveMutexGuard<'_, T> {
+impl<'a, T> Deref for RecursiveMutexGuard<'a, T> {
     type Target = T;
-    fn deref(&self) -> &Self::Target {
+
+    fn deref(&self) -> &T {
         unsafe { &*self.mutex.data.get() }
     }
 }
 
-impl<T> DerefMut for RecursiveMutexGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+impl<'a, T> DerefMut for RecursiveMutexGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.mutex.data.get() }
     }
 }
 
-impl<T> Drop for RecursiveMutexGuard<'_, T> {
+impl<'a, T> Drop for RecursiveMutexGuard<'a, T> {
     fn drop(&mut self) {
         unsafe {
             libc::pthread_mutex_unlock(self.mutex.inner.get());
