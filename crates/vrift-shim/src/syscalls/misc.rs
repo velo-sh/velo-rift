@@ -212,6 +212,9 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
                 .load(std::sync::atomic::Ordering::Acquire)
                 .is_null()
         {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
             return crate::syscalls::macos_raw::raw_unlink(path);
         }
         let real = std::mem::transmute::<
@@ -228,6 +231,9 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
                 .load(std::sync::atomic::Ordering::Acquire)
                 .is_null()
         {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
             return crate::syscalls::linux_raw::raw_unlink(path);
         }
         block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_unlink(path))
@@ -244,6 +250,9 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
                 .load(std::sync::atomic::Ordering::Acquire)
                 .is_null()
         {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
             return crate::syscalls::macos_raw::raw_rmdir(path);
         }
         let real = std::mem::transmute::<
@@ -260,6 +269,9 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
                 .load(std::sync::atomic::Ordering::Acquire)
                 .is_null()
         {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
             return crate::syscalls::linux_raw::raw_rmdir(path);
         }
         block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_rmdir(path))
@@ -275,6 +287,9 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
+        if let Some(err) = quick_block_vfs_mutation(path) {
+            return err;
+        }
         return crate::syscalls::macos_raw::raw_mkdir(path, mode);
     }
     let real = std::mem::transmute::<
@@ -293,6 +308,9 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
+        if let Some(err) = quick_block_vfs_mutation(path) {
+            return err;
+        }
         return crate::syscalls::linux_raw::raw_mkdir(path, mode);
     }
     block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_mkdir(path, mode))
@@ -337,6 +355,27 @@ pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
     None
 }
 
+/// Lightweight VFS check for raw syscall path - avoids TLS/ShimGuard
+/// Only checks VRIFT_VFS_PREFIX env var, safe to call during early init
+#[inline]
+pub(crate) unsafe fn quick_block_vfs_mutation(path: *const c_char) -> Option<c_int> {
+    if path.is_null() {
+        return None;
+    }
+    let path_str = CStr::from_ptr(path).to_str().ok()?;
+    let env_name = b"VRIFT_VFS_PREFIX\0";
+    let vfs_prefix_ptr = libc::getenv(env_name.as_ptr() as *const c_char);
+    if !vfs_prefix_ptr.is_null() {
+        if let Ok(vfs_prefix) = CStr::from_ptr(vfs_prefix_ptr).to_str() {
+            if path_str.starts_with(vfs_prefix) {
+                crate::set_errno(libc::EPERM);
+                return Some(-1);
+            }
+        }
+    }
+    None
+}
+
 // --- chmod/fchmod ---
 
 #[no_mangle]
@@ -350,6 +389,10 @@ pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> 
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
+        // Still check VFS prefix even in raw syscall path
+        if let Some(err) = quick_block_vfs_mutation(path) {
+            return err;
+        }
         return crate::syscalls::macos_raw::raw_chmod(path, mode);
     }
 
@@ -387,6 +430,9 @@ pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t)
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
+        if let Some(err) = quick_block_vfs_mutation(path) {
+            return err;
+        }
         return crate::syscalls::macos_raw::raw_truncate(path, length);
     }
     let real = std::mem::transmute::<
