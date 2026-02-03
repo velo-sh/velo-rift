@@ -709,7 +709,7 @@ pub unsafe fn raw_lseek(fd: c_int, offset: off_t, whence: c_int) -> off_t {
             "syscall",
             in("rax") 8i64, // SYS_lseek
             in("rdi") fd as i64,
-            in("rsi") offset as i64,
+            in("rsi") offset,
             in("rdx") whence as i64,
             lateout("rax") ret,
             lateout("rcx") _,
@@ -752,7 +752,7 @@ pub unsafe fn raw_ftruncate(fd: c_int, length: off_t) -> c_int {
             "syscall",
             in("rax") 77i64, // SYS_ftruncate
             in("rdi") fd as i64,
-            in("rsi") length as i64,
+            in("rsi") length,
             lateout("rax") ret,
             lateout("rcx") _,
             lateout("r11") _,
