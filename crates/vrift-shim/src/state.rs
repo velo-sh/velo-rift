@@ -910,11 +910,27 @@ impl ShimState {
             None => return std::ptr::null_mut(),
         };
 
+        // Worker thread loop with adaptive backoff for CPU efficiency
+        let mut backoff_count = 0u32;
         loop {
             if let Some(task) = reactor.ring_buffer.pop() {
+                // Reset backoff on success
+                backoff_count = 0;
                 Self::process_task(task);
             } else {
-                std::thread::yield_now(); // Minimal backoff
+                // No task available - adaptive backoff
+                backoff_count = backoff_count.saturating_add(1).min(1000);
+
+                if backoff_count < 10 {
+                    // Fast spin for very short idle periods
+                    std::hint::spin_loop();
+                } else if backoff_count < 100 {
+                    // Yield CPU for short idle periods
+                    std::thread::yield_now();
+                } else {
+                    // Sleep for prolonged idle (1μs reduces CPU while staying responsive)
+                    std::thread::sleep(std::time::Duration::from_micros(1));
+                }
             }
         }
     }
