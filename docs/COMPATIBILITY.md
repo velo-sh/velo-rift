@@ -225,12 +225,12 @@ These are "invisible" behaviors discovered during deep forensic audit that may c
 
 | Category | Compliance | Status | Key Missing Operations |
 | :--- | :---: | :--- | :--- |
-| **Basic Metadata** | 95% | ✅ Strong | `statx` (Linux-specific partial) |
+| **Basic Metadata** | 95% | ✅ Strong | `statx` (Linux-only, pending) |
 | **File I/O** | 90% | ✅ Strong | `preadv`/`pwritev`, `sendfile` |
 | **Directory Ops** | 100% | ✅ Strong | None (Read-only traversal complete) |
-| **Namespace/Path** | 80% | ✅ Good | `fchdir` (not yet intercepted) |
-| **Mutation** | 60% | ✅ Good | `mkdir`, `chmod`, `chown` (Passthrough OK) |
-| **Permissions** | 80% | ✅ Good | None (Passthrough correct for outputs) |
+| **Namespace/Path** | 95% | ✅ Strong | `fchdir` ✅ implemented |
+| **Mutation** | 90% | ✅ Strong | `chown` (Passthrough by design) |
+| **Permissions** | 90% | ✅ Strong | `chmod` ✅ implemented |
 | **Dynamic Loading**| 100% | ✅ Full | None |
 | **Memory Management**| 100% | ✅ Full | None |
 
