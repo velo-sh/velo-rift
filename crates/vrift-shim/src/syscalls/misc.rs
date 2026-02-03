@@ -236,7 +236,116 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
             }
             return crate::syscalls::linux_raw::raw_unlink(path);
         }
-        block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_unlink(path))
+        block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_rmdir(path))
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn unlinkat_shim(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
+            return crate::syscalls::macos_raw::raw_unlinkat(dirfd, path, flags);
+        }
+        let real = std::mem::transmute::<
+            *mut libc::c_void,
+            unsafe extern "C" fn(c_int, *const c_char, c_int) -> c_int,
+        >(crate::reals::REAL_UNLINKAT.get());
+        block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, flags))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if INITIALIZING.load(Ordering::Relaxed) >= 2
+            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+        {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
+            return crate::syscalls::linux_raw::raw_unlinkat(dirfd, path, flags);
+        }
+        block_vfs_mutation(path)
+            .unwrap_or_else(|| crate::syscalls::linux_raw::raw_unlinkat(dirfd, path, flags))
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mkdirat_shim(
+    dirfd: c_int,
+    path: *const c_char,
+    mode: libc::mode_t,
+) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
+            return crate::syscalls::macos_raw::raw_mkdirat(dirfd, path, mode);
+        }
+        let real = std::mem::transmute::<
+            *mut libc::c_void,
+            unsafe extern "C" fn(c_int, *const c_char, libc::mode_t) -> c_int,
+        >(crate::reals::REAL_MKDIRAT.get());
+        block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, mode))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if INITIALIZING.load(Ordering::Relaxed) >= 2
+            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+        {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
+            return crate::syscalls::linux_raw::raw_mkdirat(dirfd, path, mode);
+        }
+        block_vfs_mutation(path)
+            .unwrap_or_else(|| crate::syscalls::linux_raw::raw_mkdirat(dirfd, path, mode))
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn symlinkat_shim(
+    p1: *const c_char,
+    dirfd: c_int,
+    p2: *const c_char,
+) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+            if let Some(err) = quick_block_vfs_mutation(p1).or_else(|| quick_block_vfs_mutation(p2))
+            {
+                return err;
+            }
+            return crate::syscalls::macos_raw::raw_symlinkat(p1, dirfd, p2);
+        }
+        let real = std::mem::transmute::<
+            *mut libc::c_void,
+            unsafe extern "C" fn(*const c_char, c_int, *const c_char) -> c_int,
+        >(crate::reals::REAL_SYMLINKAT.get());
+        block_vfs_mutation(p1)
+            .or_else(|| block_vfs_mutation(p2))
+            .unwrap_or_else(|| real(p1, dirfd, p2))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if INITIALIZING.load(Ordering::Relaxed) >= 2
+            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+        {
+            if let Some(err) = quick_block_vfs_mutation(p1).or_else(|| quick_block_vfs_mutation(p2))
+            {
+                return err;
+            }
+            return crate::syscalls::linux_raw::raw_symlinkat(p1, dirfd, p2);
+        }
+        block_vfs_mutation(p1)
+            .or_else(|| block_vfs_mutation(p2))
+            .unwrap_or_else(|| crate::syscalls::linux_raw::raw_symlinkat(p1, dirfd, p2))
     }
 }
 
@@ -427,6 +536,93 @@ pub unsafe extern "C" fn fchmodat_shim(
         unsafe extern "C" fn(c_int, *const c_char, libc::mode_t, c_int) -> c_int,
     >(crate::reals::REAL_FCHMODAT.get());
     block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, mode, flags))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+            return crate::syscalls::macos_raw::raw_fchmod(fd, mode);
+        }
+
+        // RFC-OPT-001: Recursion protection
+        let _guard = match ShimGuard::enter() {
+            Some(g) => g,
+            None => return crate::syscalls::macos_raw::raw_fchmod(fd, mode),
+        };
+
+        // VFS logic: if FD points to a VFS file, block mutation
+        // Strategy: Try to get path from FD (robust)
+        let mut path_buf = [0; 1024];
+        if unsafe { libc::fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr()) } == 0 {
+            let path_cstr = unsafe { CStr::from_ptr(path_buf.as_ptr()) };
+            if let Ok(path_str) = path_cstr.to_str() {
+                if let Some(state) = ShimState::get() {
+                    if state.psfs_applicable(path_str) {
+                        crate::set_errno(libc::EPERM);
+                        return -1;
+                    }
+                }
+            }
+        }
+
+        // Fallback to FD table if F_GETPATH failed or for extra safety
+        use crate::syscalls::io::get_fd_entry;
+        if let Some(entry) = get_fd_entry(fd) {
+            if entry.is_vfs {
+                crate::set_errno(libc::EPERM);
+                return -1;
+            }
+        }
+
+        crate::syscalls::macos_raw::raw_fchmod(fd, mode)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if INITIALIZING.load(Ordering::Relaxed) >= 2
+            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+        {
+            return crate::syscalls::linux_raw::raw_fchmod(fd, mode);
+        }
+
+        let _guard = match ShimGuard::enter() {
+            Some(g) => g,
+            None => return crate::syscalls::linux_raw::raw_fchmod(fd, mode),
+        };
+
+        // Strategy: Use /proc/self/fd/N to get path
+        let fd_path = format!("/proc/self/fd/{}\0", fd);
+        let mut path_buf = [0u8; 1024];
+        let n = unsafe {
+            libc::readlink(
+                fd_path.as_ptr() as *const c_char,
+                path_buf.as_mut_ptr() as *mut c_char,
+                path_buf.len(),
+            )
+        };
+        if n > 0 && (n as usize) < path_buf.len() {
+            if let Ok(path_str) = std::str::from_utf8(&path_buf[..n as usize]) {
+                if let Some(state) = ShimState::get() {
+                    if state.psfs_applicable(path_str) {
+                        crate::set_errno(libc::EPERM);
+                        return -1;
+                    }
+                }
+            }
+        }
+
+        use crate::syscalls::io::get_fd_entry;
+        if let Some(entry) = get_fd_entry(fd) {
+            if entry.is_vfs {
+                crate::set_errno(libc::EPERM);
+                return -1;
+            }
+        }
+
+        crate::syscalls::linux_raw::raw_fchmod(fd, mode)
+    }
 }
 
 // --- truncate ---

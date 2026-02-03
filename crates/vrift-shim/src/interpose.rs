@@ -10,9 +10,9 @@ use crate::syscalls::io::{
 };
 #[cfg(target_os = "macos")]
 use crate::syscalls::misc::{
-    chflags_shim, chmod_shim, fchmodat_shim, link_shim, linkat_shim, mkdir_shim, removexattr_shim,
-    rename_shim, renameat_shim, rmdir_shim, setxattr_shim, truncate_shim, unlink_shim,
-    utimensat_shim, utimes_shim,
+    chflags_shim, chmod_shim, fchmod_shim, fchmodat_shim, link_shim, linkat_shim, mkdir_shim,
+    mkdirat_shim, removexattr_shim, rename_shim, renameat_shim, rmdir_shim, setxattr_shim,
+    symlinkat_shim, truncate_shim, unlink_shim, unlinkat_shim, utimensat_shim, utimes_shim,
 };
 #[cfg(target_os = "macos")]
 use crate::syscalls::mmap::{mmap_shim, munmap_shim};
@@ -113,6 +113,10 @@ extern "C" {
     fn fchdir(fd: c_int) -> c_int;
     fn lseek(fd: c_int, offset: libc::off_t, whence: c_int) -> libc::off_t;
     fn ftruncate(fd: c_int, length: libc::off_t) -> c_int;
+    fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int;
+    fn mkdirat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int;
+    fn symlinkat(p1: *const c_char, dirfd: c_int, p2: *const c_char) -> c_int;
+    fn fchmod(fd: c_int, mode: mode_t) -> c_int;
 }
 
 extern "C" {
@@ -492,6 +496,41 @@ mod linux_shims {
             return res;
         }
         crate::syscalls::open::raw_fchmodat(dirfd, path, mode, flags)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+        crate::syscalls::misc::unlinkat_shim(dirfd, path, flags)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn mkdirat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int {
+        crate::syscalls::misc::mkdirat_shim(dirfd, path, mode)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn symlinkat(
+        p1: *const c_char,
+        dirfd: c_int,
+        p2: *const c_char,
+    ) -> c_int {
+        crate::syscalls::misc::symlinkat_shim(p1, dirfd, p2)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fchmod(fd: c_int, mode: mode_t) -> c_int {
+        crate::syscalls::misc::fchmod_shim(fd, mode)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn statx(
+        dirfd: c_int,
+        path: *const c_char,
+        flags: c_int,
+        mask: libc::c_uint,
+        buf: *mut crate::syscalls::stat::statx,
+    ) -> c_int {
+        crate::syscalls::stat::statx_shim(dirfd, path, flags, mask, buf)
     }
 
     #[no_mangle]
@@ -1401,4 +1440,32 @@ pub static IT_LSEEK: Interpose = Interpose {
 pub static IT_FTRUNCATE: Interpose = Interpose {
     new_func: ftruncate_shim as *const (),
     old_func: ftruncate as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_UNLINKAT: Interpose = Interpose {
+    new_func: unlinkat_shim as *const (),
+    old_func: unlinkat as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_MKDIRAT: Interpose = Interpose {
+    new_func: mkdirat_shim as *const (),
+    old_func: mkdirat as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_SYMLINKAT: Interpose = Interpose {
+    new_func: symlinkat_shim as *const (),
+    old_func: symlinkat as *const (),
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_FCHMOD: Interpose = Interpose {
+    new_func: fchmod_shim as *const (),
+    old_func: fchmod as *const (),
 };

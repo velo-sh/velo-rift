@@ -109,6 +109,92 @@ pub unsafe fn raw_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: 
     }
 }
 
+/// Raw unlinkat syscall
+#[inline(always)]
+pub unsafe fn raw_unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 263i64, // SYS_unlinkat
+            in("rdi") dirfd as i64,
+            in("rsi") path,
+            in("rdx") flags as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 35i64, // SYS_unlinkat
+            in("x0") dirfd as i64,
+            in("x1") path,
+            in("x2") flags as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
+/// Raw mkdirat syscall
+#[inline(always)]
+pub unsafe fn raw_mkdirat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 258i64, // SYS_mkdirat
+            in("rdi") dirfd as i64,
+            in("rsi") path,
+            in("rdx") mode as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 34i64, // SYS_mkdirat
+            in("x0") dirfd as i64,
+            in("x1") path,
+            in("x2") mode as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
 /// Raw close syscall
 #[inline(always)]
 pub unsafe fn raw_close(fd: c_int) -> c_int {
@@ -549,6 +635,49 @@ pub unsafe fn raw_link(old: *const c_char, new: *const c_char) -> c_int {
     }
 }
 
+/// Raw symlinkat syscall
+#[inline(always)]
+pub unsafe fn raw_symlinkat(p1: *const c_char, dirfd: c_int, p2: *const c_char) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 266i64, // SYS_symlinkat
+            in("rdi") p1,
+            in("rsi") dirfd as i64,
+            in("rdx") p2,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 36i64, // SYS_symlinkat
+            in("x0") p1,
+            in("x1") dirfd as i64,
+            in("x2") p2,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
 // =============================================================================
 // Stat Operations
 // =============================================================================
@@ -645,6 +774,102 @@ pub unsafe fn raw_fstat(fd: c_int, buf: *mut libc_stat) -> c_int {
             in("x8") 80i64, // SYS_fstat
             in("x0") fd as i64,
             in("x1") buf,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
+/// Raw fchmod syscall
+#[inline(always)]
+pub unsafe fn raw_fchmod(fd: c_int, mode: mode_t) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 91i64, // SYS_fchmod
+            in("rdi") fd as i64,
+            in("rsi") mode as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 53i64, // SYS_fchmodat
+            in("x0") fd as i64,
+            in("x1") 0i64, // NULL path for fchmod simulation via fchmodat
+            in("x2") mode as i64,
+            in("x3") 0i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
+/// Raw statx syscall
+#[inline(always)]
+pub unsafe fn raw_statx(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    mask: libc::c_uint,
+    buf: *mut c_void,
+) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 332i64, // SYS_statx
+            in("rdi") dirfd as i64,
+            in("rsi") path,
+            in("rdx") flags as i64,
+            in("r10") mask as i64,
+            in("r8") buf,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 291i64, // SYS_statx
+            in("x0") dirfd as i64,
+            in("x1") path,
+            in("x2") flags as i64,
+            in("x3") mask as i64,
+            in("x4") buf,
             lateout("x0") ret,
         );
         if ret < 0 {

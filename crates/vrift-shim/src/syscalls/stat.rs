@@ -4,6 +4,41 @@ use crate::state::*;
 use libc::{c_char, c_int, stat as libc_stat};
 use std::ffi::CStr;
 
+/// Linux statx structures (RFC-0044: Metadata virtualization)
+#[cfg(target_os = "linux")]
+#[repr(C)]
+pub struct statx_timestamp {
+    pub tv_sec: i64,
+    pub tv_nsec: u32,
+    pub __reserved: i32,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+pub struct statx {
+    pub stx_mask: u32,
+    pub stx_blksize: u32,
+    pub stx_attributes: u64,
+    pub stx_nlink: u32,
+    pub stx_uid: u32,
+    pub stx_gid: u32,
+    pub stx_mode: u16,
+    pub __spare0: [u16; 1],
+    pub stx_ino: u64,
+    pub stx_size: u64,
+    pub stx_blocks: u64,
+    pub stx_attributes_mask: u64,
+    pub stx_atime: statx_timestamp,
+    pub stx_btime: statx_timestamp,
+    pub stx_ctime: statx_timestamp,
+    pub stx_mtime: statx_timestamp,
+    pub stx_rdev_major: u32,
+    pub stx_rdev_minor: u32,
+    pub stx_dev_major: u32,
+    pub stx_dev_minor: u32,
+    pub __spare2: [u64; 14],
+}
+
 /// RFC-0044: Virtual stat implementation using Hot Stat Cache
 /// Returns None to fallback to OS, Some(0) on success, Some(-1) on error
 unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int> {
@@ -235,4 +270,69 @@ pub unsafe fn fstatat_shim_linux(
     }
 
     stat_impl_common(path_str, buf).unwrap_or(-2)
+}
+
+#[no_mangle]
+#[cfg(target_os = "linux")]
+pub unsafe extern "C" fn statx_shim(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    mask: libc::c_uint,
+    buf: *mut statx,
+) -> c_int {
+    if path.is_null() {
+        return crate::syscalls::linux_raw::raw_statx(
+            dirfd,
+            path,
+            flags,
+            mask,
+            buf as *mut libc::c_void,
+        );
+    }
+
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return crate::syscalls::linux_raw::raw_statx(
+            dirfd,
+            path,
+            flags,
+            mask,
+            buf as *mut libc::c_void,
+        );
+    }
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            return crate::syscalls::linux_raw::raw_statx(
+                dirfd,
+                path,
+                flags,
+                mask,
+                buf as *mut libc::c_void,
+            )
+        }
+    };
+
+    // VFS lookup
+    if let Some(state) = ShimState::get() {
+        if state.psfs_applicable(path_str) {
+            if let Some(entry) = state.query_manifest(path_str) {
+                std::ptr::write_bytes(buf, 0, 1);
+                (*buf).stx_mask = 0x7FF; // basic stats
+                (*buf).stx_size = entry.size as _;
+                (*buf).stx_mode = entry.mode as _;
+                (*buf).stx_ino = vrift_ipc::fnv1a_hash(path_str) as _;
+                (*buf).stx_nlink = 1;
+                (*buf).stx_mtime.tv_sec = entry.mtime as _;
+                (*buf).stx_blksize = 4096;
+                (*buf).stx_blocks = (entry.size + 511) / 512;
+                vfs_record!(EventType::StatHit, (*buf).stx_ino, 0);
+                return 0;
+            }
+        }
+    }
+
+    crate::syscalls::linux_raw::raw_statx(dirfd, path, flags, mask, buf as *mut libc::c_void)
 }

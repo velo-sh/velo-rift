@@ -119,6 +119,26 @@ const SYS_MKDIR: i64 = 136;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_TRUNCATE: i64 = 200;
 
+/// SYS_unlinkat = 438 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_UNLINKAT: i64 = 438;
+
+/// SYS_mkdirat = 464 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_MKDIRAT: i64 = 464;
+
+/// SYS_symlinkat = 465 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_SYMLINKAT: i64 = 465;
+
+/// SYS_fchmod = 124 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_FCHMOD: i64 = 124;
+
+/// SYS_fchmodat = 468 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_FCHMODAT: i64 = 468;
+
 /// Raw stat64 syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
@@ -431,22 +451,34 @@ pub unsafe fn raw_openat(
     mode: libc::mode_t,
 ) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
-        "mov x16, {syscall}",
+        "mov x16, #463",
         "svc #0x80",
-        syscall = in(reg) SYS_OPENAT,
+        "cset {err}, cs",
         in("x0") dirfd as i64,
-        in("x1") path as i64,
+        in("x1") path,
         in("x2") flags as i64,
         in("x3") mode as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(always)]
+pub unsafe fn raw_open(
+    path: *const libc::c_char,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    raw_openat(libc::AT_FDCWD, path, flags, mode)
 }
 
 /// Raw fcntl syscall for macOS ARM64.
@@ -564,6 +596,133 @@ pub unsafe fn raw_truncate(path: *const libc::c_char, length: libc::off_t) -> li
         syscall = in(reg) SYS_TRUNCATE,
         in("x0") path as i64,
         in("x1") length,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw unlinkat syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_unlinkat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    flags: libc::c_int,
+) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_UNLINKAT,
+        in("x0") dirfd as i64,
+        in("x1") path as i64,
+        in("x2") flags as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw mkdirat syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_mkdirat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_MKDIRAT,
+        in("x0") dirfd as i64,
+        in("x1") path as i64,
+        in("x2") mode as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw symlinkat syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_symlinkat(
+    p1: *const libc::c_char,
+    dirfd: libc::c_int,
+    p2: *const libc::c_char,
+) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_SYMLINKAT,
+        in("x0") p1 as i64,
+        in("x1") dirfd as i64,
+        in("x2") p2 as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw fchmod syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_fchmod(fd: libc::c_int, mode: libc::mode_t) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_FCHMOD,
+        in("x0") fd as i64,
+        in("x1") mode as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw fchmodat syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_fchmodat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    mode: libc::mode_t,
+    flags: libc::c_int,
+) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_FCHMODAT,
+        in("x0") dirfd as i64,
+        in("x1") path as i64,
+        in("x2") mode as i64,
+        in("x3") flags as i64,
         lateout("x0") ret,
         options(nostack)
     );
@@ -1015,9 +1174,24 @@ const SYS_RMDIR_X64: i64 = 137;
 /// SYS_mkdir = 136 on macOS x86_64
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const SYS_MKDIR_X64: i64 = 136;
-/// SYS_truncate = 200 on macOS x86_64
+/// SYS_truncate on macOS x86_64 = 200
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const SYS_TRUNCATE_X64: i64 = 200;
+/// SYS_unlinkat on macOS x86_64 = 438
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_UNLINKAT_X64: i64 = 438;
+/// SYS_mkdirat on macOS x86_64 = 464
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_MKDIRAT_X64: i64 = 464;
+/// SYS_symlinkat on macOS x86_64 = 465
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_SYMLINKAT_X64: i64 = 465;
+/// SYS_fchmod on macOS x86_64 = 124
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_FCHMOD_X64: i64 = 124;
+/// SYS_fchmodat on macOS x86_64 = 468
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_FCHMODAT_X64: i64 = 468;
 
 /// Raw unlink syscall for macOS x86_64.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -1087,6 +1261,128 @@ pub unsafe fn raw_truncate(path: *const libc::c_char, length: libc::off_t) -> li
         in("rax") SYS_TRUNCATE_X64 | 0x2000000,
         in("rdi") path as i64,
         in("rsi") length as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw unlinkat syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_unlinkat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    flags: libc::c_int,
+) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_UNLINKAT_X64 | 0x2000000,
+        in("rdi") dirfd as i64,
+        in("rsi") path as i64,
+        in("rdx") flags as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw mkdirat syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_mkdirat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_MKDIRAT_X64 | 0x2000000,
+        in("rdi") dirfd as i64,
+        in("rsi") path as i64,
+        in("rdx") mode as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw symlinkat syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_symlinkat(
+    p1: *const libc::c_char,
+    dirfd: libc::c_int,
+    p2: *const libc::c_char,
+) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_SYMLINKAT_X64 | 0x2000000,
+        in("rdi") p1 as i64,
+        in("rsi") dirfd as i64,
+        in("rdx") p2 as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw fchmod syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_fchmod(fd: libc::c_int, mode: libc::mode_t) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_FCHMOD_X64 | 0x2000000,
+        in("rdi") fd as i64,
+        in("rsi") mode as i64,
+        lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw fchmodat syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_fchmodat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    mode: libc::mode_t,
+    flags: libc::c_int,
+) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_FCHMODAT_X64 | 0x2000000,
+        in("rdi") dirfd as i64,
+        in("rsi") path as i64,
+        in("rdx") mode as i64,
+        in("r10") flags as i64,
         lateout("rax") ret, lateout("rcx") _, lateout("r11") _,
         options(nostack)
     );

@@ -91,3 +91,7 @@ pub static REAL_CLOSEDIR: RealSymbol = RealSymbol::new("closedir\0");
 pub static REAL_GETCWD: RealSymbol = RealSymbol::new("getcwd\0");
 pub static REAL_CHDIR: RealSymbol = RealSymbol::new("chdir\0");
 pub static REAL_LINK: RealSymbol = RealSymbol::new("link\0");
+pub static REAL_UNLINKAT: RealSymbol = RealSymbol::new("unlinkat\0");
+pub static REAL_MKDIRAT: RealSymbol = RealSymbol::new("mkdirat\0");
+pub static REAL_SYMLINKAT: RealSymbol = RealSymbol::new("symlinkat\0");
+pub static REAL_FCHMOD: RealSymbol = RealSymbol::new("fchmod\0");

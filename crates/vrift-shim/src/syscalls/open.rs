@@ -3,6 +3,11 @@ use libc::{c_char, c_int, c_void, mode_t};
 use std::ffi::CStr;
 use std::sync::atomic::Ordering;
 
+#[cfg(target_os = "linux")]
+use crate::syscalls::linux_raw::raw_open;
+#[cfg(target_os = "macos")]
+use crate::syscalls::macos_raw::raw_open;
+
 /// Open implementation with VFS detection and CoW semantics.
 ///
 /// For paths in the VFS domain:
@@ -51,10 +56,16 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
         }
         None => {
             vfs_log!(
-                "manifest lookup '{}': NOT FOUND -> passthrough",
+                "manifest lookup '{}': NOT FOUND -> passthrough (TRACKING FOR PERIMETER)",
                 vpath.manifest_key
             );
             vfs_record!(EventType::OpenMiss, vpath.manifest_key_hash, -libc::ENOENT);
+            // Track even if not in manifest, so that fchmod/ftruncate can be blocked
+            let fd = unsafe { raw_open(path, flags, mode) };
+            if fd >= 0 {
+                crate::syscalls::io::track_fd(fd, &vpath.manifest_key, true);
+                return Some(fd);
+            }
             return None;
         }
     };
