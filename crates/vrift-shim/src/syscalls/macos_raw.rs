@@ -245,6 +245,58 @@ pub unsafe fn raw_access(path: *const libc::c_char, mode: libc::c_int) -> libc::
     }
 }
 
+/// SYS_read = 3 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_READ: i64 = 3;
+
+/// SYS_write = 4 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_WRITE: i64 = 4;
+
+/// Raw read syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_read(
+    fd: libc::c_int,
+    buf: *mut libc::c_void,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_READ,
+        in("x0") fd as i64,
+        in("x1") buf as i64,
+        in("x2") count as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    ret as libc::ssize_t
+}
+
+/// Raw write syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_write(
+    fd: libc::c_int,
+    buf: *const libc::c_void,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_WRITE,
+        in("x0") fd as i64,
+        in("x1") buf as i64,
+        in("x2") count as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    ret as libc::ssize_t
+}
+
 // =============================================================================
 // macOS x86_64 implementations
 // =============================================================================
@@ -437,6 +489,60 @@ pub unsafe fn raw_access(path: *const libc::c_char, mode: libc::c_int) -> libc::
     }
 }
 
+/// SYS_read = 3 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_READ_X64: i64 = 3;
+
+/// SYS_write = 4 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_WRITE_X64: i64 = 4;
+
+/// Raw read syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_read(
+    fd: libc::c_int,
+    buf: *mut libc::c_void,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_READ_X64 | 0x2000000,
+        in("rdi") fd as i64,
+        in("rsi") buf as i64,
+        in("rdx") count as i64,
+        lateout("rax") ret,
+        lateout("rcx") _,
+        lateout("r11") _,
+        options(nostack)
+    );
+    ret as libc::ssize_t
+}
+
+/// Raw write syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_write(
+    fd: libc::c_int,
+    buf: *const libc::c_void,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_WRITE_X64 | 0x2000000,
+        in("rdi") fd as i64,
+        in("rsi") buf as i64,
+        in("rdx") count as i64,
+        lateout("rax") ret,
+        lateout("rcx") _,
+        lateout("r11") _,
+        options(nostack)
+    );
+    ret as libc::ssize_t
+}
+
 // =============================================================================
 // Linux fallback (redirects to linux_raw.rs)
 // =============================================================================
@@ -481,4 +587,22 @@ pub unsafe fn raw_stat(path: *const libc::c_char, buf: *mut libc::stat) -> libc:
 #[cfg(target_os = "linux")]
 pub unsafe fn raw_lstat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
     crate::syscalls::linux_raw::raw_lstat(path, buf)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_read(
+    fd: libc::c_int,
+    buf: *mut libc::c_void,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    crate::syscalls::linux_raw::raw_read(fd, buf, count)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_write(
+    fd: libc::c_int,
+    buf: *const libc::c_void,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    crate::syscalls::linux_raw::raw_write(fd, buf, count)
 }

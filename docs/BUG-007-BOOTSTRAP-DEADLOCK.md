@@ -94,9 +94,13 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut stat) -> c_int {
 
 ## Affected Shims
 
-| Shim | Raw Syscall | Syscall Number |
-|------|-------------|----------------|
+| Shim | Raw Syscall | Syscall Number (ARM64) |
+|------|-------------|------------------------|
 | `fstat_shim` | `raw_fstat64` | 339 |
+| `stat_shim` | `raw_stat` | 338 |
+| `lstat_shim` | `raw_lstat` | 340 |
+| `read_shim` | `raw_read` | 3 |
+| `write_shim` | `raw_write` | 4 |
 | `close_shim` | `raw_close` | 6 |
 | `mmap_shim` | `raw_mmap` | 197 |
 | `munmap_shim` | `raw_munmap` | 73 |

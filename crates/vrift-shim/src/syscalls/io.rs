@@ -198,11 +198,16 @@ pub unsafe extern "C" fn write_shim(
     buf: *const c_void,
     count: libc::size_t,
 ) -> libc::ssize_t {
+    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state >= 2 {
+        return crate::syscalls::macos_raw::raw_write(fd, buf, count);
+    }
+
     let real = std::mem::transmute::<
         *mut libc::c_void,
         unsafe extern "C" fn(c_int, *const c_void, libc::size_t) -> libc::ssize_t,
     >(crate::reals::REAL_WRITE.get());
-    passthrough_if_init!(real, fd, buf, count);
     real(fd, buf, count)
 }
 
@@ -213,11 +218,16 @@ pub unsafe extern "C" fn read_shim(
     buf: *mut c_void,
     count: libc::size_t,
 ) -> libc::ssize_t {
+    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state >= 2 {
+        return crate::syscalls::macos_raw::raw_read(fd, buf, count);
+    }
+
     let real = std::mem::transmute::<
         *mut libc::c_void,
         unsafe extern "C" fn(c_int, *mut c_void, libc::size_t) -> libc::ssize_t,
     >(crate::reals::REAL_READ.get());
-    passthrough_if_init!(real, fd, buf, count);
     real(fd, buf, count)
 }
 
