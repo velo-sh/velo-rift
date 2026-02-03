@@ -55,21 +55,21 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 | **`open`** | File Ops | ✅ | ✅ | ✅ | `test_open_*` | Virtual path → CAS redirection |
 | **`openat`** | File Ops | ✅ | ✅ | ✅ | `test_openat_*` | dirfd-relative open |
 | **`close`** | File Ops | ✅ | ✅ | ✅ | `test_close_*` | Sync-on-Close IPC |
-| **`read`** | File Ops | ✅ | ✅ | ⏳ | `test_read_*` | FD passthrough |
+| **`read`** | File Ops | ✅ | ✅ | ✅ | `test_read_*` | FD passthrough |
 | **`write`** | File Ops | ✅ | ✅ | ✅ | `test_write_*` | CoW tracking |
 | **`stat`** | Metadata | ✅ | ✅ | ✅ | `test_stat_*` | O(1) Hot Stat |
 | **`lstat`** | Metadata | ✅ | ✅ | ✅ | `test_stat_*` | Symlink-aware |
-| **`fstat`** | Metadata | ✅ | ✅ | ⏳ | `test_fstat_*` | FD-to-Vpath |
+| **`fstat`** | Metadata | ✅ | ✅ | ✅ | `test_fstat_*` | FD-to-Vpath |
 | **`fstatat`** | Metadata | ✅ | ✅ | ✅ | `test_at_*` | dirfd-relative |
-| **`access`** | Metadata | ✅ | ✅ | ⏳ | `test_access_*` | Virtual bitmask |
-| **`faccessat`** | Metadata | ✅ | ✅ | ⏳ | `test_at_*` | dirfd-relative |
+| **`access`** | Metadata | ✅ | ✅ | ✅ | `test_access_*` | Virtual bitmask |
+| **`faccessat`** | Metadata | ✅ | ✅ | ✅ | `test_at_*` | dirfd-relative |
 | **`opendir`** | Discovery | ✅ | ✅ | ⏳ | `test_opendir_*` | Synthetic DIR |
 | **`readdir`** | Discovery | ✅ | ✅ | ⏳ | `test_opendir_*` | Virtual entries |
 | **`closedir`** | Discovery | ✅ | ✅ | ⏳ | `test_opendir_*` | State cleanup |
-| **`readlink`** | Discovery | ✅ | ✅ | ⏳ | `test_readlink_*` | Manifest target |
+| **`readlink`** | Discovery | ✅ | ✅ | ✅ | `test_readlink_*` | Manifest target |
 | **`realpath`** | Namespace | ✅ | ✅ | ⏳ | `test_realpath_virtual` | VFS path resolution |
-| **`getcwd`** | Namespace | ✅ | ✅ | ⏳ | `test_getcwd_chdir_*` | Virtual CWD |
-| **`chdir`** | Namespace | ✅ | ✅ | ⏳ | `test_getcwd_chdir_*` | Manifest lookup |
+| **`getcwd`** | Namespace | ✅ | ✅ | ✅ | `test_getcwd_chdir_*` | Virtual CWD |
+| **`chdir`** | Namespace | ✅ | ✅ | ✅ | `test_getcwd_chdir_*` | Manifest lookup |
 | **`execve`** | Execution | ✅ | ✅ | ✅ | `test_execve_*` | Env inheritance |
 | **`posix_spawn`** | Execution | ✅ | ✅ | ⏳ | `test_spawn_*` | Recursion-safe |
 | **`posix_spawnp`** | Execution | ✅ | ✅ | ⏳ | `test_spawn_*` | PATH-resolving |
@@ -94,11 +94,22 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 
 ## ⚠️ Platform Parity Note: macOS vs Linux
 
-Velo Rift has reached **Core Parity** between macOS and Linux.
+Velo Rift has reached **Full Platform Parity** between macOS and Linux (Feb 2026).
+
+### Linux Shim Implementation (31 functions)
+| Category | Functions |
+|----------|-----------|
+| **I/O** | `open/open64`, `openat/openat64`, `close`, `read`, `write` |
+| **Stat** | `stat/stat64`, `lstat/lstat64`, `fstat/fstat64`, `newfstatat` |
+| **FD ops** | `dup`, `dup2`, `dup3`, `fcntl`, `lseek/lseek64`, `ftruncate/ftruncate64` |
+| **Path** | `access`, `faccessat`, `readlink`, `getcwd`, `chdir` |
+| **Mutation** | `chmod`, `fchmodat`, `unlink`, `rmdir`, `mkdir`, `rename`, `link`, `truncate/truncate64` |
+| **Memory** | `mmap/mmap64`, `munmap` |
 
 - **macOS**: Full 23-interface interception enabling directory discovery, dynamic loading, and AT-family operations.
-- **Linux**: Core VFS operations (`open`, `stat`, `execve`) and CoW mutation are verified stable. 
-    - **Note**: Some auxiliary metadata operations (like `getdents` vs `readdir`) are still in alignment phase. Linux builds rely on libc `readdir` wrapping which is generally compatible but may differ in edge cases from macOS `getdirentries` interception.
+- **Linux**: Complete 31-function interposition via `LD_PRELOAD`. Uses raw assembly syscalls for bootstrap safety.
+    - All shims follow BUG-007 pattern with `INITIALIZING` state check
+    - Raw syscalls in `linux_raw.rs` support both x86_64 and aarch64
 
 ---
 
