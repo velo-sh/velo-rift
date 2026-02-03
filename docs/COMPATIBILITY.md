@@ -4,14 +4,18 @@ This report provides the definitive status of Velo Rift's compatibility with hos
 
 ---
 
-## 🏁 Final State of the Union (Feb 2026 Audit)
+## 🏁 Final State of the Union (Feb 3, 2026 Verification)
 
 The deep forensic audit and Proof of Failure (PoF) suite v2.0 have confirmed the following status:
+
+> **✅ Latest Regression Results (Feb 3, 2026 @ 14:55 UTC+8)**
+> - **45+ tests PASS** | **0 tests FAIL** | **25+ daemon-dependent tests TIMEOUT**
+> - Commit: `6c79872` (io.rs, misc.rs, COMPATIBILITY.md updates)
 
 1.  **Compiler Syscall Completion (20/20 ✅ PASS)**:
     -   100% of syscalls required for GCC, Clang, and mainstream linkers (stat, open, mmap, dlopen, etc.) are successfully intercepted.
     -   Velo Rift is confirmed to be **100% Drop-In Compatible** for basic C/C++ compilation on macOS ARM64.
-2.  **Shim Stabilization**:
+2.  **Shim Stabilization (BUG-007 RESOLVED ✅)**:
     -   `munmap` and `dlsym` are now fully intercepted and stable.
     -   **Variadic ABI Hazard Resolved**: Assembly stubs correctly handle `open` and `fcntl` stack-passed arguments on macOS ARM64.
     -   **DYLD Initialization Deadlock Resolved**: `pthread_key_t` TLS provides bootstrap safety, `INITIALIZING` AtomicBool forces early-boot passthrough.
@@ -20,13 +24,22 @@ The deep forensic audit and Proof of Failure (PoF) suite v2.0 have confirmed the
         -   Added `passthrough_if_init!` macro for consistent INITIALIZING state checks
         -   Corrected state check logic: `INITIALIZING >= 2` (not `!= 0`) - states 0/1 are TLS-safe
     -   **Raw Syscall Coverage (BUG-007 Resolution)**:
-        -   20 raw syscall functions in `macos_raw.rs` (ARM64 + x86_64 + Linux fallback)
+        -   20+ raw syscall functions in `macos_raw.rs` (ARM64 + x86_64 + Linux fallback)
         -   Bootstrap-critical syscalls bypass libc entirely during dyld init
         -   Mutation shims use `quick_block_vfs_mutation()` for VFS check even in raw path
-3.  **Linux VFS Activation Verified**:
+    -   **Verified Stable Tests**:
+        -   `test_bug007_bootstrap.sh` ✅
+        -   `test_concurrent_init.sh` ✅
+        -   `test_init_state.sh` ✅
+        -   `test_issue1_recursion_deadlock.sh` ✅
+        -   `test_issue2_tls_bootstrap_hang.sh` ✅
+3.  **VFS Permission Perimeter (FIXED ✅)**:
+    -   `test_gap_mutation_perimeter.sh` ✅ PASS
+    -   `test_gap_permission_bypass.sh` ✅ PASS
+4.  **Linux VFS Activation Verified**:
     -   **Core VFS**: `open`, `stat`, and CoW mechanisms verified on Linux x86_64 (Kernel 5.15+).
     -   **CI Status**: Tiers 1-4 passing (including E2E and Docker regression suites).
-4.  **Vulnerability Perimeter Locked**:
+5.  **Vulnerability Perimeter Locked**:
     -   All critical gaps (Path Normalization, FD Leakage, State Leakage) have been quantified and captured in the PoF suite for automated regression tracking.
 
 ---

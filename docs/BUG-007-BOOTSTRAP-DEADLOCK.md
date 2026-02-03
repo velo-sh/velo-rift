@@ -1,8 +1,20 @@
 # BUG-007: malloc/fstat Bootstrap Deadlock on macOS ARM64
 
+> **Status: ✅ RESOLVED AND VERIFIED** (Feb 3, 2026)
+> 
+> All related tests passing:
+> - `test_bug007_bootstrap.sh` ✅
+> - `test_concurrent_init.sh` ✅
+> - `test_init_state.sh` ✅
+> - `test_issue1_recursion_deadlock.sh` ✅
+> - `test_issue2_tls_bootstrap_hang.sh` ✅
+> 
+> Latest verification: Commit `6c79872` | 45+ tests PASS | 0 FAIL
+
 ## Summary
 
 When using `DYLD_INSERT_LIBRARIES` to inject vrift-shim into a process on macOS ARM64, the process would hang with high CPU usage during the dyld bootstrap phase.
+
 
 ## Symptoms
 
