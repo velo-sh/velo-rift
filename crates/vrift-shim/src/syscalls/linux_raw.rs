@@ -914,7 +914,7 @@ pub unsafe fn raw_mmap(
             in("x2") prot as i64,
             in("x3") flags as i64,
             in("x4") fd as i64,
-            in("x5") offset as i64,
+            in("x5") offset,
             lateout("x0") ret,
         );
         ret as *mut c_void

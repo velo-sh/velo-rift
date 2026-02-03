@@ -30,7 +30,8 @@ safe_rm() {
         if [ "$(uname -s)" == "Darwin" ]; then
             chflags -R nouchg "$target" 2>/dev/null || true
         fi
-        rm -rf "$target"
+        # Ignore permission errors - shim may be protecting files
+        rm -rf "$target" 2>/dev/null || true
     fi
 }
 
