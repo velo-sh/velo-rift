@@ -15,6 +15,7 @@ VRIFT_BIN="$PROJECT_ROOT/target/release/vrift"
 
 # Setup work dir
 WORK_DIR="/tmp/vrift_repro_pipe"
+chflags -R nouchg "$WORK_DIR" 2>/dev/null || true
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR/project"
 
@@ -31,6 +32,7 @@ DAEMON_PID=$!
 
 cleanup() {
     kill $DAEMON_PID 2>/dev/null || true
+    chflags -R nouchg "$WORK_DIR" 2>/dev/null || true
     rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
@@ -44,9 +46,17 @@ cd "$WORK_DIR/project"
 
 echo "🚀 Triggering pipe closure (vrift status | grep -q)..."
 
-# Run status and pipe to grep -q, capturing stderr
-"$VRIFT_BIN" status 2> "$WORK_DIR/stderr.log" | grep -q "Velo Rift Status"
-VRIFT_EXIT=${PIPESTATUS[0]}
+# Run with timeout to prevent test hang
+# We expect panic on stderr.
+if command -v timeout &> /dev/null; then
+    timeout 5s bash -c "$VRIFT_BIN status 2> $WORK_DIR/stderr.log | grep -q 'Velo Rift Status'" || true
+else
+     # Fallback for systems without timeout command (macOS default often doesn't have it)
+     ( "$VRIFT_BIN" status 2> "$WORK_DIR/stderr.log" | grep -q "Velo Rift Status" ) &
+     PID=$!
+     sleep 5
+     kill $PID 2>/dev/null || true
+fi
 
 if grep -q "panicked" "$WORK_DIR/stderr.log"; then
     echo "🔥 BUG DETECTED: CLI Panicked with Broken Pipe!"
@@ -54,16 +64,10 @@ if grep -q "panicked" "$WORK_DIR/stderr.log"; then
     exit 0
 fi
 
-if [ $VRIFT_EXIT -ne 0 ]; then
-    # 141 = 128 + 13 (SIGPIPE). This is expected behavior for unix tools (e.g. yes | header).
-    if [ $VRIFT_EXIT -eq 141 ]; then
-         echo "✅ Test Finished: CLI terminated gracefully with SIGPIPE (141). Panic Fixed."
-         exit 0
-    fi
-
-    echo "🔥 BUG DETECTED: CLI Exited with error $VRIFT_EXIT on broken pipe."
-    [ -s "$WORK_DIR/stderr.log" ] && cat "$WORK_DIR/stderr.log"
-    exit 0
+if grep -q "Broken pipe" "$WORK_DIR/stderr.log"; then
+     echo "🔥 BUG DETECTED: CLI reported Broken pipe!"
+     cat "$WORK_DIR/stderr.log"
+     exit 0
 fi
 
 echo "✅ Test Finished: No panic detected. (The bug may already be patched or this environment handles EPIPE differently)"

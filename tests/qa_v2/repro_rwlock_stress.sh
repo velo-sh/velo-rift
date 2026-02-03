@@ -35,13 +35,14 @@ export VRIFT_CAS_ROOT="$WORK_DIR/cas"
 "$VRIFT_BIN" init "$WORK_DIR/project" >/dev/null 2>&1
 "$VRIFT_BIN" ingest "$WORK_DIR/project" --mode solid >/dev/null 2>&1
 
-VFS_ENV="DYLD_INSERT_LIBRARIES=$SHIM_LIB DYLD_FORCE_FLAT_NAMESPACE=1 VRIFT_MANIFEST=$WORK_DIR/project/.vrift/manifest.lmdb VRIFT_VFS_PREFIX=$WORK_DIR/project"
+VFS_ENV="DYLD_INSERT_LIBRARIES=$SHIM_LIB DYLD_FORCE_FLAT_NAMESPACE=1 VRIFT_MANIFEST=$WORK_DIR/project/.vrift/manifest.lmdb VRIFT_VFS_PREFIX=$WORK_DIR/project VRIFT_LOG=info"
 
 # 3. Run Stress Test
 echo "🚀 Running stress test with 10s timeout..."
 if command -v timeout &> /dev/null; then
-    if timeout 10s env $VFS_ENV "$REPRO_BIN" "$WORK_DIR/project/src/target.txt"; then
+    if timeout 10s env $VFS_ENV "$REPRO_BIN" "$WORK_DIR/project/src/target.txt" > "$WORK_DIR/stress.log" 2>&1; then
         echo "✅ Test Finished (No Hang detected)"
+        cat "$WORK_DIR/stress.log" | head -n 5
     else
         EXIT_CODE=$?
         if [ $EXIT_CODE -eq 124 ]; then
