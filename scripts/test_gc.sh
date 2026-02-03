@@ -24,7 +24,7 @@ if [ ! -f "$VELO_BIN" ]; then
 fi
 
 # 1. Setup Environment
-TEST_DIR="${PROJECT_ROOT}/test_gc_run"
+TEST_DIR="${PROJECT_ROOT}/test_gc_run_v2"
 safe_rm "$TEST_DIR"
 mkdir -p "$TEST_DIR"
 

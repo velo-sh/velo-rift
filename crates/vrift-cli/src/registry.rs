@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 use vrift_cas::Blake3Hash;
-use vrift_manifest::Manifest;
+use vrift_manifest::{LmdbManifest, Manifest};
 
 /// Default lock timeout in seconds
 const DEFAULT_LOCK_TIMEOUT_SECS: u64 = 30;
@@ -292,11 +292,24 @@ impl ManifestRegistry {
                 continue;
             }
 
-            let manifest = Manifest::load(&entry.source_path)
-                .with_context(|| format!("Failed to load manifest: {:?}", entry.source_path))?;
-
-            for (_, vnode) in manifest.iter() {
-                hashes.insert(vnode.content_hash);
+            if entry.source_path.is_dir() {
+                // RFC-0039: Load LMDB manifest
+                let lmdb = LmdbManifest::open(&entry.source_path).with_context(|| {
+                    format!("Failed to open LMDB manifest at {:?}", entry.source_path)
+                })?;
+                let entries = lmdb.iter().with_context(|| {
+                    format!("Failed to iterate LMDB manifest at {:?}", entry.source_path)
+                })?;
+                for (_, m_entry) in entries {
+                    hashes.insert(m_entry.vnode.content_hash);
+                }
+            } else {
+                // Legacy bincode manifest
+                let manifest = Manifest::load(&entry.source_path)
+                    .with_context(|| format!("Failed to load manifest: {:?}", entry.source_path))?;
+                for (_, vnode) in manifest.iter() {
+                    hashes.insert(vnode.content_hash);
+                }
             }
         }
 
