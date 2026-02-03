@@ -91,6 +91,14 @@ const SYS_STAT64: i64 = 338;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_LSTAT64: i64 = 340;
 
+/// SYS_openat = 463 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_OPENAT: i64 = 463;
+
+/// SYS_fcntl = 92 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_FCNTL: i64 = 92;
+
 /// Raw stat64 syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
@@ -383,6 +391,56 @@ pub unsafe fn raw_ftruncate(fd: libc::c_int, length: libc::off_t) -> libc::c_int
         syscall = in(reg) SYS_FTRUNCATE,
         in("x0") fd as i64,
         in("x1") length,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw openat syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_openat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_OPENAT,
+        in("x0") dirfd as i64,
+        in("x1") path as i64,
+        in("x2") flags as i64,
+        in("x3") mode as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw fcntl syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_fcntl(fd: libc::c_int, cmd: libc::c_int, arg: libc::c_int) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_FCNTL,
+        in("x0") fd as i64,
+        in("x1") cmd as i64,
+        in("x2") arg as i64,
         lateout("x0") ret,
         options(nostack)
     );
@@ -739,6 +797,66 @@ pub unsafe fn raw_ftruncate(fd: libc::c_int, length: libc::off_t) -> libc::c_int
     }
 }
 
+/// SYS_openat = 463 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_OPENAT_X64: i64 = 463;
+
+/// SYS_fcntl = 92 on macOS x86_64
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const SYS_FCNTL_X64: i64 = 92;
+
+/// Raw openat syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_openat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_OPENAT_X64 | 0x2000000,
+        in("rdi") dirfd as i64,
+        in("rsi") path as i64,
+        in("rdx") flags as i64,
+        in("r10") mode as i64,
+        lateout("rax") ret,
+        lateout("rcx") _,
+        lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw fcntl syscall for macOS x86_64.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[inline(never)]
+pub unsafe fn raw_fcntl(fd: libc::c_int, cmd: libc::c_int, arg: libc::c_int) -> libc::c_int {
+    let ret: i64;
+    std::arch::asm!(
+        "syscall",
+        in("rax") SYS_FCNTL_X64 | 0x2000000,
+        in("rdi") fd as i64,
+        in("rsi") cmd as i64,
+        in("rdx") arg as i64,
+        lateout("rax") ret,
+        lateout("rcx") _,
+        lateout("r11") _,
+        options(nostack)
+    );
+    if ret as isize > -4096 && (ret as isize) < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
 // =============================================================================
 // Linux fallback (redirects to linux_raw.rs)
 // =============================================================================
@@ -821,4 +939,19 @@ pub unsafe fn raw_lseek(fd: libc::c_int, offset: libc::off_t, whence: libc::c_in
 #[cfg(target_os = "linux")]
 pub unsafe fn raw_ftruncate(fd: libc::c_int, length: libc::off_t) -> libc::c_int {
     crate::syscalls::linux_raw::raw_ftruncate(fd, length)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_openat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_openat(dirfd, path, flags, mode)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_fcntl(fd: libc::c_int, cmd: libc::c_int, arg: libc::c_int) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_fcntl(fd, cmd, arg)
 }
