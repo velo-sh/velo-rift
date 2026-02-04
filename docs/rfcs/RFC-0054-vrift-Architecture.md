@@ -228,9 +228,15 @@ struct VDirEntry {
     int64_t mtime_sec;
     uint32_t mtime_nsec;
     uint32_t mode;
-    uint16_t flags;              // IsDir, IsSymlink, etc
+    uint16_t flags;              // See flag definitions below
     uint16_t _pad;
 } __attribute__((packed));  // 64 bytes
+
+// VDirEntry.flags bit definitions
+#define VDIR_FLAG_DIRTY     (1 << 0)  // File being written (check staging)
+#define VDIR_FLAG_DELETED   (1 << 1)  // File marked for deletion
+#define VDIR_FLAG_SYMLINK   (1 << 2)  // Entry is symbolic link
+#define VDIR_FLAG_DIR       (1 << 3)  // Entry is directory
 
 // Memory layout:
 // [Header: 64B][Bloom: 32KB][Hash Table: N × 64B]
@@ -642,6 +648,21 @@ if (vdir.active_clients == 0 &&
 ### Q2: Cross-platform portability
 - macOS: Use `/tmp` with mmap (no `/dev/shm`)
 - Windows: Named shared memory objects
+
+---
+
+## Glossary
+
+| Term | Definition |
+|------|------------|
+| **vriftd** | Central Coordinator daemon. Manages global registry of projects, cross-project deduplication, and user limits. Does NOT handle direct I/O. |
+| **vdir_d** | Per-Project Micro-Daemon. One process per project root. Manages VDir updates, staging ingestion, and hash computation. |
+| **InceptionLayer** | Client-side runtime library injected via `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`. Intercepts syscalls and communicates with `vdir_d`. |
+| **VDir** | Virtual Directory. Shared memory hash table containing path → CAS hash mappings. Read-only for clients. |
+| **CAS** | Content-Addressable Storage. Blob store indexed by BLAKE3 hash. Shared across all projects. |
+| **Staging Area** | Per-process temp directory (`.vrift/staging/`) for write buffering before atomic commit. |
+| **Dirty Bit** | Flag in `VDirEntry.flags` indicating file is being written. Forces readers to check staging. |
+| **Solid Mode** | vrift's operational model: project directory is always a complete physical structure that works with standard tools. |
 
 ---
 

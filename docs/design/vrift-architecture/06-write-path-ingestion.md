@@ -47,14 +47,51 @@ Upon receiving `CMD_COMMIT`:
 ### Step 1: Ingestion (Zero-Copy)
 `vdir_d` promotes the Staging File to the Content-Addressable Storage (CAS).
 
-*   **Method A: ReFLINK (Cow)**
-    `ioctl(FICLONERANGE, src=staging, dst=cas/hash)`
-    *   *Cost*: O(1) Metadata update. No data copy.
-*   **Method B: Hardlink**
-    `link(src=staging, dst=cas/hash)`
-    *   *Cost*: O(1).
-*   **Method C: Rename (If Single Reference)**
-    `rename(src=staging, dst=cas/hash)`
+**Priority Order** (try in sequence until one succeeds):
+
+| Priority | Method | Syscall | Cost | Filesystem Support |
+|----------|--------|---------|------|-------------------|
+| 1 | ReFLINK (CoW) | `ioctl(FICLONERANGE)` | O(1) metadata | APFS, Btrfs, XFS, ZFS |
+| 2 | Hardlink | `link()` | O(1) | All POSIX (same mount) |
+| 3 | Rename | `rename()` | O(1) | All (if single ref) |
+| 4 | Copy | `copy_file_range()` | O(n) data | Fallback (any FS) |
+
+**Implementation**:
+```c
+int ingest_staging_file(const char *staging, const char *cas_path) {
+    // Try 1: ReFLINK (zero-copy, preserves staging for crash recovery)
+    if (try_reflink(staging, cas_path) == 0) {
+        return SUCCESS;
+    }
+    
+    // Try 2: Hardlink (zero-copy, but links staging)
+    if (link(staging, cas_path) == 0) {
+        return SUCCESS;
+    }
+    
+    // Try 3: Rename (only if staging is sole reference)
+    if (staging_refcount(staging) == 1) {
+        if (rename(staging, cas_path) == 0) {
+            return SUCCESS;
+        }
+    }
+    
+    // Fallback: Actual copy (slow but always works)
+    return copy_file(staging, cas_path);
+}
+```
+
+**Filesystem Detection** (at startup):
+```c
+void detect_fs_capabilities(const char *path) {
+    // Probe once at vdir_d initialization
+    if (try_reflink(test_src, test_dst) == 0) {
+        fs_capabilities.supports_reflink = true;
+    }
+    if (statfs(path, &st) == 0) {
+        fs_capabilities.fstype = st.f_type;
+    }
+}
 
 ### Step 2: Index Update & Clean
 1.  **Update Index**: Updates the VDir Entry for "main.o" to point to the new CAS Hash.

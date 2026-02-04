@@ -47,21 +47,13 @@
 ### LMDB Tables (DBI)
 
 **Table 1: `vdir_entries` (main table)**
-```c
+```
 Key:   path (string, null-terminated)
 Value: VDirEntry (binary, fixed 64 bytes)
-
-struct VDirEntry {
-    uint64_t path_hash;      // FNV1a (redundant but speeds up mmap export)
-    uint8_t cas_hash[32];    // BLAKE3
-    uint64_t size;
-    int64_t mtime_sec;
-    uint32_t mtime_nsec;
-    uint32_t mode;
-    uint16_t flags;
-    uint16_t _pad;
-} __attribute__((packed));  // 64 bytes
 ```
+
+> **Note**: See [RFC-0054](../rfcs/RFC-0054-vrift-Architecture.md#virtual-directory-mmap-format) 
+> for the complete `VDirEntry` struct definition and flags documentation.
 
 **Table 2: `metadata` (config)**
 ```c

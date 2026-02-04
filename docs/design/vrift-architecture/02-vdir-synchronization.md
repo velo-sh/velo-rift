@@ -334,6 +334,96 @@ No resize needed until 10M files!
 
 ---
 
+## Dirty Bit Integration
+
+### The Consistency Problem
+
+The generation counter alone is insufficient for write consistency:
+
+```
+Without Dirty Bit:
+  Writer: open("main.o") → starts writing to staging
+  Reader: stat("main.o") → sees OLD metadata from VDir (stale!)
+  
+  BROKEN: Reader sees old file size/mtime during active write.
+```
+
+### Dirty Bit Solution
+
+**Write Path** (InceptionLayer):
+```c
+// On open(path, O_WRONLY)
+void inception_open_for_write(const char *path) {
+    // 1. Mark file as DIRTY in shared memory
+    set_dirty_bit(vdir, path, true);  // Atomic
+    
+    // 2. Redirect to staging file
+    fd = open_staging_file(path);
+    
+    // Effect: All readers now forced to check staging
+}
+```
+
+**Read Path** (InceptionLayer):
+```c
+int inception_stat(const char *path, struct stat *buf) {
+    // 1. Check dirty bit FIRST
+    if (is_dirty(vdir, path)) {
+        // File being modified - must read real staging file
+        return real_stat(staging_path_for(path), buf);
+    }
+    
+    // 2. Clean state - use fast VDir lookup
+    return vdir_stat(path, buf);
+}
+```
+
+**Commit Path** (vdir_d):
+```c
+void handle_commit(const char *path, const char *staging) {
+    // 1. Ingest staging file to CAS
+    cas_hash = ingest_via_reflink(staging);
+    
+    // 2. Update VDir entry
+    vdir_update_entry(path, cas_hash, ...);
+    
+    // 3. Clear dirty bit (LAST!)
+    set_dirty_bit(vdir, path, false);  // Atomic
+    
+    // Now readers see updated VDir entry
+}
+```
+
+### Dirty Bit Storage
+
+The dirty state is stored in the `VDirEntry.flags` field:
+
+```c
+// flags bit layout
+#define VDIR_FLAG_DIRTY     (1 << 0)  // File being written
+#define VDIR_FLAG_DELETED   (1 << 1)  // File marked for deletion
+#define VDIR_FLAG_SYMLINK   (1 << 2)  // Entry is symlink
+#define VDIR_FLAG_DIR       (1 << 3)  // Entry is directory
+```
+
+**Memory Ordering**:
+- Write: `set_dirty_bit` uses `memory_order_release`
+- Read: `is_dirty` uses `memory_order_acquire`
+- Ensures visibility across all processes via SHM
+
+### Performance Impact
+
+```
+stat() with dirty check:
+  Load flags (acquire):       5ns
+  Check dirty bit:            2ns
+  Total overhead:             7ns (4% of 170ns)
+  
+  Acceptable for strong consistency guarantee.
+```
+
+---
+
 ## Implementation Checklist
 
 Server side:
