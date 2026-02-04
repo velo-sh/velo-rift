@@ -639,6 +639,8 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
     // Check if mmap is explicitly disabled
     unsafe {
         let env_key = c"VRIFT_DISABLE_MMAP";
+        // Use getenv but it's safe as it's not interposed normally,
+        // but we should be careful. getenv is usually safe.
         let env_val = libc::getenv(env_key.as_ptr());
         if !env_val.is_null() {
             let val = CStr::from_ptr(env_val).to_str().unwrap_or("0");
@@ -675,32 +677,23 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
 
     let mmap_path_cstr = CString::new(mmap_path.to_string_lossy().as_ref()).unwrap_or_default();
 
-    // DEBUG: Log loading attempt
-    eprintln!(
-        "[DEBUG-SHIM] Attempting to load mmap from: {}",
-        mmap_path.display()
-    );
-
-    let fd = unsafe { libc::open(mmap_path_cstr.as_ptr(), libc::O_RDONLY) };
+    let fd =
+        unsafe { crate::syscalls::macos_raw::raw_open(mmap_path_cstr.as_ptr(), libc::O_RDONLY, 0) };
     if fd < 0 {
-        eprintln!(
-            "[DEBUG-SHIM] Failed to open mmap file: {}",
-            mmap_path.display()
-        );
         return (ptr::null(), 0);
     }
 
     // Get file size via fstat
     let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(fd, &mut stat_buf) } != 0 {
-        unsafe { libc::close(fd) };
+    if unsafe { crate::syscalls::macos_raw::raw_fstat64(fd, &mut stat_buf) } != 0 {
+        unsafe { crate::syscalls::macos_raw::raw_close(fd) };
         return (ptr::null(), 0);
     }
     let size = stat_buf.st_size as usize;
 
     // mmap the file read-only
     let ptr = unsafe {
-        libc::mmap(
+        crate::syscalls::macos_raw::raw_mmap(
             ptr::null_mut(),
             size,
             libc::PROT_READ,
@@ -709,7 +702,7 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
             0,
         )
     };
-    unsafe { libc::close(fd) };
+    unsafe { crate::syscalls::macos_raw::raw_close(fd) };
 
     if ptr == libc::MAP_FAILED {
         return (ptr::null(), 0);
@@ -738,56 +731,11 @@ pub(crate) fn mmap_lookup(
     mmap_size: usize,
     path: &str,
 ) -> Option<vrift_ipc::MmapStatEntry> {
-    if mmap_ptr.is_null() || mmap_size == 0 {
+    if mmap_ptr.is_null() || mmap_size < vrift_ipc::ManifestMmapHeader::SIZE {
         return None;
     }
 
     let header = unsafe { &*(mmap_ptr as *const vrift_ipc::ManifestMmapHeader) };
-
-    // DEBUG
-    static LOOKUP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let lookup_count = LOOKUP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-    // TEMPORARY: Skip bloom filter check to test hash table
-    if lookup_count < 3 {
-        eprintln!(
-            "[DEBUG-MMAP] SKIPPING bloom filter check, testing hash table directly for '{}'",
-            path
-        );
-    }
-
-    // Check bloom filter first (O(1) rejection) - TEMPORARILY DISABLED
-    /*
-    let bloom_offset = header.bloom_offset as usize;
-    let bloom_ptr = unsafe { mmap_ptr.add(bloom_offset) };
-    let (h1, h2) = vrift_ipc::bloom_hashes(path);
-    let b1 = h1 % (vrift_ipc::BLOOM_SIZE * 8);
-    let b2 = h2 % (vrift_ipc::BLOOM_SIZE * 8);
-
-    if lookup_count < 3 {
-        eprintln!("[DEBUG-MMAP] path='{}' h1={} h2={} b1={} b2={}", path, h1, h2, b1, b2);
-        // Check first few bytes of bloom filter
-        let bloom_bytes: Vec<u8> = unsafe {
-            std::slice::from_raw_parts(bloom_ptr, 32).to_vec()
-        };
-        eprintln!("[DEBUG-MMAP] bloom filter first 32 bytes: {:?}", bloom_bytes);
-    }
-
-    unsafe {
-        let v1 = *bloom_ptr.add(b1 / 8) & (1 << (b1 % 8));
-        let v2 = *bloom_ptr.add(b2 / 8) & (1 << (b2 % 8));
-        if v1 == 0 || v2 == 0 {
-            if lookup_count < 3 {
-                eprintln!("[DEBUG-MMAP] Bloom REJECT '{}' (v1={}, v2={})", path, v1, v2);
-            }
-            return None; // Bloom filter rejection
-        }
-    }
-    */
-
-    if lookup_count < 3 {
-        eprintln!("[DEBUG-MMAP] Bloom PASS '{}', checking hash table", path);
-    }
 
     // Hash table lookup with linear probing
     let path_hash = vrift_ipc::fnv1a_hash(path);
@@ -802,23 +750,14 @@ pub(crate) fn mmap_lookup(
         let entry = unsafe { &*table_ptr.add(slot) };
 
         if entry.is_empty() {
-            if lookup_count < 3 {
-                eprintln!("[DEBUG-MMAP] Empty slot at {}, NOT FOUND", slot);
-            }
             return None; // Empty slot = not found
         }
 
         if entry.path_hash == path_hash {
-            if lookup_count < 3 {
-                eprintln!("[DEBUG-MMAP] Hash MATCH at slot {}, FOUND!", slot);
-            }
             return Some(*entry); // Found!
         }
     }
 
-    if lookup_count < 3 {
-        eprintln!("[DEBUG-MMAP] Table full, NOT FOUND");
-    }
     None // Table full, not found
 }
 
@@ -1179,38 +1118,37 @@ impl ShimState {
         if !ptr.is_null() {
             return unsafe { Some(&*ptr) };
         }
-        // RFC-0050: Four-state initialization lifecycle
-        // 2: Early-Init (Hazardous/Waiting), 1: Gate Open (Ready), 3: Busy (Initializing), 0: Done
+
+        // RFC-0050: Tiered Readiness Model
+        // 2: Early-Init (Hazardous), 1: image init (Hazardous), 3: Busy, 0: Ready
         let current = unsafe { INITIALIZING.load(Ordering::Acquire) };
-        if current == 3 {
-            // 3 (Already init-in-progress), return None to fallback
+        if current != 0 {
+            // Still in hazardous dyld phase or already initializing, return None to fallback to raw syscalls
             return None;
         }
 
-        // Attempt to transition to 3 (Busy)
-        // Try from 1 (Ready - C constructor ran), then from 2 (Early - C constructor didn't run yet)
+        // Attempt to transition to 3 (Busy) only from 0 (Ready)
         let transitioned = unsafe {
             INITIALIZING
-                .compare_exchange(1, 3, Ordering::SeqCst, Ordering::Acquire)
+                .compare_exchange(0, 3, Ordering::SeqCst, Ordering::Acquire)
                 .is_ok()
-                || INITIALIZING
-                    .compare_exchange(2, 3, Ordering::SeqCst, Ordering::Acquire)
-                    .is_ok()
         };
         if !transitioned {
             return None;
         }
 
-        // Initialize state - MUST reset INITIALIZING to 0 on success, or back to 1 on failure
+        // Initialize state - reset INITIALIZING to 0 on success
         let ptr = match Self::init() {
-            Some(p) => p,
+            Some(p) => {
+                SHIM_STATE.store(p, Ordering::Release);
+                unsafe { INITIALIZING.store(0, Ordering::SeqCst) };
+                p
+            }
             None => {
-                unsafe { INITIALIZING.store(1, Ordering::SeqCst) };
+                unsafe { INITIALIZING.store(0, Ordering::SeqCst) };
                 return None;
             }
         };
-        SHIM_STATE.store(ptr, Ordering::Release);
-        unsafe { INITIALIZING.store(0, Ordering::SeqCst) };
 
         // RFC-0039 §82: Record initialization event
         vfs_record!(EventType::VfsInit, 0, 0);

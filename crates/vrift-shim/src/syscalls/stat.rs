@@ -146,68 +146,52 @@ unsafe fn stat_impl(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn stat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
-    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
-    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 {
-        return crate::syscalls::macos_raw::raw_stat(path, buf);
-    }
-
-    let _guard = match ShimGuard::enter() {
-        Some(g) => g,
-        None => return crate::syscalls::macos_raw::raw_stat(path, buf),
-    };
-
+pub unsafe extern "C" fn velo_stat_impl(path: *const c_char, buf: *mut libc_stat) -> c_int {
     stat_impl(path, buf, true).unwrap_or_else(|| crate::syscalls::macos_raw::raw_stat(path, buf))
 }
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
-    // BUG-007: Use raw syscall during early init to avoid dlsym recursion
+pub unsafe extern "C" fn stat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
+    // Standard interpose entry point
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 {
-        return crate::syscalls::macos_raw::raw_lstat(path, buf);
+    if init_state != 0 {
+        return crate::syscalls::macos_raw::raw_stat(path, buf);
     }
+    velo_stat_impl(path, buf)
+}
 
-    let _guard = match ShimGuard::enter() {
-        Some(g) => g,
-        None => return crate::syscalls::macos_raw::raw_lstat(path, buf),
-    };
-
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn velo_lstat_impl(path: *const c_char, buf: *mut libc_stat) -> c_int {
     stat_impl(path, buf, false).unwrap_or_else(|| crate::syscalls::macos_raw::raw_lstat(path, buf))
 }
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
-    use std::sync::atomic::Ordering::Relaxed;
-
-    // Early init bypass
-    let init_state = crate::state::INITIALIZING.load(Relaxed);
-    if init_state >= 2 {
-        return crate::syscalls::macos_raw::raw_fstat64(fd, buf);
+pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state != 0 {
+        return crate::syscalls::macos_raw::raw_lstat(path, buf);
     }
+    velo_lstat_impl(path, buf)
+}
 
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn velo_fstat_impl(fd: c_int, buf: *mut libc_stat) -> c_int {
     // 🔥 ULTRA-FAST PATH: No ShimGuard for common case
     if let Some(reactor) = crate::sync::get_reactor() {
         let entry_ptr = reactor.fd_table.get(fd as u32);
-
-        // Untracked FD (99% case in compilation) → direct syscall
-        if entry_ptr.is_null() {
-            return crate::syscalls::macos_raw::raw_fstat64(fd, buf);
-        }
-
-        let entry = &*entry_ptr;
-
-        // Cache hit → instant return
-        if let Some(ref cached) = entry.cached_stat {
-            *buf = *cached;
-            return 0;
+        if !entry_ptr.is_null() {
+            let entry = &*entry_ptr;
+            if let Some(ref cached) = entry.cached_stat {
+                *buf = *cached;
+                return 0;
+            }
         }
     }
 
-    // Slow path: ShimGuard + manifest query
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
         None => return crate::syscalls::macos_raw::raw_fstat64(fd, buf),
@@ -241,26 +225,26 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int {
-    // BUG-007: Use raw syscall during early init to avoid recursion
+pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
-        return crate::syscalls::macos_raw::raw_access(path, mode);
+    if init_state != 0 {
+        return crate::syscalls::macos_raw::raw_fstat64(fd, buf);
     }
+    velo_fstat_impl(fd, buf)
+}
 
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(*const c_char, c_int) -> c_int,
-    >(REAL_ACCESS.get());
-
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn velo_access_impl(path: *const c_char, mode: c_int) -> c_int {
+    // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
-        None => return real(path, mode),
+        None => return crate::syscalls::macos_raw::raw_access(path, mode),
     };
 
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
-        Err(_) => return real(path, mode),
+        Err(_) => return crate::syscalls::macos_raw::raw_access(path, mode),
     };
 
     if ShimState::get()
@@ -270,7 +254,44 @@ pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int 
         return 0;
     }
 
-    real(path, mode)
+    crate::syscalls::macos_raw::raw_access(path, mode)
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int {
+    // BUG-007: Use raw syscall during early init to avoid recursion
+    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+    if init_state != 0 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
+        return crate::syscalls::macos_raw::raw_access(path, mode);
+    }
+
+    velo_access_impl(path, mode)
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn velo_fstatat_impl(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut libc_stat,
+    flags: c_int,
+) -> c_int {
+    // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return crate::syscalls::macos_raw::raw_fstatat64(dirfd, path, buf, flags),
+    };
+
+    if dirfd == libc::AT_FDCWD || (!path.is_null() && *path == b'/' as i8) {
+        if let Ok(path_str) = CStr::from_ptr(path).to_str() {
+            if let Some(res) = stat_impl_common(path_str, buf) {
+                return res;
+            }
+        }
+    }
+
+    crate::syscalls::macos_raw::raw_fstatat64(dirfd, path, buf, flags)
 }
 
 #[no_mangle]
@@ -284,7 +305,7 @@ pub unsafe extern "C" fn fstatat_shim(
     // BUG-007 / RFC-0051: Use raw syscall during early init to avoid dlsym recursion.
     // Also check if SHIM_STATE is null to avoid TLS deadlock hazards.
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -292,25 +313,7 @@ pub unsafe extern "C" fn fstatat_shim(
         return crate::syscalls::macos_raw::raw_fstatat64(dirfd, path, buf, flags);
     }
 
-    let _guard = match ShimGuard::enter() {
-        Some(g) => g,
-        None => return crate::syscalls::macos_raw::raw_fstatat64(dirfd, path, buf, flags),
-    };
-
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(c_int, *const c_char, *mut libc_stat, c_int) -> c_int,
-    >(REAL_FSTATAT.get());
-
-    if dirfd == libc::AT_FDCWD || (!path.is_null() && *path == b'/' as i8) {
-        if let Ok(path_str) = CStr::from_ptr(path).to_str() {
-            if let Some(res) = stat_impl_common(path_str, buf) {
-                return res;
-            }
-        }
-    }
-
-    real(dirfd, path, buf, flags)
+    velo_fstatat_impl(dirfd, path, buf, flags)
 }
 
 /// Linux-specific fstatat shim called from interpose bridge
@@ -357,7 +360,7 @@ pub unsafe extern "C" fn statx_shim(
     }
 
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
         return crate::syscalls::linux_raw::raw_statx(
             dirfd,
             path,

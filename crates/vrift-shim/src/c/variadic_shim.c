@@ -23,11 +23,26 @@ int get_vfs_errno() { return errno; }
 #if defined(__APPLE__) && defined(__aarch64__)
 #define SYS_OPEN 5
 #define SYS_OPENAT 463
+#define SYS_STAT64 338
+#define SYS_LSTAT64 340
+#define SYS_ACCESS 33
+#define SYS_READLINK 58
+#define SYS_FSTAT64 339
+#define SYS_FSTATAT64 466
 #elif defined(__linux__) && defined(__x86_64__)
 #define SYS_OPEN 2
 #define SYS_OPENAT 257
+#define SYS_STAT64 4
+#define SYS_LSTAT64 6
+#define SYS_ACCESS 21
+#define SYS_READLINK 89
 #elif defined(__linux__) && defined(__aarch64__)
 #define SYS_OPENAT 56
+#define SYS_STATAT 79
+#define SYS_ACCESSAT 48
+#define SYS_READLINKAT 78
+#define SYS_FSTAT 80
+#define SYS_FSTATAT 79
 #define AT_FDCWD -100
 #endif
 
@@ -36,6 +51,12 @@ int get_vfs_errno() { return errno; }
 extern int velo_open_impl(const char *path, int flags, mode_t mode);
 extern int velo_openat_impl(int dirfd, const char *path, int flags,
                             mode_t mode);
+extern int velo_stat_impl(const char *path, void *buf);
+extern int velo_lstat_impl(const char *path, void *buf);
+extern int velo_access_impl(const char *path, int mode);
+extern long velo_readlink_impl(const char *path, char *buf, size_t bufsiz);
+extern int velo_fstat_impl(int fd, void *buf);
+extern int velo_fstatat_impl(int dirfd, const char *path, void *buf, int flags);
 
 /* RFC-0049: Global initialization state
  * 2: Early-Init (Hazardous), 1: Rust-Init (Safe TLS), 0: Ready
@@ -44,6 +65,11 @@ volatile char INITIALIZING = 2;
 
 __attribute__((constructor(101))) void vfs_init_constructor() {
   INITIALIZING = 1;
+}
+
+// Late constructor to signal dyld bootstrap is complete
+__attribute__((constructor(65535))) void vfs_late_init_constructor() {
+  INITIALIZING = 0;
 }
 
 /* --- Raw Syscall Implementation --- */
@@ -118,7 +144,7 @@ int c_open_bridge(const char *path, int flags, ...) {
     mode = (mode_t)va_arg(args, int);
     va_end(args);
   }
-  if (INITIALIZING == 2 || INITIALIZING == 3) {
+  if (INITIALIZING != 0) {
     return (int)raw_syscall(SYS_OPEN, (long)path, (long)flags, (long)mode, 0);
   }
   return velo_open_impl(path, flags, mode);
@@ -132,16 +158,60 @@ int c_openat_bridge(int dirfd, const char *path, int flags, ...) {
     mode = (mode_t)va_arg(args, int);
     va_end(args);
   }
-  if (INITIALIZING == 2 || INITIALIZING == 3) {
+  if (INITIALIZING != 0) {
     return (int)raw_syscall(SYS_OPENAT, (long)dirfd, (long)path, (long)flags,
                             (long)mode);
   }
   return velo_openat_impl(dirfd, path, flags, mode);
 }
+
+int c_stat_bridge(const char *path, void *buf) {
+  if (INITIALIZING != 0) {
+    return (int)raw_syscall(SYS_STAT64, (long)path, (long)buf, 0, 0);
+  }
+  return velo_stat_impl(path, buf);
+}
+
+int c_lstat_bridge(const char *path, void *buf) {
+  if (INITIALIZING != 0) {
+    return (int)raw_syscall(SYS_LSTAT64, (long)path, (long)buf, 0, 0);
+  }
+  return velo_lstat_impl(path, buf);
+}
+
+int c_access_bridge(const char *path, int mode) {
+  if (INITIALIZING != 0) {
+    return (int)raw_syscall(SYS_ACCESS, (long)path, (long)mode, 0, 0);
+  }
+  return velo_access_impl(path, mode);
+}
+
+long c_readlink_bridge(const char *path, char *buf, size_t bufsiz) {
+  if (INITIALIZING != 0) {
+    return raw_syscall(SYS_READLINK, (long)path, (long)buf, (long)bufsiz, 0);
+  }
+  return velo_readlink_impl(path, buf, bufsiz);
+}
+
+int c_fstat_bridge(int fd, void *buf) {
+  if (INITIALIZING != 0) {
+    return (int)raw_syscall(SYS_FSTAT64, (long)fd, (long)buf, 0, 0);
+  }
+  return velo_fstat_impl(fd, buf);
+}
+
+int c_fstatat_bridge(int dirfd, const char *path, void *buf, int flags) {
+  if (INITIALIZING != 0) {
+    return (int)raw_syscall(SYS_FSTATAT64, (long)dirfd, (long)path, (long)buf,
+                            (long)flags);
+  }
+  return velo_fstatat_impl(dirfd, path, buf, flags);
+}
 #endif
 
 #define SYS_RENAME 128
 #define SYS_RENAMEAT 444
+#define SYS_FCNTL 92
 
 extern int velo_rename_impl(const char *old, const char *new);
 extern int velo_renameat_impl(int oldfd, const char *old, int newfd,
@@ -149,14 +219,14 @@ extern int velo_renameat_impl(int oldfd, const char *old, int newfd,
 
 #if defined(__APPLE__)
 int c_rename_bridge(const char *old, const char *new) {
-  if (INITIALIZING == 2 || INITIALIZING == 3) {
+  if (INITIALIZING != 0) {
     return (int)raw_syscall(SYS_RENAME, (long)old, (long)new, 0, 0);
   }
   return velo_rename_impl(old, new);
 }
 
 int c_renameat_bridge(int oldfd, const char *old, int newfd, const char *new) {
-  if (INITIALIZING == 2 || INITIALIZING == 3) {
+  if (INITIALIZING != 0) {
     return (int)raw_syscall(SYS_RENAMEAT, (long)oldfd, (long)old, (long)newfd,
                             (long)new);
   }
@@ -169,6 +239,9 @@ extern int velo_fcntl_impl(int fd, int cmd, long arg);
 
 #if defined(__APPLE__)
 int fcntl_shim_c_impl(int fd, int cmd, long arg) {
+  if (INITIALIZING != 0) {
+    return (int)raw_syscall(SYS_FCNTL, (long)fd, (long)cmd, (long)arg, 0);
+  }
   return velo_fcntl_impl(fd, cmd, arg);
 }
 #endif

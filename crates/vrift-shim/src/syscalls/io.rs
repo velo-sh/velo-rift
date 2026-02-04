@@ -111,7 +111,7 @@ pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
     // BUG-007: Use raw syscall during early init OR when shim not fully ready
     // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
     // BUG-007: Use raw syscall during early init OR when shim not fully ready
     // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -257,7 +257,7 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
 
     // BUG-007 / RFC-0051: Use raw syscall to completely bypass libc/dlsym during critical phases.
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
+    if init_state != 0 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
         return crate::syscalls::macos_raw::raw_close(fd);
     }
 

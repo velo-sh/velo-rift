@@ -248,7 +248,7 @@ pub unsafe extern "C" fn linkat_shim(
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
 #[cfg(target_os = "linux")]
 pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -285,7 +285,7 @@ pub unsafe extern "C" fn unlinkat_shim(dirfd: c_int, path: *const c_char, flags:
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
             if let Some(err) = quick_block_vfs_mutation(path) {
                 return err;
             }
@@ -321,7 +321,7 @@ pub unsafe extern "C" fn mkdirat_shim(
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
             if let Some(err) = quick_block_vfs_mutation(path) {
                 return err;
             }
@@ -357,7 +357,7 @@ pub unsafe extern "C" fn symlinkat_shim(
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
             if let Some(err) = quick_block_vfs_mutation(p1).or_else(|| quick_block_vfs_mutation(p2))
             {
                 return err;
@@ -393,7 +393,7 @@ pub unsafe extern "C" fn symlinkat_shim(
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -412,7 +412,7 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
 #[cfg(target_os = "linux")]
 pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -429,7 +429,7 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -448,7 +448,7 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
 #[cfg(target_os = "linux")]
 pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -542,7 +542,7 @@ pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> 
     // BUG-007: Use raw syscall during early init OR when shim not fully ready
     // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -570,7 +570,7 @@ pub unsafe extern "C" fn fchmodat_shim(
     flags: c_int,
 ) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -592,7 +592,7 @@ pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state >= 2 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
             return crate::syscalls::macos_raw::raw_fchmod(fd, mode);
         }
 
@@ -680,7 +680,7 @@ pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -703,7 +703,7 @@ pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t)
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn chflags_shim(path: *const c_char, flags: libc::c_uint) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -732,7 +732,7 @@ pub unsafe extern "C" fn setxattr_shim(
     options: c_int,
 ) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -763,7 +763,7 @@ pub unsafe extern "C" fn removexattr_shim(
     options: c_int,
 ) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -788,7 +788,7 @@ pub unsafe extern "C" fn removexattr_shim(
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::timeval) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state >= 2
+    if init_state != 0
         || crate::state::SHIM_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
@@ -857,4 +857,89 @@ pub unsafe extern "C" fn setrlimit_shim(resource: c_int, rlp: *const libc::rlimi
     }
 
     ret
+}
+
+// ============================================================================
+// Passthrough shims for interpose table compatibility
+// ============================================================================
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn flock_shim(fd: c_int, op: c_int) -> c_int {
+    libc::flock(fd, op)
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn symlink_shim(p1: *const c_char, p2: *const c_char) -> c_int {
+    block_vfs_mutation(p2).unwrap_or_else(|| libc::symlink(p1, p2))
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn execve_shim(
+    path: *const c_char,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    libc::execve(path, argv, envp)
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn posix_spawn_shim(
+    pid: *mut libc::pid_t,
+    path: *const c_char,
+    fa: *const c_void,
+    attr: *const c_void,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    libc::posix_spawn(
+        pid,
+        path,
+        fa as *const libc::posix_spawn_file_actions_t,
+        attr as *const libc::posix_spawnattr_t,
+        argv as *const *mut c_char,
+        envp as *const *mut c_char,
+    )
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn posix_spawnp_shim(
+    pid: *mut libc::pid_t,
+    file: *const c_char,
+    fa: *const c_void,
+    attr: *const c_void,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    libc::posix_spawnp(
+        pid,
+        file,
+        fa as *const libc::posix_spawn_file_actions_t,
+        attr as *const libc::posix_spawnattr_t,
+        argv as *const *mut c_char,
+        envp as *const *mut c_char,
+    )
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn faccessat_shim(
+    dirfd: c_int,
+    path: *const c_char,
+    mode: c_int,
+    flags: c_int,
+) -> c_int {
+    libc::faccessat(dirfd, path, mode, flags)
+}
+
+/// fcntl implementation called from C bridge (variadic_shim.c)
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn velo_fcntl_impl(fd: c_int, cmd: c_int, arg: libc::c_long) -> c_int {
+    // Simple passthrough for now - fcntl doesn't need VFS virtualization
+    libc::fcntl(fd, cmd, arg)
 }

@@ -151,25 +151,36 @@ const SYS_RENAME: i64 = 128;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_RENAMEAT: i64 = 465;
 
+/// SYS_readlink = 58 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_READLINK: i64 = 58;
+
+/// SYS_realpath = 462 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_REALPATH: i64 = 462;
+
 /// Raw stat64 syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
 pub unsafe fn raw_stat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_STAT64,
         in("x0") path as i64,
         in("x1") buf as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw lstat64 syscall for macOS ARM64.
@@ -177,20 +188,23 @@ pub unsafe fn raw_stat(path: *const libc::c_char, buf: *mut libc::stat) -> libc:
 #[inline(never)]
 pub unsafe fn raw_lstat(path: *const libc::c_char, buf: *mut libc::stat) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_LSTAT64,
         in("x0") path as i64,
         in("x1") buf as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw fstat64 syscall for macOS ARM64.
@@ -199,20 +213,23 @@ pub unsafe fn raw_lstat(path: *const libc::c_char, buf: *mut libc::stat) -> libc
 #[inline(never)]
 pub unsafe fn raw_fstat64(fd: libc::c_int, buf: *mut libc::stat) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_FSTAT64,
         in("x0") fd as i64,
         in("x1") buf as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw close syscall for macOS ARM64.
@@ -289,20 +306,23 @@ pub unsafe fn raw_munmap(addr: *mut libc::c_void, len: libc::size_t) -> libc::c_
 #[inline(never)]
 pub unsafe fn raw_access(path: *const libc::c_char, mode: libc::c_int) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_ACCESS,
         in("x0") path as i64,
         in("x1") mode as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// SYS_read = 3 on macOS
@@ -561,19 +581,22 @@ pub unsafe fn raw_unlink(path: *const libc::c_char) -> libc::c_int {
 #[inline(never)]
 pub unsafe fn raw_rmdir(path: *const libc::c_char) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_RMDIR,
         in("x0") path as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw rename syscall for macOS ARM64.
@@ -581,20 +604,23 @@ pub unsafe fn raw_rmdir(path: *const libc::c_char) -> libc::c_int {
 #[inline(never)]
 pub unsafe fn raw_rename(old: *const libc::c_char, new: *const libc::c_char) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_RENAME,
         in("x0") old as i64,
         in("x1") new as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw renameat syscall for macOS ARM64.
@@ -607,22 +633,81 @@ pub unsafe fn raw_renameat(
     new: *const libc::c_char,
 ) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_RENAMEAT,
         in("x0") olddirfd as i64,
         in("x1") old as i64,
         in("x2") newdirfd as i64,
         in("x3") new as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
+}
+
+/// Raw readlink syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_readlink(
+    path: *const libc::c_char,
+    buf: *mut libc::c_char,
+    bufsiz: libc::size_t,
+) -> libc::ssize_t {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_READLINK,
+        in("x0") path as i64,
+        in("x1") buf as i64,
+        in("x2") bufsiz as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::ssize_t
+}
+
+/// Raw realpath syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_realpath(
+    path: *const libc::c_char,
+    resolved: *mut libc::c_char,
+) -> *mut libc::c_char {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_REALPATH,
+        in("x0") path as i64,
+        in("x1") resolved as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return std::ptr::null_mut();
+    }
+    ret as *mut libc::c_char
 }
 
 /// Raw mkdir syscall for macOS ARM64.
@@ -630,20 +715,23 @@ pub unsafe fn raw_renameat(
 #[inline(never)]
 pub unsafe fn raw_mkdir(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_MKDIR,
         in("x0") path as i64,
         in("x1") mode as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw truncate syscall for macOS ARM64.
@@ -651,20 +739,23 @@ pub unsafe fn raw_mkdir(path: *const libc::c_char, mode: libc::mode_t) -> libc::
 #[inline(never)]
 pub unsafe fn raw_truncate(path: *const libc::c_char, length: libc::off_t) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_TRUNCATE,
         in("x0") path as i64,
         in("x1") length,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw unlinkat syscall for macOS ARM64.
@@ -676,21 +767,24 @@ pub unsafe fn raw_unlinkat(
     flags: libc::c_int,
 ) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_UNLINKAT,
         in("x0") dirfd as i64,
         in("x1") path as i64,
         in("x2") flags as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw mkdirat syscall for macOS ARM64.
@@ -702,21 +796,24 @@ pub unsafe fn raw_mkdirat(
     mode: libc::mode_t,
 ) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_MKDIRAT,
         in("x0") dirfd as i64,
         in("x1") path as i64,
         in("x2") mode as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw symlinkat syscall for macOS ARM64.
@@ -728,21 +825,24 @@ pub unsafe fn raw_symlinkat(
     p2: *const libc::c_char,
 ) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_SYMLINKAT,
         in("x0") p1 as i64,
         in("x1") dirfd as i64,
         in("x2") p2 as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw fchmod syscall for macOS ARM64.
@@ -750,20 +850,23 @@ pub unsafe fn raw_symlinkat(
 #[inline(never)]
 pub unsafe fn raw_fchmod(fd: libc::c_int, mode: libc::mode_t) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_FCHMOD,
         in("x0") fd as i64,
         in("x1") mode as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw fchmodat syscall for macOS ARM64.
@@ -776,22 +879,25 @@ pub unsafe fn raw_fchmodat(
     flags: libc::c_int,
 ) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_FCHMODAT,
         in("x0") dirfd as i64,
         in("x1") path as i64,
         in("x2") mode as i64,
         in("x3") flags as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw fstatat64 syscall for macOS ARM64.
@@ -804,22 +910,25 @@ pub unsafe fn raw_fstatat64(
     flags: libc::c_int,
 ) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_FSTATAT64,
         in("x0") dirfd as i64,
         in("x1") path as i64,
         in("x2") buf as i64,
         in("x3") flags as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 // =============================================================================
