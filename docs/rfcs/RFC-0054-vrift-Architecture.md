@@ -141,11 +141,14 @@ L2: CAS Memory Pool (Hot Data)
   - Content: Frequently read files
   - Latency: 300ns for 4KB
 
-L3: Disk CAS (Cold Storage)
-  - Location: ~/.vrift/cas/blake3/...
-  - Size: Unlimited
-  - Access: On-demand load to L2
-  - Latency: 50-100µs (NVMe)
+### 5. Solid Mode (Materialized Accelerator)
+
+**Definition**: vrift operates in **"Solid Mode"**, meaning the project directory contains a **complete, valid physical directory structure**.
+*   **Structure**: Real directories and files exist on disk.
+*   **Content**: Files are reflinked/hardlinked to CAS blobs.
+*   **Role**: InceptionLayer acts as a **Transparent Accelerator**. It intercepts operations to serve data from memory (VDir/CAS) when safe (Clean state), but falls back to the physical disk when necessary (Dirty state).
+
+This ensures standard tools (`ls`, `grep`) work without modification, even if the daemon is not running.
 ```
 
 ---
@@ -156,15 +159,13 @@ L3: Disk CAS (Cold Storage)
 
 ```
 Application: stat("/project/src/main.rs", &buf)
-    ↓ (100ns syscall intercept)
-Client Library:
-    1. High-Speed Lookup in local VDir mmap  (50ns)
-    2. Fill stat buffer           (10ns)
-    3. Return to app              (10ns)
     ↓
-Total: 170ns ✅ 10x faster than real FS (1,675ns)
-
-Server: NOT involved
+Client Library:
+    1. Check Dirty Bit / Staging Exists (Real Path Fallback)
+    2. High-Speed Lookup in local VDir mmap  (Memory)
+    3. Return to app
+    ↓
+Total: 170ns (if Clean) / Native Speed (if Dirty)
 ```
 
 ### read() Path - Zero-Copy, 300ns for 4KB
@@ -183,23 +184,22 @@ Total: 300ns for 4KB ✅
 Server: NOT involved (data already in L2 pool)
 ```
 
-### write() Path - Async Buffer, 240ns
+### write() Path - Native Staging, Atomic Handover
 
 ```
 Application: write(fd, data, size)
     ↓
 Client Library:
-    1. Append to local buffer      (100ns)
-    2. Mark dirty                  (20ns)
-    3. Return immediately          (20ns)
+    1. Redirect to Staging File (.vrift/staging/...)
+    2. Mark Dirty Bit (Shared Memory)
+    3. Native Write to OS Page Cache
     ↓
-Total: 240ns ✅ Non-blocking
+Total: Native Speed (Zero IPC)
 
 On close():
-    → Send buffer to server (async IPC, 10µs)
-    → Server hashes & writes to CAS (background)
-    → Updates Virtual Directory mmap
-    → Bumps generation counter
+    → Send staging path to server (UDS Commit)
+    → Server performs ReFLINK/Hardlink to CAS
+    → Server updates VDir & Clears Dirty Bit
 ```
 
 ---
