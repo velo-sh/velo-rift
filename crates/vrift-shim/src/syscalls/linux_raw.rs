@@ -932,6 +932,56 @@ pub unsafe fn raw_fchmod(fd: c_int, mode: mode_t) -> c_int {
     }
 }
 
+/// Raw utimensat syscall (for touch interception)
+#[inline(always)]
+pub unsafe fn raw_utimensat(
+    dirfd: c_int,
+    path: *const c_char,
+    times: *const libc::timespec,
+    flags: c_int,
+) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 280i64, // SYS_utimensat
+            in("rdi") dirfd as i64,
+            in("rsi") path,
+            in("rdx") times,
+            in("r10") flags as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 88i64, // SYS_utimensat
+            in("x0") dirfd as i64,
+            in("x1") path,
+            in("x2") times,
+            in("x3") flags as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
 /// Raw statx syscall
 #[inline(always)]
 pub unsafe fn raw_statx(
