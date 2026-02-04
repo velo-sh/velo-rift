@@ -692,6 +692,184 @@ pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
     }
 }
 
+// =============================================================================
+// P0-P1 Gap Fix: fchown/fchownat - Block ownership changes on VFS files via FD
+// Pattern: Same as fchmod_shim - resolve FD to path, check VFS
+// =============================================================================
+
+/// fchown_shim: Block ownership changes on VFS files via FD
+/// Uses F_GETPATH (macOS) or /proc/self/fd (Linux) to resolve FD to path
+#[no_mangle]
+pub unsafe extern "C" fn fchown_shim(fd: c_int, owner: libc::uid_t, group: libc::gid_t) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+            return crate::syscalls::macos_raw::raw_fchown(fd, owner, group);
+        }
+
+        // RFC-OPT-001: Recursion protection
+        let _guard = match ShimGuard::enter() {
+            Some(g) => g,
+            None => return crate::syscalls::macos_raw::raw_fchown(fd, owner, group),
+        };
+
+        // VFS logic: if FD points to a VFS file, block mutation
+        // Strategy: Try to get path from FD via F_GETPATH
+        let mut path_buf = [0i8; 1024];
+        if libc::fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr()) == 0 {
+            let path_cstr = CStr::from_ptr(path_buf.as_ptr());
+            if let Ok(path_str) = path_cstr.to_str() {
+                if let Some(state) = ShimState::get() {
+                    if state.psfs_applicable(path_str) {
+                        crate::set_errno(libc::EPERM);
+                        return -1;
+                    }
+                }
+            }
+        }
+
+        // Fallback to FD table if F_GETPATH failed
+        use crate::syscalls::io::get_fd_entry;
+        if let Some(entry) = get_fd_entry(fd) {
+            if entry.is_vfs {
+                crate::set_errno(libc::EPERM);
+                return -1;
+            }
+        }
+
+        crate::syscalls::macos_raw::raw_fchown(fd, owner, group)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if INITIALIZING.load(Ordering::Relaxed) >= 2
+            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+        {
+            return crate::syscalls::linux_raw::raw_fchown(fd, owner, group);
+        }
+
+        let _guard = match ShimGuard::enter() {
+            Some(g) => g,
+            None => return crate::syscalls::linux_raw::raw_fchown(fd, owner, group),
+        };
+
+        // Strategy: Use /proc/self/fd/N to get path
+        let fd_path = format!("/proc/self/fd/{}\0", fd);
+        let mut path_buf = [0u8; 1024];
+        let n = libc::readlink(
+            fd_path.as_ptr() as *const c_char,
+            path_buf.as_mut_ptr() as *mut c_char,
+            path_buf.len(),
+        );
+        if n > 0 && (n as usize) < path_buf.len() {
+            if let Ok(path_str) = std::str::from_utf8(&path_buf[..n as usize]) {
+                if let Some(state) = ShimState::get() {
+                    if state.psfs_applicable(path_str) {
+                        crate::set_errno(libc::EPERM);
+                        return -1;
+                    }
+                }
+            }
+        }
+
+        use crate::syscalls::io::get_fd_entry;
+        if let Some(entry) = get_fd_entry(fd) {
+            if entry.is_vfs {
+                crate::set_errno(libc::EPERM);
+                return -1;
+            }
+        }
+
+        crate::syscalls::linux_raw::raw_fchown(fd, owner, group)
+    }
+}
+
+/// fchownat_shim: Block ownership changes on VFS files via dirfd + path
+#[no_mangle]
+pub unsafe extern "C" fn fchownat_shim(
+    dirfd: c_int,
+    path: *const c_char,
+    owner: libc::uid_t,
+    group: libc::gid_t,
+    flags: c_int,
+) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
+            return crate::syscalls::macos_raw::raw_fchownat(dirfd, path, owner, group, flags);
+        }
+        // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+        block_vfs_mutation(path).unwrap_or_else(|| {
+            crate::syscalls::macos_raw::raw_fchownat(dirfd, path, owner, group, flags)
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if INITIALIZING.load(Ordering::Relaxed) >= 2
+            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+        {
+            if let Some(err) = quick_block_vfs_mutation(path) {
+                return err;
+            }
+            return crate::syscalls::linux_raw::raw_fchownat(dirfd, path, owner, group, flags);
+        }
+        block_vfs_mutation(path).unwrap_or_else(|| {
+            crate::syscalls::linux_raw::raw_fchownat(dirfd, path, owner, group, flags)
+        })
+    }
+}
+
+// =============================================================================
+// P0-P1 Gap Fix: exchangedata - Block atomic file swaps involving VFS (macOS only)
+// =============================================================================
+
+/// exchangedata_shim: Block atomic swaps if either path is in VFS
+/// Returns EXDEV if any path is in VFS (cross-device semantics)
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn exchangedata_shim(
+    path1: *const c_char,
+    path2: *const c_char,
+    options: libc::c_uint,
+) -> c_int {
+    // Quick VFS check - always applies, even during init
+    let path1_in_vfs = quick_is_in_vfs(path1);
+    let path2_in_vfs = quick_is_in_vfs(path2);
+    if path1_in_vfs || path2_in_vfs {
+        // Either path in VFS: block the swap
+        crate::set_errno(libc::EXDEV);
+        return -1;
+    }
+
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return crate::syscalls::macos_raw::raw_exchangedata(path1, path2, options);
+    }
+
+    let _guard = match ShimGuard::enter() {
+        Some(g) => g,
+        None => return crate::syscalls::macos_raw::raw_exchangedata(path1, path2, options),
+    };
+
+    // Full VFS check with state
+    if let Some(state) = ShimState::get() {
+        let p1_str = CStr::from_ptr(path1).to_str().ok();
+        let p2_str = CStr::from_ptr(path2).to_str().ok();
+        if let (Some(p1), Some(p2)) = (p1_str, p2_str) {
+            if state.psfs_applicable(p1) || state.psfs_applicable(p2) {
+                crate::set_errno(libc::EXDEV);
+                return -1;
+            }
+        }
+    }
+
+    crate::syscalls::macos_raw::raw_exchangedata(path1, path2, options)
+}
+
 // --- truncate ---
 
 #[no_mangle]

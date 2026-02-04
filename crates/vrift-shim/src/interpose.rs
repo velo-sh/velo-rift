@@ -10,10 +10,11 @@ use crate::syscalls::io::{
 };
 #[cfg(target_os = "macos")]
 use crate::syscalls::misc::{
-    chflags_shim, chmod_shim, execve_shim, faccessat_shim, fchmod_shim, fchmodat_shim, flock_shim,
-    link_shim, linkat_shim, mkdir_shim, mkdirat_shim, posix_spawn_shim, posix_spawnp_shim,
-    removexattr_shim, rmdir_shim, setrlimit_shim, setxattr_shim, symlink_shim, symlinkat_shim,
-    truncate_shim, unlink_shim, unlinkat_shim, utimensat_shim, utimes_shim,
+    chflags_shim, chmod_shim, exchangedata_shim, execve_shim, faccessat_shim, fchmod_shim,
+    fchmodat_shim, fchown_shim, fchownat_shim, flock_shim, link_shim, linkat_shim, mkdir_shim,
+    mkdirat_shim, posix_spawn_shim, posix_spawnp_shim, removexattr_shim, rmdir_shim,
+    setrlimit_shim, setxattr_shim, symlink_shim, symlinkat_shim, truncate_shim, unlink_shim,
+    unlinkat_shim, utimensat_shim, utimes_shim,
 };
 
 #[cfg(target_os = "macos")]
@@ -190,6 +191,23 @@ extern "C" {
     fn real_fchmod(fd: c_int, mode: mode_t) -> c_int;
     #[link_name = "setrlimit"]
     fn real_setrlimit(resource: c_int, rlp: *const libc::rlimit) -> c_int;
+    // P0-P1 Gap Fix: fchown/fchownat/exchangedata
+    #[link_name = "fchown"]
+    fn real_fchown(fd: c_int, owner: libc::uid_t, group: libc::gid_t) -> c_int;
+    #[link_name = "fchownat"]
+    fn real_fchownat(
+        dirfd: c_int,
+        path: *const c_char,
+        owner: libc::uid_t,
+        group: libc::gid_t,
+        flags: c_int,
+    ) -> c_int;
+    #[link_name = "exchangedata"]
+    fn real_exchangedata(
+        path1: *const c_char,
+        path2: *const c_char,
+        options: libc::c_uint,
+    ) -> c_int;
 }
 
 #[cfg(target_os = "macos")]
@@ -596,6 +614,29 @@ pub static IT_SETRLIMIT: Interpose = Interpose {
     old_func: real_setrlimit as _,
 };
 
+// P0-P1 Gap Fix: fchown/fchownat/exchangedata interposition
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_FCHOWN: Interpose = Interpose {
+    new_func: fchown_shim as _,
+    old_func: real_fchown as _,
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_FCHOWNAT: Interpose = Interpose {
+    new_func: fchownat_shim as _,
+    old_func: real_fchownat as _,
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__nointerpose"]
+#[used]
+pub static IT_EXCHANGEDATA: Interpose = Interpose {
+    new_func: exchangedata_shim as _,
+    old_func: real_exchangedata as _,
+};
+
 // =============================================================================
 // Linux LD_PRELOAD Symbol Exports
 // =============================================================================
@@ -736,3 +777,23 @@ pub unsafe extern "C" fn utimes(path: *const c_char, times: *const libc::timeval
     }
     crate::syscalls::linux_raw::raw_utimes(path, times)
 }
+
+// P0-P1 Gap Fix: Linux fchown/fchownat exports
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn fchown(fd: c_int, owner: libc::uid_t, group: libc::gid_t) -> c_int {
+    crate::syscalls::misc::fchown_shim(fd, owner, group)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn fchownat(
+    dirfd: c_int,
+    path: *const c_char,
+    owner: libc::uid_t,
+    group: libc::gid_t,
+    flags: c_int,
+) -> c_int {
+    crate::syscalls::misc::fchownat_shim(dirfd, path, owner, group, flags)
+}
+

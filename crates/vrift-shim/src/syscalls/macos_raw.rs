@@ -1214,6 +1214,110 @@ pub unsafe fn raw_setrlimit(resource: libc::c_int, rlp: *const libc::rlimit) -> 
 }
 
 // =============================================================================
+// P0-P1 Gap Fix: Ownership and Atomic Swap Operations
+// =============================================================================
+
+/// SYS_fchown = 123 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_FCHOWN: i64 = 123;
+
+/// SYS_fchownat = 468 on macOS (not available on all versions, use carefully)
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_FCHOWNAT: i64 = 468;
+
+/// SYS_exchangedata = 223 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_EXCHANGEDATA: i64 = 223;
+
+/// Raw fchown syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_fchown(fd: libc::c_int, owner: libc::uid_t, group: libc::gid_t) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_FCHOWN,
+        in("x0") fd as i64,
+        in("x1") owner as i64,
+        in("x2") group as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+/// Raw fchownat syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_fchownat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    owner: libc::uid_t,
+    group: libc::gid_t,
+    flags: libc::c_int,
+) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_FCHOWNAT,
+        in("x0") dirfd as i64,
+        in("x1") path as i64,
+        in("x2") owner as i64,
+        in("x3") group as i64,
+        in("x4") flags as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+/// Raw exchangedata syscall for macOS ARM64.
+/// Atomically swaps the contents of two files.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_exchangedata(
+    path1: *const libc::c_char,
+    path2: *const libc::c_char,
+    options: libc::c_uint,
+) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_EXCHANGEDATA,
+        in("x0") path1 as i64,
+        in("x1") path2 as i64,
+        in("x2") options as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+// =============================================================================
 // macOS x86_64 implementations
 // =============================================================================
 
@@ -2038,4 +2142,20 @@ pub unsafe fn raw_fstatat64(
     flags: libc::c_int,
 ) -> libc::c_int {
     crate::syscalls::linux_raw::raw_fstatat(dirfd, path, buf, flags)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_fchown(fd: libc::c_int, owner: libc::uid_t, group: libc::gid_t) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_fchown(fd, owner, group)
+}
+
+#[cfg(target_os = "linux")]
+pub unsafe fn raw_fchownat(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    owner: libc::uid_t,
+    group: libc::gid_t,
+    flags: libc::c_int,
+) -> libc::c_int {
+    crate::syscalls::linux_raw::raw_fchownat(dirfd, path, owner, group, flags)
 }

@@ -77,6 +77,7 @@ clang -o "$WORK_DIR/test_fchown" "$WORK_DIR/test_fchown.c"
 # Export VFS environment
 export VRIFT_MANIFEST="$WORK_DIR/project/.vrift/manifest.lmdb"
 export VRIFT_PROJECT_ROOT="$WORK_DIR/project"
+export VRIFT_VFS_PREFIX="$WORK_DIR/project"
 export DYLD_INSERT_LIBRARIES="$SHIM_LIB"
 export DYLD_FORCE_FLAT_NAMESPACE=1
 

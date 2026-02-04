@@ -1580,3 +1580,103 @@ pub unsafe fn raw_chdir(path: *const c_char) -> c_int {
         }
     }
 }
+
+// =============================================================================
+// Ownership Operations (P0-P1 Gap Fix)
+// =============================================================================
+
+/// Raw fchown syscall - change file ownership via FD
+#[inline(always)]
+pub unsafe fn raw_fchown(fd: c_int, owner: libc::uid_t, group: libc::gid_t) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 93i64, // SYS_fchown
+            in("rdi") fd as i64,
+            in("rsi") owner as i64,
+            in("rdx") group as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 55i64, // SYS_fchown
+            in("x0") fd as i64,
+            in("x1") owner as i64,
+            in("x2") group as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
+/// Raw fchownat syscall - change file ownership via dirfd + path
+#[inline(always)]
+pub unsafe fn raw_fchownat(
+    dirfd: c_int,
+    path: *const c_char,
+    owner: libc::uid_t,
+    group: libc::gid_t,
+    flags: c_int,
+) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 260i64, // SYS_fchownat
+            in("rdi") dirfd as i64,
+            in("rsi") path,
+            in("rdx") owner as i64,
+            in("r10") group as i64,
+            in("r8") flags as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 54i64, // SYS_fchownat
+            in("x0") dirfd as i64,
+            in("x1") path,
+            in("x2") owner as i64,
+            in("x3") group as i64,
+            in("x4") flags as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
