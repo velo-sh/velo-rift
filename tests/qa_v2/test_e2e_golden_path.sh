@@ -39,10 +39,11 @@ echo "🌀 Velo Rift: Starting E2E Golden Path Verification"
 echo "----------------------------------------------------------------"
 
 # 1. Environment Preparation
-mkdir -p "$SRC_DATA" "$WORK_DIR" "$CAS_ROOT"
-echo "Hello Velo" > "$SRC_DATA/hello.txt"
-mkdir -p "$SRC_DATA/subdir"
-echo "Nested Data" > "$SRC_DATA/subdir/nested.txt"
+# Create source files INSIDE work_dir/src to match expected manifest paths
+mkdir -p "$WORK_DIR/src" "$CAS_ROOT"
+echo "Hello Velo" > "$WORK_DIR/src/hello.txt"
+mkdir -p "$WORK_DIR/src/subdir"
+echo "Nested Data" > "$WORK_DIR/src/subdir/nested.txt"
 
 # 2. Service Lifecycle (Phase A)
 echo "🚀 [Phase A] Background Service Installation..."
@@ -80,7 +81,8 @@ echo "✅ Service running."
 echo "📂 [Phase B] Project Initialization & Ingestion..."
 cd "$WORK_DIR"
 $VRIFT_BIN --the-source-root "$CAS_ROOT" init > /dev/null
-$VRIFT_BIN --the-source-root "$CAS_ROOT" ingest "$SRC_DATA" --output "$WORK_DIR/.vrift/manifest.lmdb"
+# Ingest WORK_DIR so manifest paths match shim queries (e.g., /src/hello.txt)
+$VRIFT_BIN --the-source-root "$CAS_ROOT" ingest "$WORK_DIR" --output "$WORK_DIR/.vrift/manifest.lmdb"
 
 if [ ! -d ".vrift/manifest.lmdb" ]; then
     echo "❌ Ingestion failed: Manifests not generated"

@@ -710,12 +710,9 @@ async fn cmd_ingest(
         "Solid Tier-2 (hard_link, keep original)"
     };
     // Determine path prefix
-    let base_prefix = prefix.unwrap_or_else(|| {
-        directory
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("root")
-    });
+    // RFC-0039: Default to empty prefix so manifest paths match shim queries
+    // E.g., /project/src/file.txt -> manifest_key = /src/file.txt (NOT /project/src/file.txt)
+    let base_prefix = prefix.unwrap_or("");
 
     // LMDB manifest initialized above (line 562)
     let mut files_ingested = 0u64;
@@ -1015,6 +1012,36 @@ async fn cmd_ingest(
     lmdb_manifest
         .commit()
         .with_context(|| "Failed to commit LMDB manifest")?;
+
+    // RFC-0044: Export Hot Stat Cache (mmap) for shim O(1) lookup
+    // This enables VFS reads without daemon IPC dependency
+    {
+        use vrift_ipc::ManifestMmapBuilder;
+        let mut builder = ManifestMmapBuilder::new();
+
+        if let Ok(entries) = lmdb_manifest.iter() {
+            for (path, entry) in entries {
+                let is_dir = entry.vnode.is_dir();
+                let is_symlink = entry.vnode.is_symlink();
+                builder.add_entry(
+                    &path,
+                    entry.vnode.size,
+                    entry.vnode.mtime as i64,
+                    entry.vnode.mode,
+                    is_dir,
+                    is_symlink,
+                );
+            }
+        }
+
+        if !builder.is_empty() {
+            let vrift_dir = directory.join(".vrift");
+            let mmap_path = vrift_dir.join("manifest.mmap");
+            if let Err(e) = builder.write_to_file(&mmap_path.to_string_lossy()) {
+                tracing::warn!("Failed to export mmap cache: {}", e);
+            }
+        }
+    }
 
     // Create and save legacy binary manifest for backward compatibility (FUSE, etc.)
     // RFC-0039 transitional support: skip if output is LMDB directory
