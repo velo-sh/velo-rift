@@ -64,7 +64,14 @@ pub unsafe extern "C" fn velo_rename_impl(old: *const c_char, new: *const c_char
     if let Some(res) = rename_impl(old, new) {
         return res;
     }
-    crate::syscalls::macos_raw::raw_rename(old, new)
+    #[cfg(target_os = "macos")]
+    {
+        crate::syscalls::macos_raw::raw_rename(old, new)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::syscalls::linux_raw::raw_rename(old, new)
+    }
 }
 
 /// Linux-specific rename shim. Returns -2 if passthrough to real syscall is needed.
@@ -106,7 +113,14 @@ pub unsafe extern "C" fn velo_renameat_impl(
             return result;
         }
     }
-    crate::syscalls::macos_raw::raw_renameat(oldfd, old, newfd, new)
+    #[cfg(target_os = "macos")]
+    {
+        crate::syscalls::macos_raw::raw_renameat(oldfd, old, newfd, new)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::syscalls::linux_raw::raw_renameat(oldfd, old, newfd, new)
+    }
 }
 
 /// renameat path resolution helper - resolves relative paths to absolute
