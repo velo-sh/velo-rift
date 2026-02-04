@@ -15,6 +15,15 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VRIFT_BIN="$PROJECT_ROOT/target/release/vrift"
 
+# Timeout configuration (macOS compatible using perl alarm)
+TIMEOUT_SEC=10
+run_with_timeout() {
+    local timeout="$1"
+    shift
+    perl -e 'alarm shift; exec @ARGV' "$timeout" "$@"
+    return $?
+}
+
 # Platform detection
 OS=$(uname -s)
 if [ "$OS" == "Darwin" ]; then
@@ -82,7 +91,15 @@ echo "   Action: mv ../external/data.bin ./inbound.bin"
 # Note: Since we use local mv with shim, and project is same device,
 # verify shim allows it or forces copy. 
 # Shim returns EXDEV for cross-boundary, forcing mv to copy.
-env $FULL_VFS_ENV "$MY_MV" "$WORK_DIR/external/data.bin" "$WORK_DIR/project/inbound.bin"
+if ! run_with_timeout $TIMEOUT_SEC env $FULL_VFS_ENV "$MY_MV" "$WORK_DIR/external/data.bin" "$WORK_DIR/project/inbound.bin" 2>/dev/null; then
+    RET=$?
+    if [ $RET -eq 142 ]; then
+        echo -e "   ${RED}❌ TIMEOUT: Inbound move hung after ${TIMEOUT_SEC}s.${NC}"
+    else
+        echo -e "   ${RED}❌ Failed: Inbound move failed (exit=$RET).${NC}"
+    fi
+    exit 1
+fi
 
 if [ -f "$WORK_DIR/project/inbound.bin" ]; then
     echo -e "   ${GREEN}✅ Success: File moved into VFS territory.${NC}"
@@ -92,7 +109,7 @@ else
 fi
 
 # Verify Integrity
-IN_HASH=$(env $FULL_VFS_ENV "$BIN_SHASUM" "$WORK_DIR/project/inbound.bin" | awk '{print $1}')
+IN_HASH=$(run_with_timeout $TIMEOUT_SEC env $FULL_VFS_ENV "$BIN_SHASUM" "$WORK_DIR/project/inbound.bin" 2>/dev/null | awk '{print $1}')
 if [ "$IN_HASH" == "$EXT_HASH" ]; then
     echo -e "   ${GREEN}✅ Integrity: Content hash matches (${IN_HASH}).${NC}"
 else
@@ -104,7 +121,15 @@ fi
 echo -e "\n${BLUE}🧪 Test 2: Virtual Rename (Internal -> Internal)${NC}"
 echo "   Action: mv ./inbound.bin ./renamed.bin"
 START_TIME=$(date +%s)
-env $FULL_VFS_ENV "$MY_MV" "$WORK_DIR/project/inbound.bin" "$WORK_DIR/project/renamed.bin"
+if ! run_with_timeout $TIMEOUT_SEC env $FULL_VFS_ENV "$MY_MV" "$WORK_DIR/project/inbound.bin" "$WORK_DIR/project/renamed.bin" 2>/dev/null; then
+    RET=$?
+    if [ $RET -eq 142 ]; then
+        echo -e "   ${RED}❌ TIMEOUT: Virtual rename hung after ${TIMEOUT_SEC}s.${NC}"
+    else
+        echo -e "   ${RED}❌ Failed: Virtual rename failed (exit=$RET).${NC}"
+    fi
+    exit 1
+fi
 END_TIME=$(date +%s)
 DURATION=$(( END_TIME - START_TIME ))
 
@@ -119,7 +144,15 @@ fi
 # 3. Outbound Move (Cross-Domain Out)
 echo -e "\n${BLUE}🧪 Test 3: Outbound Move (VFS -> External)${NC}"
 echo "   Action: mv ./renamed.bin ../external/outbound.bin"
-env $FULL_VFS_ENV "$MY_MV" "$WORK_DIR/project/renamed.bin" "$WORK_DIR/external/outbound.bin"
+if ! run_with_timeout $TIMEOUT_SEC env $FULL_VFS_ENV "$MY_MV" "$WORK_DIR/project/renamed.bin" "$WORK_DIR/external/outbound.bin" 2>/dev/null; then
+    RET=$?
+    if [ $RET -eq 142 ]; then
+        echo -e "   ${RED}❌ TIMEOUT: Outbound move hung after ${TIMEOUT_SEC}s.${NC}"
+    else
+        echo -e "   ${RED}❌ Failed: Outbound move failed (exit=$RET).${NC}"
+    fi
+    exit 1
+fi
 
 if [ -f "$WORK_DIR/external/outbound.bin" ] && [ ! -f "$WORK_DIR/project/renamed.bin" ]; then
     echo -e "   ${GREEN}✅ Success: File moved out of VFS territory.${NC}"
@@ -140,7 +173,7 @@ fi
 echo -e "\n${BLUE}🧪 Test 4: Boundary Protection (Hardlink)${NC}"
 echo "   Action: ln ../external/outbound.bin ./hardlink.bin (Should Fail)"
 set +e
-env $FULL_VFS_ENV "$MY_LN" "$WORK_DIR/external/outbound.bin" "$WORK_DIR/project/hardlink.bin" 2>/dev/null
+run_with_timeout $TIMEOUT_SEC env $FULL_VFS_ENV "$MY_LN" "$WORK_DIR/external/outbound.bin" "$WORK_DIR/project/hardlink.bin" 2>/dev/null
 LN_EXIT=$?
 set -e
 
