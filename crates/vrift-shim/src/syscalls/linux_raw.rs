@@ -982,6 +982,29 @@ pub unsafe fn raw_utimensat(
     }
 }
 
+/// Raw utimes syscall (for touch interception - uses utimensat internally)
+#[inline(always)]
+pub unsafe fn raw_utimes(path: *const c_char, times: *const libc::timeval) -> c_int {
+    // utimes is implemented via utimensat on modern Linux
+    // Convert timeval to timespec if times is not NULL
+    if times.is_null() {
+        raw_utimensat(libc::AT_FDCWD, path, std::ptr::null(), 0)
+    } else {
+        let times_array = std::slice::from_raw_parts(times, 2);
+        let ts = [
+            libc::timespec {
+                tv_sec: times_array[0].tv_sec,
+                tv_nsec: times_array[0].tv_usec as i64 * 1000,
+            },
+            libc::timespec {
+                tv_sec: times_array[1].tv_sec,
+                tv_nsec: times_array[1].tv_usec as i64 * 1000,
+            },
+        ];
+        raw_utimensat(libc::AT_FDCWD, path, ts.as_ptr(), 0)
+    }
+}
+
 /// Raw statx syscall
 #[inline(always)]
 pub unsafe fn raw_statx(

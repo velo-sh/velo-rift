@@ -726,3 +726,13 @@ pub unsafe extern "C" fn utimensat(
     }
     crate::syscalls::linux_raw::raw_utimensat(dirfd, path, times, flags)
 }
+
+// Linux utimes interception (for touch command)
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn utimes(path: *const c_char, times: *const libc::timeval) -> c_int {
+    if let Some(err) = crate::syscalls::misc::quick_block_vfs_mutation(path) {
+        return err;
+    }
+    crate::syscalls::linux_raw::raw_utimes(path, times)
+}
