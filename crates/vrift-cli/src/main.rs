@@ -41,8 +41,8 @@ struct Cli {
     /// TheSource™ storage root directory (global CAS)
     #[arg(
         long = "the-source-root",
-        env = "VRIFT_CAS_ROOT",
-        default_value = "~/.vrift/cas"
+        env = "VR_THE_SOURCE",
+        default_value = "~/.vrift/the_source"
     )]
     the_source_root: PathBuf,
 

@@ -386,8 +386,10 @@ async fn start_daemon() -> Result<()> {
     tracing::info!("vriftd: Listening on {}", socket_path);
 
     // Initialize shared state
-    let cas_root_str =
-        std::env::var("VRIFT_CAS_ROOT").unwrap_or_else(|_| "~/.vrift/cas".to_string());
+    // RFC-0050: VR_THE_SOURCE is canonical, VRIFT_CAS_ROOT is deprecated fallback
+    let cas_root_str = std::env::var("VR_THE_SOURCE")
+        .or_else(|_| std::env::var("VRIFT_CAS_ROOT"))
+        .unwrap_or_else(|_| "~/.vrift/the_source".to_string());
     let cas_root = vrift_manifest::normalize_path(&cas_root_str);
     let cas = vrift_cas::CasStore::new(&cas_root)?;
 

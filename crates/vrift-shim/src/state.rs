@@ -1000,7 +1000,11 @@ impl ShimState {
     pub(crate) fn init() -> Option<*mut Self> {
         let soft_limit = Self::boost_fd_limit();
         unsafe { Self::init_logger() };
-        let cas_ptr = unsafe { libc::getenv(c"VRIFT_CAS_ROOT".as_ptr()) };
+        // RFC-0050: VR_THE_SOURCE is canonical, VRIFT_CAS_ROOT is deprecated fallback
+        let mut cas_ptr = unsafe { libc::getenv(c"VR_THE_SOURCE".as_ptr()) };
+        if cas_ptr.is_null() {
+            cas_ptr = unsafe { libc::getenv(c"VRIFT_CAS_ROOT".as_ptr()) };
+        }
         let cas_root: std::borrow::Cow<'static, str> = if cas_ptr.is_null() {
             std::borrow::Cow::Borrowed("/tmp/vrift/the_source")
         } else {

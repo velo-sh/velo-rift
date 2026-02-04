@@ -125,8 +125,7 @@ enabled = false                      # Enable daemon mode
 
 | Variable | Config Override | Description |
 |----------|-----------------|-------------|
-| `VRIFT_CAS_ROOT` | `storage.the_source` | CAS root directory (primary) |
-| `VR_THE_SOURCE` | `storage.the_source` | CAS root directory (alias, planned) |
+| `VR_THE_SOURCE` | `storage.the_source` | TheSource™ CAS root directory |
 | `VRIFT_THREADS` | `ingest.threads` | Parallel thread count |
 | `VRIFT_PROJECT_ROOT` | - | Override project root discovery |
 | `VRIFT_MANIFEST` | - | Direct manifest path (shim/daemon) |
@@ -135,10 +134,14 @@ enabled = false                      # Enable daemon mode
 
 **Example**:
 ```bash
-export VRIFT_CAS_ROOT="/fast-ssd/vrift-cas"
+export VR_THE_SOURCE="/fast-ssd/vrift-cas"
 export VRIFT_THREADS=16
 ```
 
+> [!NOTE]
+> **Migration**: Legacy code may use `VRIFT_CAS_ROOT`. This is deprecated.
+> All components should read `VR_THE_SOURCE` as the canonical variable.
+> For backward compatibility, components MAY fall back to `VRIFT_CAS_ROOT` if `VR_THE_SOURCE` is unset.
 
 ---
 
