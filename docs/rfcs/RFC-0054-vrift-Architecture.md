@@ -101,12 +101,14 @@ int vrift_stat(const char *path, struct stat *buf) {
 - **Hash & Dedup**: Computes hashes and promotes data to CAS
 - **Lifecycle**: Auto-spawned by shim, auto-exit on idle
 
-### 3. libvrift (Client Shim)
+### 3. InceptionLayer (The Transparent Runtime)
+
+**Definition**: The user-space library (`libvrift`) injected into the compilation process (via `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`).
 
 **Responsibilities**:
-- Intercepts syscalls
-- Connects to local `vdir_d` for Write Path
-- Reads VDir/CAS directly via Shared Memory for Read Path
+- **Syscall Interception**: Hijacks `open`, `write`, `read` to redirect IO.
+- **Micro-Daemon Client**: Connects to the local `vdir_d` for write operations.
+- **Direct Memory Reader**: Reads VDir and CAS directly from Shared Memory (Zero-IPC).
 
 ### 3. Virtual Directory (Client-Local Mmap)
 

@@ -5,7 +5,7 @@
 **The Challenge**: How to handle hundreds of concurrent writes (e.g., `make -j 128`) entirely in memory without hitting disk IO limitations?
 
 **The Solution**: **Per-Project Micro-Daemon (`vdir_d`)**.
-Each project gets a dedicated data plane. Clients stream data to their local `vdir_d` via Shared RingBuffer for maximum throughput + isolation.
+Each project gets a dedicated data plane. **InceptionLayer** streams data to their local `vdir_d` via Shared RingBuffer for maximum throughput + isolation.
 
 **Key Metrics**:
 - **Concurrency**: Parallel streams handled by Daemon threads.

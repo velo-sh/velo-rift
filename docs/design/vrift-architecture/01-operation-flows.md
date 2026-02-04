@@ -1,10 +1,6 @@
-## 1. System Topology: The Three Layers
+# vrift: Operation Flows
 
-1.  **Central (`vriftd`)**: The "Cloud" layer. Metadata coordination.
-2.  **Project (`vdir_d`)**: The "Edge" layer. Dedicated process per project. Handles IO.
-3.  **Client (`shim`)**: The "End-User". Direct interaction with Project layer.
-
----
+This document details the step-by-step execution flow of key operations in vrift, from the perspective of the client (e.g., rustc) and the system.
 
 ---
 

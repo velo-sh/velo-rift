@@ -8,9 +8,9 @@ Our architecture uses **Per-Project Process Isolation**:
 
 1.  **Project A**: Has its own `vdir_d` process (PID 100).
 2.  **Project B**: Has its own `vdir_d` process (PID 101).
-3.  **Shim A**: Communicates ONLY with PID 100.
+3.  **InceptionLayer A**: Communicates ONLY with PID 100.
 
-**Scenario**: Protocol Error in Project A Shim forces `vdir_d` (PID 100) to panic.
+**Scenario**: Protocol Error in Project A **InceptionLayer** forces `vdir_d` (PID 100) to panic.
 *   **Result**: Project A builds stop.
 *   **Project B**: `vdir_d` (PID 101) continues running unscathed.
 *   **Central**: `vriftd` continues running.
