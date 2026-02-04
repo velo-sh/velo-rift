@@ -79,6 +79,7 @@ pub fn try_reflink(src: &Path, dst: &Path) -> Result<(), ReflinkError> {
 
 #[cfg(target_os = "linux")]
 fn try_reflink_linux(src: &Path, dst: &Path) -> Result<(), ReflinkError> {
+    use std::fs::File;
     use std::os::unix::io::AsRawFd;
 
     // FICLONE ioctl number
