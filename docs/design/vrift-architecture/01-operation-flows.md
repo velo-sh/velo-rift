@@ -8,8 +8,18 @@ This document details the step-by-step execution flow of key operations in vrift
 
 **Goal**: Sub-100ns latency.
 
-### Flow
+### 1. Operation Classification (The Fast/Slow Split)
 
+*   **Data Plane (Fast Path)**: `stat`, `read`, `write`. 
+    *   **Mechanism**: Shared Memory / RingBuffer.
+    *   **Cost**: **Zero IPC**. Nanosecond scale.
+*   **Control Plane (Slow Path)**: `open(O_CREAT)`, `mkdir`.
+    *   **Mechanism**: Unix Domain Socket (UDS).
+    *   **Cost**: Syscall + Context Switch (~15µs). Affordable because frequency is low.
+
+### 2. Detailed Flows
+
+#### 2.1 Metadata Lookup (`stat`) - **FAST**
 1.  **Client**: `stat("src/main.rs")`
 2.  **InceptionLayer**: Intercepts syscall.
 3.  **InceptionLayer**: Queries VDir (Shared Memory Index).
