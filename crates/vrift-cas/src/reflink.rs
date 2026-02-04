@@ -309,4 +309,113 @@ mod tests {
             Err(e) => panic!("Unexpected error: {}", e),
         }
     }
+
+    #[test]
+    fn test_ingest_nonexistent_source() {
+        let temp = tempdir().unwrap();
+        let src = temp.path().join("nonexistent.txt");
+        let dst = temp.path().join("dst.txt");
+
+        let result = ingest_with_fallback(&src, &dst);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ingest_empty_file() {
+        let temp = tempdir().unwrap();
+        let src = temp.path().join("empty.txt");
+        let dst = temp.path().join("dst.txt");
+
+        // Create empty file
+        fs::write(&src, b"").unwrap();
+
+        let method = ingest_with_fallback(&src, &dst).unwrap();
+        assert!(dst.exists());
+        assert_eq!(fs::read(&dst).unwrap().len(), 0);
+        assert!(matches!(
+            method,
+            IngestMethod::Reflink | IngestMethod::Hardlink | IngestMethod::Copy
+        ));
+    }
+
+    #[test]
+    fn test_ingest_binary_file() {
+        let temp = tempdir().unwrap();
+        let src = temp.path().join("binary.bin");
+        let dst = temp.path().join("out.bin");
+
+        // Create binary content with all byte values
+        let binary_data: Vec<u8> = (0..=255).collect();
+        fs::write(&src, &binary_data).unwrap();
+
+        let method = ingest_with_fallback(&src, &dst).unwrap();
+        assert!(dst.exists());
+        assert_eq!(fs::read(&dst).unwrap(), binary_data);
+        assert!(matches!(
+            method,
+            IngestMethod::Reflink | IngestMethod::Hardlink | IngestMethod::Copy
+        ));
+    }
+
+    #[test]
+    fn test_ingest_large_file() {
+        let temp = tempdir().unwrap();
+        let src = temp.path().join("large.bin");
+        let dst = temp.path().join("large_out.bin");
+
+        // Create 1MB file
+        let data = vec![0x42u8; 1024 * 1024];
+        fs::write(&src, &data).unwrap();
+
+        let method = ingest_with_fallback(&src, &dst).unwrap();
+        assert!(dst.exists());
+        let dst_size = fs::metadata(&dst).unwrap().len();
+        assert_eq!(dst_size, 1024 * 1024);
+        assert!(matches!(
+            method,
+            IngestMethod::Reflink | IngestMethod::Hardlink | IngestMethod::Copy
+        ));
+    }
+
+    #[test]
+    fn test_try_hardlink_same_filesystem() {
+        let temp = tempdir().unwrap();
+        let src = temp.path().join("src.txt");
+        let dst = temp.path().join("link.txt");
+
+        fs::write(&src, b"hardlink test").unwrap();
+
+        // Should succeed on same filesystem
+        let result = try_hardlink(&src, &dst);
+        assert!(result.is_ok());
+        assert!(dst.exists());
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "hardlink test");
+    }
+
+    #[test]
+    fn test_try_hardlink_creates_parent_dirs() {
+        let temp = tempdir().unwrap();
+        let src = temp.path().join("src.txt");
+        let dst = temp.path().join("nested/dir/link.txt");
+
+        fs::write(&src, b"nested hardlink").unwrap();
+
+        let result = try_hardlink(&src, &dst);
+        assert!(result.is_ok());
+        assert!(dst.exists());
+    }
+
+    #[test]
+    fn test_reflink_error_display() {
+        let e1 = ReflinkError::NotSupported;
+        let e2 = ReflinkError::CrossDevice;
+        let e3 = ReflinkError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "test error",
+        ));
+
+        assert!(!format!("{}", e1).is_empty());
+        assert!(!format!("{}", e2).is_empty());
+        assert!(!format!("{}", e3).is_empty());
+    }
 }

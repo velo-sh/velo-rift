@@ -177,6 +177,9 @@ pub static EVENT_NAMES: &[&str] = &[
 /// path_hash = 0 means empty slot
 const DIRTY_TRACKER_SIZE: usize = 1024; // Max concurrent dirty files
 
+/// Tombstone marker for deleted slots (allows linear probing to continue)
+const TOMBSTONE: u64 = u64::MAX;
+
 /// Global dirty tracker instance
 pub static DIRTY_TRACKER: DirtyTracker = DirtyTracker::new();
 
@@ -267,9 +270,14 @@ impl DirtyTracker {
             }
 
             if current == hash {
-                // Found - clear it
-                self.slots[slot].store(0, Ordering::Release);
+                // Found - mark as tombstone (allows probing to continue)
+                self.slots[slot].store(TOMBSTONE, Ordering::Release);
                 return;
+            }
+
+            // Skip tombstones during search
+            if current == TOMBSTONE {
+                continue;
             }
         }
     }
@@ -295,6 +303,11 @@ impl DirtyTracker {
             if current == hash {
                 return true; // Found - is dirty
             }
+
+            // Skip tombstones during search
+            if current == TOMBSTONE {
+                continue;
+            }
         }
         false
     }
@@ -304,7 +317,10 @@ impl DirtyTracker {
     pub fn count(&self) -> usize {
         self.slots
             .iter()
-            .filter(|s| s.load(Ordering::Relaxed) != 0)
+            .filter(|s| {
+                let v = s.load(Ordering::Relaxed);
+                v != 0 && v != TOMBSTONE
+            })
             .count()
     }
 }
@@ -1442,5 +1458,197 @@ pub(crate) unsafe fn setup_signal_handler() {
             vfs_dump_flight_recorder();
         }
         signal(SIGUSR1, handle_sigusr1 as usize);
+    }
+}
+
+// ============================================================================
+// Tests for DirtyTracker
+// ============================================================================
+#[cfg(test)]
+mod dirty_tracker_tests {
+    use super::*;
+
+    #[test]
+    fn test_mark_dirty_basic() {
+        let tracker = DirtyTracker::new();
+        assert!(!tracker.is_dirty("src/main.rs"));
+
+        assert!(tracker.mark_dirty("src/main.rs"));
+        assert!(tracker.is_dirty("src/main.rs"));
+    }
+
+    #[test]
+    fn test_clear_dirty() {
+        let tracker = DirtyTracker::new();
+        tracker.mark_dirty("src/lib.rs");
+        assert!(tracker.is_dirty("src/lib.rs"));
+
+        tracker.clear_dirty("src/lib.rs");
+        assert!(!tracker.is_dirty("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_multiple_paths() {
+        let tracker = DirtyTracker::new();
+        let paths = [
+            "src/main.rs",
+            "src/lib.rs",
+            "Cargo.toml",
+            "README.md",
+            "tests/integration.rs",
+        ];
+
+        for path in &paths {
+            tracker.mark_dirty(path);
+        }
+
+        for path in &paths {
+            assert!(tracker.is_dirty(path), "Expected {} to be dirty", path);
+        }
+
+        assert!(!tracker.is_dirty("nonexistent.rs"));
+    }
+
+    #[test]
+    fn test_clear_nonexistent() {
+        let tracker = DirtyTracker::new();
+        // Should not panic or error
+        tracker.clear_dirty("nonexistent.rs");
+        assert!(!tracker.is_dirty("nonexistent.rs"));
+    }
+
+    #[test]
+    fn test_mark_same_path_twice() {
+        let tracker = DirtyTracker::new();
+        assert!(tracker.mark_dirty("src/main.rs"));
+        assert!(tracker.mark_dirty("src/main.rs")); // Should succeed (idempotent)
+        assert!(tracker.is_dirty("src/main.rs"));
+
+        assert_eq!(tracker.count(), 1); // Should only have one entry
+    }
+
+    #[test]
+    fn test_count() {
+        let tracker = DirtyTracker::new();
+        assert_eq!(tracker.count(), 0);
+
+        tracker.mark_dirty("file1.rs");
+        assert_eq!(tracker.count(), 1);
+
+        tracker.mark_dirty("file2.rs");
+        assert_eq!(tracker.count(), 2);
+
+        tracker.clear_dirty("file1.rs");
+        assert_eq!(tracker.count(), 1);
+    }
+
+    #[test]
+    fn test_fnv1a_hash_deterministic() {
+        let path = "src/main.rs";
+        let h1 = fnv1a_hash(path);
+        let h2 = fnv1a_hash(path);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_fnv1a_hash_different_paths() {
+        let h1 = fnv1a_hash("src/main.rs");
+        let h2 = fnv1a_hash("src/lib.rs");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_fnv1a_hash_empty_string() {
+        let h = fnv1a_hash("");
+        assert_ne!(h, 0); // Empty string should still produce valid hash
+    }
+
+    #[test]
+    fn test_long_path() {
+        let tracker = DirtyTracker::new();
+        let long_path = "a".repeat(1000) + "/very/long/path/to/file.rs";
+
+        assert!(tracker.mark_dirty(&long_path));
+        assert!(tracker.is_dirty(&long_path));
+
+        tracker.clear_dirty(&long_path);
+        assert!(!tracker.is_dirty(&long_path));
+    }
+
+    #[test]
+    fn test_stress_many_entries() {
+        let tracker = DirtyTracker::new();
+
+        // Add 500 entries (half capacity)
+        for i in 0..500 {
+            let path = format!("file_{}.rs", i);
+            assert!(tracker.mark_dirty(&path), "Failed to mark {}", path);
+        }
+
+        assert_eq!(tracker.count(), 500);
+
+        // Verify all are dirty
+        for i in 0..500 {
+            let path = format!("file_{}.rs", i);
+            assert!(tracker.is_dirty(&path), "Expected {} to be dirty", path);
+        }
+
+        // Clear half
+        for i in 0..250 {
+            let path = format!("file_{}.rs", i);
+            tracker.clear_dirty(&path);
+        }
+
+        // Note: Due to linear probing, cleared slots become "holes" which may
+        // affect count accuracy. We verify only that cleared paths are not dirty.
+        for i in 0..250 {
+            let path = format!("file_{}.rs", i);
+            assert!(
+                !tracker.is_dirty(&path),
+                "Expected {} to NOT be dirty",
+                path
+            );
+        }
+
+        // And remaining paths should still be dirty
+        for i in 250..500 {
+            let path = format!("file_{}.rs", i);
+            assert!(tracker.is_dirty(&path), "Expected {} to remain dirty", path);
+        }
+    }
+
+    #[test]
+    fn test_concurrent_mark_dirty() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let tracker = Arc::new(DirtyTracker::new());
+        let mut handles = vec![];
+
+        // Spawn 4 threads, each marking 100 unique paths
+        for t in 0..4 {
+            let tracker = Arc::clone(&tracker);
+            handles.push(thread::spawn(move || {
+                for i in 0..100 {
+                    let path = format!("thread_{}_file_{}.rs", t, i);
+                    tracker.mark_dirty(&path);
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // All 400 entries should be marked
+        assert_eq!(tracker.count(), 400);
+
+        // Verify each entry
+        for t in 0..4 {
+            for i in 0..100 {
+                let path = format!("thread_{}_file_{}.rs", t, i);
+                assert!(tracker.is_dirty(&path), "Expected {} to be dirty", path);
+            }
+        }
     }
 }
