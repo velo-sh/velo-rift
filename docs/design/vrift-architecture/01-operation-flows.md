@@ -48,9 +48,11 @@ This document details the step-by-step execution flow of key operations in vrift
     *   InceptionLayer buffers metadata.
 2.  **Client**: `write(fd, buf)`
     *   InceptionLayer buffers data in process memory.
-3.  **Client**: `close(fd)`
-    *   InceptionLayer sends IPC `COMMIT` to Server.
-    *   InceptionLayer returns immediately (Optimistic).
+### 2.3 `close(fd)`
+1.  **InceptionLayer**: Atomic Store `ring.flags = EOF` (Release).
+2.  **InceptionLayer**: `futex_wake` (Conditional).
+3.  **Return**: Returns `0` instantly. **Zero Syscall**.
+    (Optimistic).
 
 ### Server Background Flow
 
