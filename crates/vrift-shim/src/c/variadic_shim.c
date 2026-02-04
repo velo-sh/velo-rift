@@ -107,7 +107,7 @@ static inline long raw_syscall(long number, long arg1, long arg2, long arg3,
 // reliable symbol export. macOS shimming uses this C bridge to handle variadic
 // ABI.
 #if defined(__APPLE__)
-int open_shim_c_impl(const char *path, int flags, mode_t mode) {
+int c_open_bridge(const char *path, int flags, mode_t mode) {
   // RFC-0050: State 2 (Early-Init) or 3 (Inside-Init) must use raw syscalls.
   // State 1 (Ready) transitions to Rust. State 0 (Done) is normal operation.
   if (INITIALIZING == 2 || INITIALIZING == 3) {
@@ -116,7 +116,7 @@ int open_shim_c_impl(const char *path, int flags, mode_t mode) {
   return velo_open_impl(path, flags, mode);
 }
 
-int openat_shim_c_impl(int dirfd, const char *path, int flags, mode_t mode) {
+int c_openat_bridge(int dirfd, const char *path, int flags, mode_t mode) {
   if (INITIALIZING == 2 || INITIALIZING == 3) {
     return (int)raw_syscall(SYS_OPENAT, (long)dirfd, (long)path, (long)flags,
                             (long)mode);

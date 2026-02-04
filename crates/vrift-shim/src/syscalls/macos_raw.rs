@@ -143,6 +143,14 @@ const SYS_FCHMODAT: i64 = 468;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_FSTATAT64: i64 = 466;
 
+/// SYS_rename = 128 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_RENAME: i64 = 128;
+
+/// SYS_renameat = 465 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_RENAMEAT: i64 = 465;
+
 /// Raw stat64 syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
@@ -558,6 +566,55 @@ pub unsafe fn raw_rmdir(path: *const libc::c_char) -> libc::c_int {
         "svc #0x80",
         syscall = in(reg) SYS_RMDIR,
         in("x0") path as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw rename syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_rename(old: *const libc::c_char, new: *const libc::c_char) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_RENAME,
+        in("x0") old as i64,
+        in("x1") new as i64,
+        lateout("x0") ret,
+        options(nostack)
+    );
+    if ret < 0 {
+        -1
+    } else {
+        ret as libc::c_int
+    }
+}
+
+/// Raw renameat syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_renameat(
+    olddirfd: libc::c_int,
+    old: *const libc::c_char,
+    newdirfd: libc::c_int,
+    new: *const libc::c_char,
+) -> libc::c_int {
+    let ret: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        syscall = in(reg) SYS_RENAMEAT,
+        in("x0") olddirfd as i64,
+        in("x1") old as i64,
+        in("x2") newdirfd as i64,
+        in("x3") new as i64,
         lateout("x0") ret,
         options(nostack)
     );

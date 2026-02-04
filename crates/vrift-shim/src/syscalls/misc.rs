@@ -33,11 +33,25 @@ unsafe fn rename_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn rename_shim(old: *const c_char, new: *const c_char) -> c_int {
+    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+    // to avoid dlsym recursion and TLS pthread deadlock
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state >= 2
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
+        // Check VFS mutation perimeter even in raw syscall path
+        if let Some(err) = quick_block_vfs_mutation(old).or_else(|| quick_block_vfs_mutation(new)) {
+            return err;
+        }
+        return crate::syscalls::macos_raw::raw_rename(old, new);
+    }
+
     let real = std::mem::transmute::<
         *mut libc::c_void,
         unsafe extern "C" fn(*const c_char, *const c_char) -> c_int,
     >(crate::reals::REAL_RENAME.get());
-    passthrough_if_init!(real, old, new);
     rename_impl(old, new).unwrap_or_else(|| real(old, new))
 }
 
@@ -58,11 +72,27 @@ pub unsafe extern "C" fn renameat_shim(
 ) -> c_int {
     #[cfg(target_os = "macos")]
     {
+        // BUG-007: Use raw syscall during early init OR when shim not fully ready
+        // to avoid dlsym recursion and TLS pthread deadlock
+        let init_state = INITIALIZING.load(Ordering::Relaxed);
+        if init_state >= 2
+            || crate::state::SHIM_STATE
+                .load(std::sync::atomic::Ordering::Acquire)
+                .is_null()
+        {
+            // Check VFS mutation perimeter even in raw syscall path
+            if let Some(err) =
+                quick_block_vfs_mutation(old).or_else(|| quick_block_vfs_mutation(new))
+            {
+                return err;
+            }
+            return crate::syscalls::macos_raw::raw_renameat(oldfd, old, newfd, new);
+        }
+
         let real = std::mem::transmute::<
             *mut libc::c_void,
             unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char) -> c_int,
         >(crate::reals::REAL_RENAMEAT.get());
-        passthrough_if_init!(real, oldfd, old, newfd, new);
 
         // Resolve relative paths using getcwd for AT_FDCWD case
         if oldfd == libc::AT_FDCWD && newfd == libc::AT_FDCWD {

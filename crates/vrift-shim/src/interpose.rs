@@ -17,9 +17,8 @@ use crate::syscalls::misc::{
 };
 #[cfg(target_os = "macos")]
 use crate::syscalls::mmap::{mmap_shim, munmap_shim};
-// C variadic wrappers call velo_*_impl which is defined in syscalls/open.rs
-#[cfg(target_os = "macos")]
-use crate::syscalls::open::{open_shim, openat_shim};
+// C variadic wrappers (c_open_bridge, c_openat_bridge) are used directly in interpose table
+// They check INITIALIZING before calling velo_*_impl in syscalls/open.rs
 #[cfg(target_os = "macos")]
 use crate::syscalls::path::{readlink_shim, realpath_shim};
 #[cfg(target_os = "macos")]
@@ -122,9 +121,10 @@ extern "C" {
 }
 
 extern "C" {
-    // Unified bridge implementations
-    fn open_shim_c_impl(path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
-    fn openat_shim_c_impl(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
+    // C bridge implementations that check INITIALIZING before calling Rust
+    // These are defined in variadic_shim.c and are safe to call during dyld init
+    fn c_open_bridge(path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
+    fn c_openat_bridge(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn fcntl_shim_c_impl(fd: c_int, cmd: c_int, arg: c_long) -> c_int;
 }
 
@@ -1118,7 +1118,8 @@ pub unsafe extern "C" fn posix_spawnp_shim(
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_OPEN: Interpose = Interpose {
-    new_func: open_shim as *const (),
+    // Use C bridge directly to avoid Rust TLS init during dyld bootstrap
+    new_func: c_open_bridge as *const (),
     old_func: open as *const (),
 };
 #[cfg(target_os = "macos")]
@@ -1356,7 +1357,8 @@ pub static IT_FCNTL: Interpose = Interpose {
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_OPENAT: Interpose = Interpose {
-    new_func: openat_shim as *const (),
+    // Use C bridge directly to avoid Rust TLS init during dyld bootstrap
+    new_func: c_openat_bridge as *const (),
     old_func: openat as *const (),
 };
 #[cfg(target_os = "macos")]

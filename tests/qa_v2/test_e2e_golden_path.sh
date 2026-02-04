@@ -59,16 +59,22 @@ if ! $VRIFT_BIN --the-source-root "$CAS_ROOT" service install 2>/dev/null; then
     sleep 2
 fi
 
-# Behavior-based daemon verification: use 'vrift daemon status' instead of pgrep
-if ! $VRIFT_BIN --the-source-root "$CAS_ROOT" daemon status 2>/dev/null | grep -q "running\|Operational"; then 
-    # Fallback: check socket exists (behavior indicator)
-    if [ ! -S "/tmp/vrift.sock" ]; then
-        echo "❌ Service failed to start (daemon status check failed)"
-        [ -f /tmp/vriftd.log ] && cat /tmp/vriftd.log
-        exit 1
+# Wait for socket to be created (launchd takes a moment to start the daemon)
+echo "   Waiting for service socket..."
+for i in {1..10}; do
+    if [ -S "/tmp/vrift.sock" ]; then
+        break
     fi
+    sleep 0.5
+done
+
+# Verify service is running
+if ! pgrep vriftd >/dev/null && [ ! -S "/tmp/vrift.sock" ]; then 
+    echo "❌ Service failed to start"
+    [ -f /tmp/vriftd.log ] && cat /tmp/vriftd.log
+    exit 1
 fi
-echo "✅ Service running (verified via behavior check)."
+echo "✅ Service running."
 
 # 3. Project Onboarding (Phase B)
 echo "📂 [Phase B] Project Initialization & Ingestion..."

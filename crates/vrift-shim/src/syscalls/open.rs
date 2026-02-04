@@ -199,7 +199,9 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
     }
 }
 
-pub(crate) unsafe fn velo_open_impl(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
+// Called by C bridge (c_open_bridge) after INITIALIZING check passes
+#[no_mangle]
+pub unsafe extern "C" fn velo_open_impl(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
     open_impl(path, flags, mode).unwrap_or_else(|| raw_open(path, flags, mode))
 }
 
@@ -216,13 +218,22 @@ fn hex_encode(hash: &[u8; 32]) -> String {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_int {
-    open_shim_c_impl(p, f, m)
+    // Route through C bridge for early-init safety (avoids Rust TLS during dyld bootstrap)
+    // C's c_open_bridge checks INITIALIZING state before calling any Rust code
+    extern "C" {
+        fn c_open_bridge(path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
+    }
+    c_open_bridge(p, f, m)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn openat_shim(dfd: c_int, p: *const c_char, f: c_int, m: mode_t) -> c_int {
-    velo_openat_impl(dfd, p, f, m)
+    // Route through C bridge for early-init safety
+    extern "C" {
+        fn c_openat_bridge(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
+    }
+    c_openat_bridge(dfd, p, f, m)
 }
 
 #[no_mangle]
