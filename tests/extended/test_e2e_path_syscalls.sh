@@ -43,22 +43,22 @@ echo "[4] Ingesting files..."
 MANIFEST_PATH="$TEST_WORKSPACE/.vrift/manifest.lmdb"
 echo "    Manifest: $MANIFEST_PATH"
 
-# Check if daemon is already running
+# Behavior-based daemon check instead of pgrep
 DAEMON_RUNNING=false
-if pgrep -x vriftd >/dev/null 2>&1; then
-    echo "[5] Daemon already running"
+if "$CLI_PATH" daemon status 2>/dev/null | grep -q "running\|Operational"; then
+    echo "[5] Daemon already running (verified via 'vrift daemon status')"
     DAEMON_RUNNING=true
-    DAEMON_PID=$(pgrep -x vriftd)
 else
     echo "[5] Starting daemon..."
     "$DAEMON_PATH" start &
     DAEMON_PID=$!
     sleep 2
     
-    if ! kill -0 $DAEMON_PID 2>/dev/null; then
-        echo "    ⚠️ Daemon may have failed, trying to continue..."
+    # Behavior-based verification after start
+    if "$CLI_PATH" daemon status 2>/dev/null | grep -q "running\|Operational"; then
+        echo "    ✅ Daemon started (verified via behavior check)"
     else
-        echo "    ✅ Daemon started (PID: $DAEMON_PID)"
+        echo "    ⚠️ Daemon may have failed, trying to continue..."
     fi
 fi
 

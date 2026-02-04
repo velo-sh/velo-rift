@@ -30,10 +30,11 @@ else
     exit 1
 fi
 
-if pgrep vriftd > /dev/null; then
-    echo "✅ vriftd process is running (PID: $(pgrep vriftd))."
+# Behavior-based verification: use daemon status command instead of pgrep
+if ./target/release/vrift daemon status 2>/dev/null | grep -q "running\|Operational"; then
+    echo "✅ vriftd is running (verified via 'vrift daemon status')."
 else
-    echo "❌ vriftd process NOT found."
+    echo "❌ vriftd NOT running (daemon status check failed)."
     exit 1
 fi
 

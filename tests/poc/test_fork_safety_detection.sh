@@ -19,9 +19,9 @@ WORK_DIR="/tmp/vrift_fork_test"
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-# Start daemon if not running
-if ! pgrep -f vriftd >/dev/null; then
-    echo "⚠️  vriftd not running, attempting to start..."
+# Behavior-based daemon check instead of pgrep
+if [ ! -S "/tmp/vrift.sock" ]; then
+    echo "⚠️  vriftd not running (socket not found), attempting to start..."
     # Note: You may need to start vriftd manually with a manifest
 fi
 

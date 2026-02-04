@@ -93,13 +93,13 @@ cd "$TEST_DIR/project"
 "$CLI_PATH" ingest . 2>&1 | grep -E "Complete|files|Manifest" | head -3 || true
 MANIFEST_PATH="$TEST_DIR/project/.vrift/manifest.lmdb"
 
-# Start daemon if needed
-if ! pgrep -x vriftd >/dev/null 2>&1; then
+# Behavior-based daemon check instead of pgrep
+if ! "$CLI_PATH" daemon status 2>/dev/null | grep -q "running\|Operational"; then
     echo "[4] Starting daemon..."
     "$DAEMON_PATH" start &
     sleep 2
 else
-    echo "[4] Daemon already running"
+    echo "[4] Daemon already running (verified via behavior check)"
 fi
 
 # Test 1: Direct compile without shim (baseline)

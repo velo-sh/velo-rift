@@ -193,8 +193,8 @@ echo ""
 echo "[5] Running test with shim injection..."
 echo ""
 
-# Check if daemon is running
-if ! pgrep -x vriftd >/dev/null 2>&1; then
+# Behavior-based daemon check instead of pgrep
+if ! "$CLI_PATH" daemon status 2>/dev/null | grep -q "running\|Operational"; then
     echo "    Starting daemon..."
     "$DAEMON_PATH" start &
     sleep 2

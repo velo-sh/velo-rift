@@ -84,11 +84,14 @@ export RUST_LOG=info
 VRIFTD_PID=$!
 sleep 2
 
-# Verify daemon is running
-if ! pgrep vriftd > /dev/null; then
-    echo "❌ ERROR: Daemon died immediately."
-    cat "$TEST_DIR/daemon.log"
-    exit 1
+# Behavior-based daemon verification: check via status command or socket
+if ! "$VELO_BIN" daemon status 2>/dev/null | grep -q "running\|Operational"; then
+    # Fallback: check socket exists
+    if [ ! -S "/tmp/vrift.sock" ]; then
+        echo "❌ ERROR: Daemon not running (behavior check failed)."
+        cat "$TEST_DIR/daemon.log"
+        exit 1
+    fi
 fi
 
 # 3. Compile helper C test

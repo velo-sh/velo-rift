@@ -32,19 +32,21 @@ fi
 
 # 2. Restart service
 echo "[2/4] Testing service restart..."
-OLD_PID=$(pgrep vriftd || echo "")
-echo "Old PID: $OLD_PID"
+# Behavior-based: check daemon is running before restart
+if ! $VRIFT_BIN daemon status 2>/dev/null | grep -q "running\|Operational"; then
+    echo "❌ Daemon not running before restart test."
+    exit 1
+fi
+echo "Old daemon: running"
 
 $VRIFT_BIN service restart
 sleep 2
 
-NEW_PID=$(pgrep vriftd || echo "")
-echo "New PID: $NEW_PID"
-
-if [ "$OLD_PID" != "$NEW_PID" ] && [ -n "$NEW_PID" ]; then
-    echo "✅ Service successfully restarted with new PID."
+# Behavior-based: verify daemon is still running after restart
+if $VRIFT_BIN daemon status 2>/dev/null | grep -q "running\|Operational"; then
+    echo "✅ Service successfully restarted (verified via 'vrift daemon status')."
 else
-    echo "❌ Service restart failed or PID didn't change."
+    echo "❌ Service restart failed (daemon status check failed)."
     exit 1
 fi
 

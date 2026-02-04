@@ -59,13 +59,16 @@ if ! $VRIFT_BIN --the-source-root "$CAS_ROOT" service install 2>/dev/null; then
     sleep 2
 fi
 
-# Handle different pgrep behaviors or just check the socket
-if ! pgrep vriftd >/dev/null && [ ! -S "/tmp/vrift.sock" ]; then 
-    echo "❌ Service failed to start"
-    [ -f /tmp/vriftd.log ] && cat /tmp/vriftd.log
-    exit 1
+# Behavior-based daemon verification: use 'vrift daemon status' instead of pgrep
+if ! $VRIFT_BIN --the-source-root "$CAS_ROOT" daemon status 2>/dev/null | grep -q "running\|Operational"; then 
+    # Fallback: check socket exists (behavior indicator)
+    if [ ! -S "/tmp/vrift.sock" ]; then
+        echo "❌ Service failed to start (daemon status check failed)"
+        [ -f /tmp/vriftd.log ] && cat /tmp/vriftd.log
+        exit 1
+    fi
 fi
-echo "✅ Service running."
+echo "✅ Service running (verified via behavior check)."
 
 # 3. Project Onboarding (Phase B)
 echo "📂 [Phase B] Project Initialization & Ingestion..."
