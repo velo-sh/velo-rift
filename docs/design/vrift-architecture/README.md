@@ -54,6 +54,38 @@ Covers:
 - Concurrency control and resource limits
 - Monitoring and health checks
 
+### 06. Write Path Ingestion
+**File**: `06-write-path-ingestion.md`  
+**Focus**: Staging Area model and zero-copy ingestion
+
+Covers:
+- Native staging to OS Page Cache
+- ReFLINK/Hardlink/Rename fallback priority
+- Dirty Bit consistency guarantee
+- Performance characteristics
+
+### 07. IPC Protocol
+**File**: `07-ipc-protocol.md`  
+**Focus**: UDS message formats between InceptionLayer and vdir_d
+
+Covers:
+- Message frame format (length-prefixed binary)
+- Message types (CONNECT, COMMIT, ABORT, PING)
+- Payload structures for each message
+- Protocol flow examples
+- Timeout and retry policies
+
+### 08. Configuration
+**File**: `08-configuration.md`  
+**Focus**: All configurable parameters and directory structure
+
+Covers:
+- Environment variables (client and server)
+- Config file format (~/.vrift/config.toml)
+- Directory structure and file locations
+- Precedence rules
+- Feature flags
+
 ## Recommended Reading Order
 
 1. **Start here**: RFC-0054 (main architecture overview)
@@ -62,6 +94,8 @@ Covers:
 4. **Multi-project** (understand isolation model)
 5. **LMDB persistence** (understand durability)
 6. **Fault tolerance** (understand production stability)
+7. **IPC protocol** (understand client-server communication)
+8. **Configuration** (understand tuning options)
 
 ## Related Documents
 
