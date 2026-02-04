@@ -5,6 +5,7 @@ Expected: FAIL (Protect handler accepts paths outside CAS without validation)
 Fixed: SUCCESS (Protect handler rejects paths not under CAS/VFS prefix)
 """
 
+import os
 import sys
 
 
@@ -13,7 +14,9 @@ def main():
     print("Issue: handle_protect accepts any path, enabling attacks on /etc/passwd etc.")
     print("")
 
-    daemon_src = "/Users/antigravity/rust_source/vrift_qa/crates/vrift-daemon/src/main.rs"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    daemon_src = os.path.join(project_root, "crates/vrift-daemon/src/main.rs")
 
     with open(daemon_src) as f:
         content = f.read()
