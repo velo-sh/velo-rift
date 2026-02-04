@@ -411,7 +411,7 @@ pub static IT_RMDIR: Interpose = Interpose {
     old_func: real_rmdir as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_UTIMENSAT: Interpose = Interpose {
     new_func: utimensat_shim as _,
@@ -446,7 +446,7 @@ pub static IT_LINK: Interpose = Interpose {
     old_func: real_link as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_LINKAT: Interpose = Interpose {
     new_func: linkat_shim as _,
@@ -572,7 +572,7 @@ pub static IT_LSEEK: Interpose = Interpose {
     old_func: real_lseek as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FTRUNCATE: Interpose = Interpose {
     new_func: ftruncate_shim as _,
