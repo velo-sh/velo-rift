@@ -118,32 +118,68 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 | **`sendfile`** | I/O | ⏳ | ⏳ | ⏳ | `test_gap_sendfile_bypass` | **GAP: Copy data between FDs** |
 | **`copy_file_range`** | I/O | ⏳ | N/A | ⏳ | `test_gap_copy_file_range` | **GAP: Copy data between FDs (Linux)** |
 
-### 🚨 Critical Gaps (15+ syscalls pending)
 
-> **WARNING: These syscalls can bypass VFS mutation protection.** Reproduction scripts in `tests/poc/` have PROVEN bypasses for `unlinkat`, `mkdirat`, `symlinkat`, `fchmod`, `futimens`, and `sendfile`.
+---
 
-| Syscall | Risk | Priority | Category | POC Test |
-|---------|------|----------|----------|----------|
-| `exchangedata` | Atomic swap of virtual files with real files | **P0** | Mutation (macOS) | ⏳ TBD |
-| `fchown`, `fchownat` | Change ownership via FD | **P1** | Permission | ⏳ TBD |
-| `readlinkat` | Read virtual symlinks via dirfd | **P1** | Path | ⏳ TBD |
-| `creat` | Create files bypassing open_shim logic | **P2** | Mutation | ⏳ TBD |
-| `futimens`, `futimes` | PROVEN BYPASS: Modify times via FD | **P2** | Time | [C](file:///Users/antigravity/rust_source/vrift_qa/tests/poc/test_futimens_gap.c) |
-| `sendfile` | PROVEN BYPASS: Copy data bypass VFS | **P2** | I/O | [C](file:///Users/antigravity/rust_source/vrift_qa/tests/poc/test_sendfile_gap.c) |
-| `copy_file_range` | Copy data between FDs bypassing VFS | **P2** | I/O | [C](file:///Users/antigravity/rust_source/vrift_qa/tests/poc/test_copy_file_range_gap.c) |
-| `getattrlist`, `setattrlist` | macOS advanced metadata bypass | **P2** | Metadata | ⏳ TBD |
-| `fstatvfs` | File system stats bypass | **P3** | Metadata | ⏳ TBD |
+## 🎯 Unified Gap Status (Feb 5, 2026)
 
-### Passthrough by Design (No VFS Risk)
+All syscall gaps are categorized below. Each **Must Fix** item has or requires a test case.
+
+### ✅ Resolved (Implemented & Tested)
+
+| Syscall | Status | Test | Notes |
+|:--------|:------:|:-----|:------|
+| `unlinkat` | ✅ | `test_gap_unlinkat_bypass.sh` | VFS EROFS guard |
+| `mkdirat` | ✅ | `test_gap_mkdirat_bypass.sh` | VFS EROFS guard |
+| `symlinkat` | ✅ | `test_gap_symlinkat_bypass.sh` | VFS EROFS guard |
+| `fchmod` | ✅ | `test_gap_fchmod_bypass.sh` | VFS EROFS guard via F_GETPATH |
+| `renameat` | ✅ | `test_gap_renameat_bypass.sh` | VFS EROFS guard |
+| `mmap` (CoW) | ✅ | `test_gap_mmap_shared.sh` | CoW-aware tracking |
+| `flock` | ✅ | `test_gap_flock_semantic.sh` | Daemon lock manager |
+| `dup/dup2` | ✅ | `test_gap_dup_tracking.sh` | FD tracking |
+
+### 🔴 Must Fix (P0-P1) — Blocking for GA
+
+| Syscall | Risk | Test | Status | Sprint |
+|:--------|:-----|:-----|:------:|:------:|
+| `exchangedata` | Atomic swap bypasses VFS | TBD | ⏳ Pending | S2 |
+| `fchown/fchownat` | Ownership bypass via FD | TBD | ⏳ Pending | S2 |
+| `readlinkat` | Symlink read via dirfd | TBD | ⏳ Pending | S2 |
+| `hardlink boundary` | Cross-VFS hardlink | `test_value_2_rename.sh` (4/4) | ❌ Failing | S1 |
+
+### 🟡 Can Defer (P2-P3) — Non-blocking, Low Risk
+
+| Syscall | Risk | Test (POC) | Status | Notes |
+|:--------|:-----|:-----------|:------:|:------|
+| `futimens/futimes` | Modify times via FD | `test_futimens_gap.c` ✅ | ⏳ | Proven bypass, low impact |
+| `sendfile` | Copy data bypass | `test_sendfile_gap.c` ✅ | ⏳ | Proven bypass, rare use |
+| `copy_file_range` | Copy data bypass (Linux) | `test_copy_file_range_gap.c` ✅ | ⏳ | Linux only |
+| `creat` | Legacy file creation | TBD | ⏳ | Rare, can use open |
+| `getattrlist/setattrlist` | macOS metadata | TBD | ⏳ | Advanced, rare |
+| `fstatvfs` | FS stats bypass | TBD | ⏳ | Read-only, no mutation |
+
+### ⚪ Passthrough by Design (No VFS Risk)
 
 | Syscall | Reason |
-|---------|--------|
+|:--------|:-------|
 | `pread`, `pwrite` | Uses already-intercepted FDs |
 | `readv`, `writev` | Uses already-intercepted FDs |
-| `lchown` | Output files, not VFS |
-| `openat2` | Linux 5.6+, rare, can use openat fallback |
+| `lchown` | Output files only, not VFS |
+| `openat2` | Linux 5.6+, rare, openat fallback |
 | `execveat` | Linux-only, rare |
 | `splice`, `tee`, `vmsplice` | Kernel pipe operations |
+
+### 📋 Test Coverage Summary
+
+| Category | Total | Tested | Coverage |
+|:---------|:-----:|:------:|:--------:|
+| Resolved | 8 | 8 | **100%** |
+| Must Fix (P0-P1) | 4 | 1 | **25%** |
+| Can Defer (P2-P3) | 6 | 3 | **50%** |
+| Passthrough | 6 | - | N/A |
+
+> **Action Required**: Create tests for 3 remaining P0-P1 gaps before GA release.
+
 
 ---
 
