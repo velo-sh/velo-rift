@@ -1,5 +1,11 @@
 # vrift Virtual Directory Real-time Sync
 
+> [!IMPORTANT]
+> **Implementation Status**: This document describes the **target v3 architecture**.
+> - ✅ **Shared Memory VDir**: Implemented in `vrift-ipc` as `ManifestMmap*` structs
+> - ⚠️ **Dirty Bit**: Not yet implemented - Sprint 1 target
+> - ⚠️ **Per-project vdir_d**: Not yet implemented - uses single `vriftd` currently
+
 ## The Core Question
 
 **When server updates VDir (100µs), how do clients see changes instantly?**

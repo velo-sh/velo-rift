@@ -1,6 +1,6 @@
 # vrift IPC Protocol Specification
 
-This document defines the Inter-Process Communication protocol between InceptionLayer clients and `vdir_d` project daemons.
+This document defines the Inter-Process Communication protocol between InceptionLayer clients and `vriftd` daemon.
 
 ---
 
@@ -8,269 +8,262 @@ This document defines the Inter-Process Communication protocol between Inception
 
 ### Unix Domain Socket (UDS)
 
-**Socket Path**: `~/.vrift/sockets/<project_id>.sock`
+**Default Socket Path**: `/tmp/vrift.sock`
 
 **Properties**:
 - Stream-oriented (SOCK_STREAM)
-- Per-project isolation
-- Auto-created by `vdir_d` on startup
-- Cleaned up on graceful shutdown
+- Single daemon serves all projects (current implementation)
+- Persistent connections with length-prefixed messages
 
-**Connection Lifecycle**:
+---
+
+## 2. Wire Format
+
+All messages use **bincode serialization** with length prefix:
+
 ```
-1. vdir_d creates socket at startup
-2. InceptionLayer connects on first write operation
-3. Connection persists for process lifetime
-4. Socket HUP signals client disconnect
+┌─────────────┬───────────────────────┐
+│ Length (u32)│ bincode(VeloRequest)  │
+│  LE bytes   │     or VeloResponse   │
+└─────────────┴───────────────────────┘
+```
+
+**Protocol Flow**:
+```rust
+// Send: length prefix + bincode payload
+let bytes = bincode::serialize(&request)?;
+stream.write_all(&(bytes.len() as u32).to_le_bytes())?;
+stream.write_all(&bytes)?;
+
+// Receive: read length, then payload
+let mut len_buf = [0u8; 4];
+stream.read_exact(&mut len_buf)?;
+let len = u32::from_le_bytes(len_buf) as usize;
+let mut payload = vec![0u8; len];
+stream.read_exact(&mut payload)?;
+let response: VeloResponse = bincode::deserialize(&payload)?;
 ```
 
 ---
 
-## 2. Message Frame Format
+## 3. Request Types (VeloRequest)
 
-All messages use a simple length-prefixed binary format:
-
-```c
-struct MessageFrame {
-    uint32_t magic;        // 0x56524946 ("VRIF")
-    uint32_t version;      // Protocol version (currently 1)
-    uint32_t msg_type;     // See MessageType enum
-    uint32_t payload_len;  // Length of payload in bytes
-    uint8_t  payload[];    // Variable-length payload
-} __attribute__((packed));
-```
-
-**Wire Format** (Little Endian):
-```
-[0:4]   Magic (0x56524946)
-[4:8]   Version (1)
-[8:12]  MessageType
-[12:16] PayloadLength
-[16:N]  Payload (N = PayloadLength)
-```
-
----
-
-## 3. Message Types
-
-```c
-enum MessageType {
-    // Client → Server
-    MSG_CONNECT         = 0x0001,  // Initial handshake
-    MSG_COMMIT          = 0x0002,  // File write complete
-    MSG_ABORT           = 0x0003,  // Cancel in-progress write
-    MSG_PING            = 0x0004,  // Keepalive
+```rust
+#[derive(Debug, Serialize, Deserialize)]
+pub enum VeloRequest {
+    // Connection
+    Handshake { client_version: String },
+    Status,
+    RegisterWorkspace { project_root: String },
     
-    // Server → Client
-    MSG_CONNECT_ACK     = 0x1001,  // Handshake response
-    MSG_COMMIT_ACK      = 0x1002,  // Commit success
-    MSG_COMMIT_NACK     = 0x1003,  // Commit failure
-    MSG_PONG            = 0x1004,  // Keepalive response
-    MSG_ERROR           = 0x1FFF,  // Generic error
-};
+    // Manifest Operations (VFS metadata)
+    ManifestGet { path: String },
+    ManifestUpsert { path: String, entry: VnodeEntry },
+    ManifestRemove { path: String },
+    ManifestRename { old_path: String, new_path: String },
+    ManifestUpdateMtime { path: String, mtime_ns: u64 },
+    ManifestReingest { vpath: String, temp_path: String },
+    ManifestListDir { path: String },
+    
+    // CAS Operations (content storage)
+    CasInsert { hash: [u8; 32], size: u64 },
+    CasGet { hash: [u8; 32] },
+    CasSweep { bloom_filter: Vec<u8> },
+    
+    // File Locking (RFC-0049)
+    FlockAcquire { path: String, operation: i32 },
+    FlockRelease { path: String },
+    
+    // Process Management
+    Spawn { command: Vec<String>, env: Vec<(String, String)>, cwd: String },
+    Protect { path: String, immutable: bool, owner: Option<String> },
+}
 ```
 
 ---
 
-## 4. Message Payloads
+## 4. Response Types (VeloResponse)
 
-### 4.1 MSG_CONNECT (Client → Server)
-
-**Purpose**: Register client with daemon, receive VDir mmap path.
-
-```c
-struct ConnectPayload {
-    uint32_t client_pid;           // Client process ID
-    uint32_t flags;                // Reserved (0)
-    char     project_root[256];    // Absolute path to project
-} __attribute__((packed));
-```
-
-### 4.2 MSG_CONNECT_ACK (Server → Client)
-
-```c
-struct ConnectAckPayload {
-    uint32_t status;               // 0 = success
-    uint32_t flags;                // Capability flags
-    char     vdir_path[256];       // Path to VDir mmap file
-    char     staging_base[256];    // Base path for staging files
-} __attribute__((packed));
-
-// Capability flags
-#define CAP_REFLINK_SUPPORTED   (1 << 0)
-#define CAP_HARDLINK_SUPPORTED  (1 << 1)
-```
-
-### 4.3 MSG_COMMIT (Client → Server)
-
-**Purpose**: Request atomic ingestion of staged file.
-
-```c
-struct CommitPayload {
-    uint32_t flags;                // See commit flags
-    uint64_t file_size;            // Size in bytes
-    int64_t  mtime_sec;            // Modification time (seconds)
-    uint32_t mtime_nsec;           // Modification time (nanoseconds)
-    uint32_t mode;                 // File mode (permissions)
-    uint16_t virtual_path_len;     // Length of virtual path
-    uint16_t staging_path_len;     // Length of staging path
-    char     paths[];              // virtual_path + staging_path (concatenated)
-} __attribute__((packed));
-
-// Commit flags
-#define COMMIT_FLAG_SYNC        (1 << 0)  // Wait for fsync
-#define COMMIT_FLAG_REPLACE     (1 << 1)  // Replace existing file
-#define COMMIT_FLAG_NEW         (1 << 2)  // Fail if exists
-```
-
-**Path Encoding**:
-```
-paths = virtual_path + '\0' + staging_path + '\0'
-```
-
-### 4.4 MSG_COMMIT_ACK (Server → Client)
-
-```c
-struct CommitAckPayload {
-    uint32_t status;               // 0 = success
-    uint8_t  cas_hash[32];         // BLAKE3 hash of content
-    uint64_t generation;           // New VDir generation
-} __attribute__((packed));
-```
-
-### 4.5 MSG_COMMIT_NACK (Server → Client)
-
-```c
-struct CommitNackPayload {
-    uint32_t error_code;           // See error codes
-    char     error_msg[256];       // Human-readable message
-} __attribute__((packed));
-
-// Error codes
-#define ERR_FILE_NOT_FOUND      1
-#define ERR_PERMISSION_DENIED   2
-#define ERR_DISK_FULL           3
-#define ERR_HASH_MISMATCH       4
-#define ERR_INTERNAL            255
-```
-
-### 4.6 MSG_ABORT (Client → Server)
-
-**Purpose**: Cancel in-progress write, cleanup staging file.
-
-```c
-struct AbortPayload {
-    uint16_t virtual_path_len;
-    uint16_t staging_path_len;
-    char     paths[];              // virtual_path + staging_path
-} __attribute__((packed));
-```
-
-### 4.7 MSG_PING / MSG_PONG
-
-**Purpose**: Keepalive and connection health check.
-
-```c
-struct PingPayload {
-    uint64_t timestamp_ns;         // Client timestamp (monotonic)
-} __attribute__((packed));
-
-struct PongPayload {
-    uint64_t client_timestamp_ns;  // Echo back client timestamp
-    uint64_t server_timestamp_ns;  // Server timestamp
-    uint64_t generation;           // Current VDir generation
-} __attribute__((packed));
+```rust
+#[derive(Debug, Serialize, Deserialize)]
+pub enum VeloResponse {
+    // Acknowledgements
+    HandshakeAck { server_version: String },
+    StatusAck { status: String },
+    RegisterAck { workspace_id: String },
+    CasAck,
+    ProtectAck,
+    FlockAck,
+    
+    // Manifest Responses
+    ManifestAck { entry: Option<VnodeEntry> },
+    ManifestListAck { entries: Vec<DirEntry> },
+    
+    // CAS Responses
+    CasFound { size: u64 },
+    CasNotFound,
+    CasSweepAck { deleted_count: u32, reclaimed_bytes: u64 },
+    
+    // Process Responses
+    SpawnAck { pid: u32 },
+    
+    // Error
+    Error(String),
+}
 ```
 
 ---
 
-## 5. Protocol Flow Examples
+## 5. Data Structures
 
-### 5.1 Successful Write Flow
+### VnodeEntry (Manifest Entry)
 
-```
-InceptionLayer                          vdir_d
-     |                                     |
-     |--- MSG_CONNECT ------------------->|
-     |<-- MSG_CONNECT_ACK ----------------|
-     |                                     |
-     |    [open() -> staging file]         |
-     |    [write() -> staging file]        |
-     |    [close() triggers commit]        |
-     |                                     |
-     |--- MSG_COMMIT -------------------->|
-     |                                     |  [reflink staging → CAS]
-     |                                     |  [update VDir]
-     |                                     |  [clear dirty bit]
-     |<-- MSG_COMMIT_ACK -----------------|
-     |                                     |
-     |    [unlink staging file]            |
-     |                                     |
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VnodeEntry {
+    pub content_hash: [u8; 32],  // BLAKE3 hash
+    pub size: u64,
+    pub mtime: u64,              // Unix timestamp (ns)
+    pub mode: u32,               // File mode (permissions)
+    pub flags: u16,              // 0x01 = dir, 0x02 = symlink
+}
 ```
 
-### 5.2 Failed Write Flow
+### DirEntry (Directory Listing)
 
-```
-InceptionLayer                          vdir_d
-     |                                     |
-     |--- MSG_COMMIT -------------------->|
-     |                                     |  [staging file missing!]
-     |<-- MSG_COMMIT_NACK ----------------|
-     |    (ERR_FILE_NOT_FOUND)             |
-     |                                     |
-     |    [log error, return -EIO]         |
-     |                                     |
-```
-
-### 5.3 Client Crash Detection
-
-```
-InceptionLayer                          vdir_d
-     |                                     |
-     |--- MSG_CONNECT ------------------->|
-     |<-- MSG_CONNECT_ACK ----------------|
-     |                                     |
-     |    [CRASH! - socket closes]         |
-     |                                     |
-     X                                     |  [detect socket HUP]
-                                           |  [find dirty files for PID]
-                                           |  [clear dirty bits]
-                                           |  [cleanup staging files]
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
 ```
 
 ---
 
-## 6. Timeout and Retry Policy
+## 6. Protocol Flow Examples
 
-| Operation | Timeout | Retry |
-|-----------|---------|-------|
-| Connect | 5s | 3 times |
-| Commit | 30s | No retry (caller handles) |
-| Ping | 10s | 3 times before disconnect |
+### 6.1 Handshake + Status
 
-**Reconnection**:
-- If connection lost, InceptionLayer enters fallback mode
-- Retries connection on next write operation
-- Existing dirty files remain dirty until commit succeeds
+```
+Client                              Server
+   |                                   |
+   |--- Handshake { "0.1.0" } -------->|
+   |<-- HandshakeAck { "0.1.0" } ------|
+   |                                   |
+   |--- Status -------------------->|
+   |<-- StatusAck { "ready" } ---------|
+```
+
+### 6.2 Workspace Registration + Manifest Query
+
+```
+Client                              Server
+   |                                   |
+   |--- RegisterWorkspace { "/proj" }->|
+   |<-- RegisterAck { "a8f9..." } -----|
+   |                                   |
+   |--- ManifestGet { "src/main.rs" }->|
+   |<-- ManifestAck { Some(entry) } ---|
+```
+
+### 6.3 CoW Write Flow (ManifestReingest)
+
+```
+Client                              Server
+   |                                   |
+   | [write to temp file locally]      |
+   | [close triggers reingest]         |
+   |                                   |
+   |--- ManifestReingest { -------->|
+   |      vpath: "src/lib.rs",         |
+   |      temp_path: "/tmp/cow123"     |
+   |    }                              |
+   |                                   |
+   |                                   | [hash temp file]
+   |                                   | [insert to CAS]
+   |                                   | [update manifest]
+   |                                   |
+   |<-- ManifestAck { entry } ---------|
+```
 
 ---
 
-## 7. Versioning
+## 7. Shared Memory Fast Path (RFC-0044)
 
-**Protocol Version**: 1
+For read-heavy operations, manifest data is also exported to shared memory:
 
-**Compatibility**:
-- Server rejects clients with higher version (MSG_ERROR)
-- Server accepts clients with lower version (backward compatible)
-- Version bump required for breaking payload changes
+**File**: `/tmp/vrift-manifest.mmap`
+
+**Layout**:
+```
+┌──────────────────────────────────────────────────────────┐
+│ ManifestMmapHeader (40 bytes)                            │
+├──────────────────────────────────────────────────────────┤
+│ Bloom Filter (32KB) - path existence check               │
+├──────────────────────────────────────────────────────────┤
+│ Stat Hash Table (MmapStatEntry[]) - path → metadata      │
+├──────────────────────────────────────────────────────────┤
+│ Dir Index Table (MmapDirIndexEntry[]) - parent → children│
+├──────────────────────────────────────────────────────────┤
+│ Children Pool (MmapDirChild[]) - directory entries       │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Header**:
+```rust
+pub struct ManifestMmapHeader {
+    pub magic: u32,           // 0x504D4D56 ("VMMP")
+    pub version: u32,         // Format version (1)
+    pub entry_count: u32,
+    pub bloom_offset: u32,
+    pub table_offset: u32,
+    pub table_capacity: u32,
+    pub dir_index_offset: u32,
+    pub dir_index_capacity: u32,
+    pub children_offset: u32,
+    pub children_count: u32,
+}
+```
+
+**Stat Entry**:
+```rust
+pub struct MmapStatEntry {
+    pub path_hash: u64,    // FNV-1a hash (0 = empty slot)
+    pub size: u64,
+    pub mtime: i64,
+    pub mtime_nsec: i64,
+    pub mode: u32,
+    pub flags: u32,        // 0x01 = dir, 0x02 = symlink
+}
+```
 
 ---
 
-## 8. Security Considerations
+## 8. Reconnection and Error Handling
 
-- Socket permissions: `0600` (owner-only)
-- PID verification via `getsockopt(SO_PEERCRED)`
-- No authentication beyond Unix permissions (single-user scope)
+**Client Behavior**:
+- Connect on first VFS operation
+- Reconnect on socket error
+- Fall back to real FS if daemon unavailable
+
+**Timeout**:
+- Default connect timeout: 5 seconds
+- No per-request timeout (blocking I/O)
+
+---
+
+## 9. Implementation Notes
+
+### Current vs. Future Architecture
+
+| Aspect | Current (v1) | Future (v3 Staging) |
+|--------|--------------|---------------------|
+| Daemon | Single `vriftd` | Per-project `vdir_d` |
+| Socket | `/tmp/vrift.sock` | `~/.vrift/sockets/<project>.sock` |
+| Write Model | ManifestReingest | Staging Area + Dirty Bit |
+
+> **Note**: The Staging Area model with Dirty Bit (documented in 02-vdir-synchronization.md and 06-write-path-ingestion.md) is the target architecture for Sprint 1.
 
 ---
 

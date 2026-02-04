@@ -1,5 +1,11 @@
 # vrift Write Path: Staging Area & Zero-Copy Ingestion
 
+> [!IMPORTANT]
+> **Implementation Status**: This document describes the **target v3 architecture**.
+> - ⚠️ **Staging Area**: Not yet implemented - Sprint 1 target
+> - ⚠️ **ReFLINK Ingestion**: Not yet implemented - Sprint 1 target
+> - ✅ **Current Model**: Uses `ManifestReingest` IPC for CoW writes
+
 ## 1. The Strategy: "Native Staging, Atomic Handover"
 
 Instead of complex Shared Memory RingBuffers, we leverage the OS's native filesystem capabilities for the Write Path.
