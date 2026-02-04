@@ -328,11 +328,18 @@ fn export_mmap_cache(manifest: &LmdbManifest, project_root: &Path) {
     let mmap_path_str = mmap_path.to_string_lossy();
 
     // Iterate all manifest entries and add to builder
+    let mut entry_count = 0;
     if let Ok(entries) = manifest.iter() {
         for (path, entry) in entries {
             let flags = entry.vnode.mode;
             let is_dir = entry.vnode.is_dir();
             let is_symlink = entry.vnode.is_symlink();
+
+            // DEBUG: Log first 3 paths
+            if entry_count < 3 {
+                tracing::info!("[DEBUG-DAEMON] Adding to mmap: path='{}'", path);
+            }
+
             builder.add_entry(
                 &path,
                 entry.vnode.size,
@@ -341,6 +348,7 @@ fn export_mmap_cache(manifest: &LmdbManifest, project_root: &Path) {
                 is_dir,
                 is_symlink,
             );
+            entry_count += 1;
         }
     }
 

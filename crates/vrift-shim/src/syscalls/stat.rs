@@ -51,8 +51,30 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
         return None;
     }
 
+    // Strip VFS prefix to get manifest-relative path
+    // e.g., "/vrift/file_1.txt" -> "/file_1.txt"
+    // Manifest stores paths WITH leading slash (e.g., "/file_1.txt")
+    let manifest_path = if let Some(stripped) = path_str.strip_prefix(state.vfs_prefix.as_ref()) {
+        stripped
+    } else {
+        path_str // Fallback if prefix doesn't match
+    };
+
+    // DEBUG: Log first 3 lookups
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if count < 3 {
+        eprintln!(
+            "[DEBUG] stat: path='{}' manifest_path='{}'",
+            path_str, manifest_path
+        );
+    }
+
     // Try Hot Stat Cache (O(1) mmap lookup)
-    if let Some(entry) = mmap_lookup(state.mmap_ptr, state.mmap_size, path_str) {
+    if let Some(entry) = mmap_lookup(state.mmap_ptr, state.mmap_size, manifest_path) {
+        if count < 3 {
+            eprintln!("[DEBUG] mmap HIT for '{}'", manifest_path);
+        }
         std::ptr::write_bytes(buf, 0, 1);
         (*buf).st_size = entry.size as _;
         #[cfg(target_os = "macos")]
@@ -72,8 +94,12 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
         return Some(0);
     }
 
-    // Try IPC query
-    if let Some(entry) = state.query_manifest(path_str) {
+    if count < 3 {
+        eprintln!("[DEBUG] mmap MISS for '{}', trying IPC", manifest_path);
+    }
+
+    // Try IPC query (also use manifest path format)
+    if let Some(entry) = state.query_manifest(manifest_path) {
         std::ptr::write_bytes(buf, 0, 1);
         (*buf).st_size = entry.size as _;
         #[cfg(target_os = "macos")]

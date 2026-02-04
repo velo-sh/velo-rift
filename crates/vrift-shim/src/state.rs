@@ -514,8 +514,18 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
 
     let mmap_path_cstr = CString::new(mmap_path.to_string_lossy().as_ref()).unwrap_or_default();
 
+    // DEBUG: Log loading attempt
+    eprintln!(
+        "[DEBUG-SHIM] Attempting to load mmap from: {}",
+        mmap_path.display()
+    );
+
     let fd = unsafe { libc::open(mmap_path_cstr.as_ptr(), libc::O_RDONLY) };
     if fd < 0 {
+        eprintln!(
+            "[DEBUG-SHIM] Failed to open mmap file: {}",
+            mmap_path.display()
+        );
         return (ptr::null(), 0);
     }
 
@@ -573,18 +583,49 @@ pub(crate) fn mmap_lookup(
 
     let header = unsafe { &*(mmap_ptr as *const vrift_ipc::ManifestMmapHeader) };
 
-    // Check bloom filter first (O(1) rejection)
+    // DEBUG
+    static LOOKUP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let lookup_count = LOOKUP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    // TEMPORARY: Skip bloom filter check to test hash table
+    if lookup_count < 3 {
+        eprintln!(
+            "[DEBUG-MMAP] SKIPPING bloom filter check, testing hash table directly for '{}'",
+            path
+        );
+    }
+
+    // Check bloom filter first (O(1) rejection) - TEMPORARILY DISABLED
+    /*
     let bloom_offset = header.bloom_offset as usize;
     let bloom_ptr = unsafe { mmap_ptr.add(bloom_offset) };
     let (h1, h2) = vrift_ipc::bloom_hashes(path);
     let b1 = h1 % (vrift_ipc::BLOOM_SIZE * 8);
     let b2 = h2 % (vrift_ipc::BLOOM_SIZE * 8);
+
+    if lookup_count < 3 {
+        eprintln!("[DEBUG-MMAP] path='{}' h1={} h2={} b1={} b2={}", path, h1, h2, b1, b2);
+        // Check first few bytes of bloom filter
+        let bloom_bytes: Vec<u8> = unsafe {
+            std::slice::from_raw_parts(bloom_ptr, 32).to_vec()
+        };
+        eprintln!("[DEBUG-MMAP] bloom filter first 32 bytes: {:?}", bloom_bytes);
+    }
+
     unsafe {
         let v1 = *bloom_ptr.add(b1 / 8) & (1 << (b1 % 8));
         let v2 = *bloom_ptr.add(b2 / 8) & (1 << (b2 % 8));
         if v1 == 0 || v2 == 0 {
+            if lookup_count < 3 {
+                eprintln!("[DEBUG-MMAP] Bloom REJECT '{}' (v1={}, v2={})", path, v1, v2);
+            }
             return None; // Bloom filter rejection
         }
+    }
+    */
+
+    if lookup_count < 3 {
+        eprintln!("[DEBUG-MMAP] Bloom PASS '{}', checking hash table", path);
     }
 
     // Hash table lookup with linear probing
@@ -600,14 +641,23 @@ pub(crate) fn mmap_lookup(
         let entry = unsafe { &*table_ptr.add(slot) };
 
         if entry.is_empty() {
+            if lookup_count < 3 {
+                eprintln!("[DEBUG-MMAP] Empty slot at {}, NOT FOUND", slot);
+            }
             return None; // Empty slot = not found
         }
 
         if entry.path_hash == path_hash {
+            if lookup_count < 3 {
+                eprintln!("[DEBUG-MMAP] Hash MATCH at slot {}, FOUND!", slot);
+            }
             return Some(*entry); // Found!
         }
     }
 
+    if lookup_count < 3 {
+        eprintln!("[DEBUG-MMAP] Table full, NOT FOUND");
+    }
     None // Table full, not found
 }
 
@@ -820,8 +870,9 @@ impl ShimState {
         // NOTE: Bloom mmap is deferred - don't call during init
         let bloom_ptr = ptr::null();
 
-        // Hot Stat Cache deferred - avoid syscalls during init
-        let (mmap_ptr, mmap_size) = (ptr::null(), 0);
+        // RFC-0044: Hot Stat Cache - load mmap immediately
+        // (Lazy loading was TODO but never implemented, eager load is safe in practice)
+        let (mmap_ptr, mmap_size) = open_manifest_mmap();
 
         // Derive project root from VRIFT_MANIFEST
         let manifest_ptr = unsafe { libc::getenv(c"VRIFT_MANIFEST".as_ptr()) };

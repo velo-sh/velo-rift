@@ -7,6 +7,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Raw Unix socket connect using libc syscalls (avoids recursion through shim)
 pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
+    // Fast-fail: Check if socket file exists before attempting connect
+    let path_cstr = match std::ffi::CString::new(path) {
+        Ok(p) => p,
+        Err(_) => return -1,
+    };
+    if libc::access(path_cstr.as_ptr(), libc::F_OK) != 0 {
+        return -1; // Socket doesn't exist, fail immediately
+    }
+
     // RFC-0043: Prevent FD leakage to child processes (Atomic CLOEXEC)
     let fd = {
         #[cfg(target_os = "linux")]

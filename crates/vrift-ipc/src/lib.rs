@@ -427,6 +427,18 @@ impl ManifestMmapBuilder {
         let bloom_start = header.bloom_offset as usize;
         buffer[bloom_start..bloom_start + BLOOM_SIZE].copy_from_slice(&self.bloom);
 
+        // DEBUG: Check bloom filter content
+        let bloom_set_bits: usize = self.bloom.iter().map(|b| b.count_ones() as usize).sum();
+        println!(
+            "[DEBUG-BUILDER] Bloom filter has {} set bits out of {} total bits",
+            bloom_set_bits,
+            BLOOM_SIZE * 8
+        );
+        println!(
+            "[DEBUG-BUILDER] Bloom filter first 32 bytes: {:?}",
+            &self.bloom[..32]
+        );
+
         // 6. Write stat hash table with linear probing
         // We'll also need a way to map original index to actual slot for dir entries
         let table_start = header.table_offset as usize;
