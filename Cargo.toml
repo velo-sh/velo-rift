@@ -10,7 +10,9 @@ members = [
     "crates/vrift-fuse",
     "crates/vrift-lock",
     "crates/vrift-cli",
-    "crates/vrift-daemon", "crates/vrift-ipc",
+    "crates/vrift-daemon",
+    "crates/vrift-ipc",
+    "crates/vrift-vdird",
 ]
 # Exclude vrift-shim from default cargo commands (INIT constructor causes hangs)
 default-members = [
@@ -22,7 +24,9 @@ default-members = [
     "crates/vrift-fuse",
     "crates/vrift-lock",
     "crates/vrift-cli",
-    "crates/vrift-daemon", "crates/vrift-ipc",
+    "crates/vrift-daemon",
+    "crates/vrift-ipc",
+    "crates/vrift-vdird",
 ]
 
 [workspace.package]

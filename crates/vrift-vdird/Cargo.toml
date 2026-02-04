@@ -1,0 +1,35 @@
+[package]
+name = "vrift-vdird"
+version = "0.1.0"
+edition = "2021"
+description = "Per-project daemon for vrift virtual directory management"
+
+[dependencies]
+# Core
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "1"
+
+# IPC
+vrift-ipc = { path = "../vrift-ipc" }
+vrift-cas = { path = "../vrift-cas" }
+vrift-manifest = { path = "../vrift-manifest" }
+bincode = "1"
+
+# Hashing
+blake3 = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Shared memory
+memmap2 = "0.9"
+libc = "0.2"
+
+# Utilities
+hex = "0.4"
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"

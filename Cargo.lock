@@ -2133,6 +2133,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "vrift-vdird"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "blake3",
+ "dirs 5.0.1",
+ "hex",
+ "libc",
+ "memmap2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vrift-cas",
+ "vrift-ipc",
+ "vrift-manifest",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
