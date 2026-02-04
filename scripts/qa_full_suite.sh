@@ -85,12 +85,14 @@ echo "================================================================"
 echo -e "${BLUE}VRift QA Full Suite${NC}"
 echo "================================================================"
 echo ""
-echo "🔨 Building release binary..."
+echo "🔨 Building release binaries (including shim)..."
 cd "$PROJECT_ROOT"
 cargo build --release --quiet 2>/dev/null || {
     echo -e "${RED}Build failed!${NC}"
     exit 1
 }
+# Ensure shim cdylib is built (may not be built by --workspace alone)
+cargo build --release -p vrift-shim --quiet 2>/dev/null || true
 echo -e "${GREEN}✓ Build complete${NC}"
 echo ""
 
@@ -173,5 +175,3 @@ echo -e "📄 Report saved to: ${BLUE}$REPORT_FILE${NC}"
 
 # Exit with failure if any tests failed
 [ $FAILED -eq 0 ] && [ $TIMEOUT -eq 0 ] || exit 1
-EOF
-<parameter name="Complexity">6
