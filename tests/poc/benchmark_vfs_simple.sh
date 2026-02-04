@@ -1,40 +1,35 @@
 #!/bin/bash
-# SIMPLIFIED VFS vs FS Benchmark - No vrift activate, just raw test
+# SIMPLIFIED VFS vs FS Benchmark - Shim overhead test
+# Uses 1000 files for reasonable test time
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+if [[ ! -f "$SHIM_PATH" ]]; then
+    echo "❌ Shim not found. Run: cargo build --release -p vrift-shim"
+    exit 1
+fi
+
 echo "=== VFS vs FS Benchmark (Simplified) ==="
 echo ""
 
-# Reuse existing test dir if available
-TEST_DIR=$(ls -d /tmp/vrift_vfs_bench_* 2>/dev/null | head -1)
+# Setup test directory with 1000 files
+TEST_DIR=$(mktemp -d)
+trap "rm -rf $TEST_DIR" EXIT
 
-if [[ -z "$TEST_DIR" || ! -d "$TEST_DIR/node_modules" ]]; then
-    echo "Creating new test directory..."
-    TEST_DIR="/tmp/vrift_vfs_bench_$$"
-    mkdir -p "$TEST_DIR"
-    cd "$TEST_DIR"
-    
-    # Setup
-    npm init -y >/dev/null
-    cp "$PROJECT_ROOT/examples/benchmarks/medium_package.json" package.json
-    echo "Installing dependencies..."
-    npm install >/dev/null 2>&1
-    
-    FILE_COUNT=$(find node_modules -type f 2>/dev/null | wc -l | tr -d ' ')
-    echo "✅ Created $FILE_COUNT files"
-else
-    echo "✅ Using existing test dir: $TEST_DIR"
-    cd "$TEST_DIR"
-fi
+echo "Creating 1000 test files..."
+mkdir -p "$TEST_DIR/testdir"
+for i in $(seq 1 1000); do
+    echo "test data $i" > "$TEST_DIR/testdir/file_$i.txt"
+done
+echo "✅ Created 1000 files"
 
-# Rebuild benchmark program
-cat > bench.c << 'EOF'
+# Create benchmark program
+cat > "$TEST_DIR/bench.c" << 'EOF'
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <string.h>
@@ -46,23 +41,22 @@ static long long now_ns(void) {
     return ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-int fstat_all_files(const char *path, int *count) {
-    struct dirent *entry;
+int scan_dir(const char *path, int *count) {
     DIR *dir = opendir(path);
     if (!dir) return -1;
-
+    
+    struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-            continue;
-
+        if (entry->d_name[0] == '.') continue;
+        
         char fullpath[4096];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entry->d_name);
-
+        
         struct stat sb;
         if (lstat(fullpath, &sb) == 0) {
             (*count)++;
             if (S_ISDIR(sb.st_mode)) {
-                fstat_all_files(fullpath, count);
+                scan_dir(fullpath, count);
             }
         }
     }
@@ -72,20 +66,18 @@ int fstat_all_files(const char *path, int *count) {
 
 int main() {
     int count = 0;
-    
     long long start = now_ns();
-    fstat_all_files("node_modules", &count);
+    scan_dir("testdir", &count);
     long long end = now_ns();
     
     double ms = (end - start) / 1000000.0;
-    
     printf("Files: %d, Time: %.2f ms, Avg: %.2f µs/file\n", 
-           count, ms, (ms * 1000) / count);
-    
+           count, ms, count > 0 ? (ms * 1000) / count : 0);
     return 0;
 }
 EOF
 
+cd "$TEST_DIR"
 cc -O2 -o bench bench.c
 codesign -f -s - bench 2>/dev/null || true
 
@@ -94,9 +86,8 @@ echo "=== Test 1: Real FS (no shim) ==="
 ./bench
 
 echo ""
-echo "=== Test 2: With Shim (NO VFS, just overhead test) ==="
-SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
-DYLD_INSERT_LIBRARIES="$SHIM_PATH" ./bench
+echo "=== Test 2: With Shim (overhead test) ==="
+DYLD_INSERT_LIBRARIES="$SHIM_PATH" VRIFT_DEBUG=0 ./bench
 
 echo ""
-echo "Done! This shows shim overhead on real multi-file workload."
+echo "✅ Done! This shows shim overhead on multi-file workload."

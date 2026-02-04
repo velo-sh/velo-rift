@@ -27,6 +27,12 @@ impl PathResolver {
     /// Resolve an incoming path (absolute or relative) into a VfsPath.
     /// Returns None if the path is not within the VFS domain.
     pub fn resolve(&self, path: &str) -> Option<VfsPath> {
+        // RFC-0050: Early exit if VFS is not configured
+        // Empty vfs_prefix means no virtual filesystem is active
+        if self.vfs_prefix.is_empty() {
+            return None;
+        }
+
         // 1. Resolve relative paths using project_root
         let abs_path = if !path.starts_with('/') {
             if self.project_root.is_empty() {

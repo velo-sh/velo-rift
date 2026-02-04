@@ -9,10 +9,12 @@ use std::ffi::CStr;
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn opendir_shim(path: *const libc::c_char) -> *mut c_void {
+    // RFC-0050: Use IT_OPENDIR.old_func from interpose table to avoid recursion.
+    // dlsym(RTLD_NEXT) returns the shim itself due to __interpose mechanism.
     let real = std::mem::transmute::<
-        *mut libc::c_void,
+        *const (),
         unsafe extern "C" fn(*const libc::c_char) -> *mut c_void,
-    >(crate::reals::REAL_OPENDIR.get());
+    >(crate::interpose::IT_OPENDIR.old_func);
 
     // Early-boot passthrough
     passthrough_if_init!(real, path);
@@ -79,10 +81,11 @@ static mut DIRENT_BUF: libc::dirent = libc::dirent {
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn readdir_shim(dir: *mut c_void) -> *mut libc::dirent {
+    // RFC-0050: Use IT_READDIR.old_func to avoid recursion (same fix as opendir_shim)
     let real = std::mem::transmute::<
-        *mut libc::c_void,
+        *const (),
         unsafe extern "C" fn(*mut c_void) -> *mut libc::dirent,
-    >(crate::reals::REAL_READDIR.get());
+    >(crate::interpose::IT_READDIR.old_func);
 
     // Pattern 2648/2649: Passthrough during initialization to avoid TLS hazard
     passthrough_if_init!(real, dir);
@@ -137,8 +140,9 @@ pub unsafe extern "C" fn readdir_shim(dir: *mut c_void) -> *mut libc::dirent {
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn closedir_shim(dir: *mut c_void) -> c_int {
-    let real = std::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
-        crate::reals::REAL_CLOSEDIR.get(),
+    // RFC-0050: Use IT_CLOSEDIR.old_func to avoid recursion (same fix as opendir_shim)
+    let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*mut c_void) -> c_int>(
+        crate::interpose::IT_CLOSEDIR.old_func,
     );
 
     // Pattern 2648/2649: Passthrough during initialization to avoid TLS hazard

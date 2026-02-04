@@ -1011,8 +1011,10 @@ impl ShimState {
         };
 
         let prefix_ptr = unsafe { libc::getenv(c"VRIFT_VFS_PREFIX".as_ptr()) };
+        // RFC-0050: Default to empty string to disable VFS when not explicitly configured
+        // This prevents hang when shim is loaded but no VFS environment is set up
         let vfs_prefix: std::borrow::Cow<'static, str> = if prefix_ptr.is_null() {
-            std::borrow::Cow::Borrowed("/vrift")
+            std::borrow::Cow::Borrowed("")
         } else {
             std::borrow::Cow::Owned(unsafe {
                 CStr::from_ptr(prefix_ptr).to_string_lossy().into_owned()
