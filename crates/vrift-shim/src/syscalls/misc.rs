@@ -193,24 +193,62 @@ unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
 }
 
 #[no_mangle]
+#[cfg(target_os = "macos")]
 pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_int {
-    #[cfg(target_os = "macos")]
-    {
-        extern "C" {
-            fn link(old: *const c_char, new: *const c_char) -> c_int;
-        }
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
-            return link(old, new);
-        }
-        link_impl(old, new).unwrap_or_else(|| link(old, new))
+    // RFC-0047: Cross-boundary hardlink ALWAYS returns EXDEV
+    // This check must happen BEFORE any other logic, regardless of init state
+    let old_in_vfs = quick_is_in_vfs(old);
+    let new_in_vfs = quick_is_in_vfs(new);
+    if old_in_vfs != new_in_vfs {
+        // Cross-device link: one path in VFS, other outside
+        crate::set_errno(libc::EXDEV);
+        return -1;
     }
-    #[cfg(target_os = "linux")]
-    {
-        if INITIALIZING.load(Ordering::Relaxed) >= 2 {
-            return crate::syscalls::linux_raw::raw_link(old, new);
-        }
-        link_impl(old, new).unwrap_or_else(|| crate::syscalls::linux_raw::raw_link(old, new))
+    if new_in_vfs {
+        // Destination in VFS: block to protect VFS integrity
+        crate::set_errno(libc::EXDEV);
+        return -1;
     }
+
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        // Early init: just passthrough for non-VFS paths (already checked above)
+        return crate::syscalls::macos_raw::raw_link(old, new);
+    }
+    // Post-init: use full link_impl for additional checks, then block_vfs_mutation
+    if let Some(err) = link_impl(old, new) {
+        return err;
+    }
+    block_vfs_mutation(old)
+        .or_else(|| block_vfs_mutation(new))
+        .unwrap_or_else(|| crate::syscalls::macos_raw::raw_link(old, new))
+}
+
+#[no_mangle]
+#[cfg(target_os = "linux")]
+pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_int {
+    // RFC-0047: Cross-boundary hardlink ALWAYS returns EXDEV
+    let old_in_vfs = quick_is_in_vfs(old);
+    let new_in_vfs = quick_is_in_vfs(new);
+    if old_in_vfs != new_in_vfs {
+        crate::set_errno(libc::EXDEV);
+        return -1;
+    }
+    if new_in_vfs {
+        crate::set_errno(libc::EXDEV);
+        return -1;
+    }
+
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        return crate::syscalls::linux_raw::raw_link(old, new);
+    }
+    if let Some(err) = link_impl(old, new) {
+        return err;
+    }
+    block_vfs_mutation(old)
+        .or_else(|| block_vfs_mutation(new))
+        .unwrap_or_else(|| crate::syscalls::linux_raw::raw_link(old, new))
 }
 
 #[no_mangle]

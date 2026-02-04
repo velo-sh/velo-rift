@@ -984,6 +984,13 @@ pub unsafe fn raw_linkat(
     ret as libc::c_int
 }
 
+/// Raw link syscall for macOS ARM64 (uses linkat with AT_FDCWD).
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(always)]
+pub unsafe fn raw_link(oldpath: *const libc::c_char, newpath: *const libc::c_char) -> libc::c_int {
+    raw_linkat(libc::AT_FDCWD, oldpath, libc::AT_FDCWD, newpath, 0)
+}
+
 /// Raw chflags syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]

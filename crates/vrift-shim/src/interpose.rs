@@ -421,7 +421,7 @@ pub static IT_FLOCK: Interpose = Interpose {
     old_func: real_flock as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_LINK: Interpose = Interpose {
     new_func: link_shim as _,
