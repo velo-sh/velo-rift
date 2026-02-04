@@ -28,8 +28,16 @@ sleep 2
 # 4. Proof: Try to access the file via shim
 # If the manifest lookup fails ('NOT FOUND' in logs), the key mismatch is proven.
 echo "--- Accessing /myvirt/foo.txt ---"
-# Note: we use a helper C program or cat with local copy to bypass SIP
-cp /bin/cat "$TEST_DIR/cat"
+# Compile arm64 cat (arm64e /bin/cat doesn't work with DYLD injection)
+echo '#include <stdio.h>
+int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        FILE *f = fopen(argv[i], "r"); if (!f) { perror(argv[i]); return 1; }
+        int c; while ((c = fgetc(f)) != EOF) putchar(c); fclose(f);
+    }
+    return 0;
+}' | cc -O2 -x c - -o "$TEST_DIR/cat"
+codesign -s - -f "$TEST_DIR/cat" 2>/dev/null || true
 DYLD_INSERT_LIBRARIES="$SHIM_LIB" DYLD_FORCE_FLAT_NAMESPACE=1 VRIFT_VFS_PREFIX="/myvirt" VRIFT_DEBUG=1 "$TEST_DIR/cat" /myvirt/foo.txt 2>&1 || true
 
 echo ""

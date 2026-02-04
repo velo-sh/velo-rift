@@ -18,11 +18,30 @@ echo "PROTECTED" > "$VELO_PROJECT_ROOT/test.txt"
 chmod 444 "$VELO_PROJECT_ROOT/test.txt"
 
 # Copy and sign all utilities to bypass SIP/Security restrictions
+# NOTE: macOS arm64e binaries (like /bin/*) don't work with DYLD_INSERT_LIBRARIES
+# We compile simple arm64 replacements instead
 mkdir -p "$TEST_DIR/bin"
-for cmd in cp mv mkdir rm cat; do
-    cp "/bin/$cmd" "$TEST_DIR/bin/$cmd"
-    codesign -s - -f "$TEST_DIR/bin/$cmd" 2>/dev/null || true
-done
+HELPERS_DIR="$(cd "${SCRIPT_DIR}/../helpers" && pwd)"
+if [ -f "$HELPERS_DIR/compile_test_binaries.sh" ]; then
+    source "$HELPERS_DIR/compile_test_binaries.sh" "$TEST_DIR/bin"
+else
+    # Fallback: compile inline  
+    for cmd in echo cat chmod rm mv cp mkdir touch; do
+        case $cmd in
+            echo)  echo '#include <stdio.h>
+                   int main(int argc, char **argv) { for (int i=1;i<argc;i++) printf("%s%s",argv[i],i<argc-1?" ":""); printf("\n"); return 0; }' | cc -O2 -x c - -o "$TEST_DIR/bin/$cmd" ;;
+            chmod) echo '#include <sys/stat.h>
+                   #include <stdlib.h>
+                   int main(int argc, char **argv) { if(argc<3)return 1; return chmod(argv[2],strtol(argv[1],0,8)); }' | cc -O2 -x c - -o "$TEST_DIR/bin/$cmd" ;;
+            rm)    echo '#include <unistd.h>
+                   int main(int argc, char **argv) { for(int i=1;i<argc;i++) unlink(argv[i]); return 0; }' | cc -O2 -x c - -o "$TEST_DIR/bin/$cmd" ;;
+            mv)    echo '#include <stdio.h>
+                   int main(int argc, char **argv) { return argc==3 ? rename(argv[1],argv[2]) : 1; }' | cc -O2 -x c - -o "$TEST_DIR/bin/$cmd" ;;
+            *) continue ;;
+        esac
+        [ "$(uname -s)" == "Darwin" ] && codesign -s - -f "$TEST_DIR/bin/$cmd" 2>/dev/null || true
+    done
+fi
 
 # Setup shim environment with local PATH
 export PATH="$TEST_DIR/bin:$PATH"

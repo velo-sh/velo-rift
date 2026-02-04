@@ -61,10 +61,41 @@ mkdir -p "$WORK_DIR/project"
 mkdir -p "$WORK_DIR/external"
 mkdir -p "$WORK_DIR/bin"
 
-# SIP Bypass: Copy binaries (crucial on macOS, good for isolation on Linux)
-cp "$BIN_MV" "$WORK_DIR/bin/mv"
-cp "$BIN_LN" "$WORK_DIR/bin/ln"
-cp "$BIN_SHASUM" "$WORK_DIR/bin/shasum"
+# SIP Bypass: Compile arm64 binaries (arm64e /bin/* don't work with DYLD injection)
+# Compile simple mv and ln replacements
+cat > "$WORK_DIR/bin/mv.c" << 'MVEOF'
+#include <stdio.h>
+#include <errno.h>
+int main(int argc, char **argv) { 
+    if (argc != 3) { fprintf(stderr, "usage: mv src dst\n"); return 1; }
+    if (rename(argv[1], argv[2]) < 0) { perror("mv"); return errno == 18 ? 18 : 1; }
+    return 0; 
+}
+MVEOF
+cc -O2 -o "$WORK_DIR/bin/mv" "$WORK_DIR/bin/mv.c" && rm "$WORK_DIR/bin/mv.c"
+
+cat > "$WORK_DIR/bin/ln.c" << 'LNEOF'
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv) {
+    int symbolic = 0, i = 1;
+    if (argc > 1 && strcmp(argv[1], "-s") == 0) { symbolic = 1; i = 2; }
+    if (argc - i != 2) { fprintf(stderr, "usage: ln [-s] src dst\n"); return 1; }
+    int ret = symbolic ? symlink(argv[i], argv[i+1]) : link(argv[i], argv[i+1]);
+    if (ret < 0) { perror("ln"); return 1; }
+    return 0;
+}
+LNEOF
+cc -O2 -o "$WORK_DIR/bin/ln" "$WORK_DIR/bin/ln.c" && rm "$WORK_DIR/bin/ln.c"
+
+# shasum is a perl script, just copy it (it doesn't need DYLD injection)
+cp "$BIN_SHASUM" "$WORK_DIR/bin/shasum" 2>/dev/null || ln -s "$BIN_SHASUM" "$WORK_DIR/bin/shasum"
+
+# Sign compiled binaries on macOS
+if [ "$(uname -s)" == "Darwin" ]; then
+    codesign -s - -f "$WORK_DIR/bin/mv" "$WORK_DIR/bin/ln" 2>/dev/null || true
+fi
 
 # Helper aliases (using SIP-bypassed binaries)
 MY_MV="$WORK_DIR/bin/mv"
