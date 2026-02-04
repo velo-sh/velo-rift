@@ -109,13 +109,20 @@ if ! grep -q "Hello Velo" "$WORK_DIR/e2e_read.log"; then
 fi
 echo "✅ Virtual File Read: Passed"
 
-echo "   Testing Virtual Mutation (mkdir)..."
-# Using mini_mkdir to bypass SIP issues
-# Expected: Operation not permitted (EPERM) because mutation perimeter blocks it
-if env $VFS_ENV "$MINI_MKDIR" "$WORK_DIR/src/new_dir" 2>&1 | grep -q "Operation not permitted"; then
-    echo "✅ Virtual Mutation Blocked (Mutation Perimeter): Passed"
+echo "   Testing Virtual Mutation (mkdir passthrough)..."
+# RFC-0039: Transparent Overlay - writes passthrough to real filesystem
+# mkdir should succeed in a real directory (not virtual)
+# Note: $WORK_DIR/src is VIRTUAL (projected from manifest), so we test in $WORK_DIR itself
+if env $VFS_ENV "$MINI_MKDIR" "$WORK_DIR/new_real_dir" 2>&1; then
+    if [ -d "$WORK_DIR/new_real_dir" ]; then
+        echo "✅ Virtual Mutation Passthrough (RFC-0039): mkdir succeeded"
+        rmdir "$WORK_DIR/new_real_dir"  # Cleanup
+    else
+        echo "❌ mkdir returned success but directory not created"
+        exit 1
+    fi
 else
-    echo "❌ Virtual Mutation Perimeter Failure: Mutation was not blocked as expected"
+    echo "❌ Virtual Mutation Passthrough Failure: mkdir should succeed per RFC-0039"
     exit 1
 fi
 
