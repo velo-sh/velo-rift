@@ -19,21 +19,49 @@ if [ ! -f "$SHIM_LIB" ]; then
     exit 1
 fi
 
-# 1. Create a dummy dylib that triggers many stat/readlink calls
+# 1. Create a dylib that triggers many syscalls during constructor
 cat <<EOF > "$WORK_DIR/hammer.c"
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 __attribute__((constructor))
 void hammer_init() {
     struct stat st;
     char buf[1024];
-    // Trigger calls that would previously deadlock or recurse
+    int fd;
+    
+    // --- Core interposed syscalls (Pattern 2930 coverage) ---
+    // Group 1: stat family
     stat("/usr/lib/libc.dylib", &st);
+    lstat("/var/run", &st);
+    
+    // Group 2: access/readlink
     access("/etc/passwd", R_OK);
     readlink("/var/run", buf, sizeof(buf));
-    // fprintf(stderr, "[HAMMER] Safe boot calls completed\n");
+    
+    // Group 3: open/openat + fstat
+    fd = open("/dev/null", O_RDONLY);
+    if (fd >= 0) {
+        fstat(fd, &st);
+        close(fd);
+    }
+    
+    // Group 4: openat
+    fd = openat(AT_FDCWD, "/etc/hosts", O_RDONLY);
+    if (fd >= 0) {
+        fstat(fd, &st);
+        close(fd);
+    }
+    
+    // Group 5: fstatat
+    fstatat(AT_FDCWD, "/tmp", &st, 0);
+    
+    // --- Additional mutation syscalls (for regression coverage) ---
+    // These should use raw syscalls internally, not hang
+    (void)access("/tmp/vrift_test_nonexistent", F_OK);  // expected to fail
 }
 EOF
 

@@ -290,12 +290,9 @@ pub unsafe extern "C" fn unlinkat_shim(dirfd: c_int, path: *const c_char, flags:
                 return err;
             }
             return crate::syscalls::macos_raw::raw_unlinkat(dirfd, path, flags);
-        }
-        let real = std::mem::transmute::<
-            *mut libc::c_void,
-            unsafe extern "C" fn(c_int, *const c_char, c_int) -> c_int,
-        >(crate::reals::REAL_UNLINKAT.get());
-        block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, flags))
+        } // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+        block_vfs_mutation(path)
+            .unwrap_or_else(|| crate::syscalls::macos_raw::raw_unlinkat(dirfd, path, flags))
     }
     #[cfg(target_os = "linux")]
     {
@@ -326,12 +323,9 @@ pub unsafe extern "C" fn mkdirat_shim(
                 return err;
             }
             return crate::syscalls::macos_raw::raw_mkdirat(dirfd, path, mode);
-        }
-        let real = std::mem::transmute::<
-            *mut libc::c_void,
-            unsafe extern "C" fn(c_int, *const c_char, libc::mode_t) -> c_int,
-        >(crate::reals::REAL_MKDIRAT.get());
-        block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, mode))
+        } // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+        block_vfs_mutation(path)
+            .unwrap_or_else(|| crate::syscalls::macos_raw::raw_mkdirat(dirfd, path, mode))
     }
     #[cfg(target_os = "linux")]
     {
@@ -363,14 +357,10 @@ pub unsafe extern "C" fn symlinkat_shim(
                 return err;
             }
             return crate::syscalls::macos_raw::raw_symlinkat(p1, dirfd, p2);
-        }
-        let real = std::mem::transmute::<
-            *mut libc::c_void,
-            unsafe extern "C" fn(*const c_char, c_int, *const c_char) -> c_int,
-        >(crate::reals::REAL_SYMLINKAT.get());
+        } // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
         block_vfs_mutation(p1)
             .or_else(|| block_vfs_mutation(p2))
-            .unwrap_or_else(|| real(p1, dirfd, p2))
+            .unwrap_or_else(|| crate::syscalls::macos_raw::raw_symlinkat(p1, dirfd, p2))
     }
     #[cfg(target_os = "linux")]
     {
@@ -554,11 +544,8 @@ pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> 
         return crate::syscalls::macos_raw::raw_chmod(path, mode);
     }
 
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(*const c_char, libc::mode_t) -> c_int,
-    >(crate::reals::REAL_CHMOD.get());
-    block_vfs_mutation(path).unwrap_or_else(|| real(path, mode))
+    // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+    block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::macos_raw::raw_chmod(path, mode))
 }
 
 #[no_mangle]
@@ -578,13 +565,11 @@ pub unsafe extern "C" fn fchmodat_shim(
         if let Some(err) = quick_block_vfs_mutation(path) {
             return err;
         }
-        // No raw syscall for fchmodat, use real function
+        return crate::syscalls::macos_raw::raw_fchmodat(dirfd, path, mode, flags);
     }
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(c_int, *const c_char, libc::mode_t, c_int) -> c_int,
-    >(crate::reals::REAL_FCHMODAT.get());
-    block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, mode, flags))
+    // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+    block_vfs_mutation(path)
+        .unwrap_or_else(|| crate::syscalls::macos_raw::raw_fchmodat(dirfd, path, mode, flags))
 }
 
 #[no_mangle]
@@ -690,11 +675,9 @@ pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t)
         }
         return crate::syscalls::macos_raw::raw_truncate(path, length);
     }
-    let real = std::mem::transmute::<
-        *mut libc::c_void,
-        unsafe extern "C" fn(*const c_char, libc::off_t) -> c_int,
-    >(crate::reals::REAL_TRUNCATE.get());
-    block_vfs_mutation(path).unwrap_or_else(|| real(path, length))
+    // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+    block_vfs_mutation(path)
+        .unwrap_or_else(|| crate::syscalls::macos_raw::raw_truncate(path, length))
 }
 
 // --- chflags (macOS only) ---
