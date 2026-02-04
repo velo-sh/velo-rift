@@ -164,6 +164,151 @@ pub static EVENT_NAMES: &[&str] = &[
     "ReingestFail",
 ];
 
+// ============================================================================
+// DirtyTracker: Lock-Free Pending Write Tracking (M3: Dirty Bit Logic)
+// ============================================================================
+//
+// Tracks paths that have been opened for writing and are in staging files.
+// Uses a lock-free fixed-size hash table with linear probing.
+// ZERO ALLOCATIONS - safe to call during dyld bootstrap phase.
+
+/// Dirty tracker slot: stores path_hash and staging path offset
+/// Format: [32-bit path_hash | 32-bit staging_idx]
+/// path_hash = 0 means empty slot
+const DIRTY_TRACKER_SIZE: usize = 1024; // Max concurrent dirty files
+
+/// Global dirty tracker instance
+pub static DIRTY_TRACKER: DirtyTracker = DirtyTracker::new();
+
+/// FNV-1a hash for path strings (same as vdir.rs)
+#[inline(always)]
+pub fn fnv1a_hash(path: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for byte in path.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+/// Lock-free dirty file tracker
+/// Tracks which paths have pending writes in staging files.
+pub struct DirtyTracker {
+    /// Fixed-size hash table: path_hash -> (staging_idx, active flag)
+    /// 0 = empty slot, non-zero = path_hash of dirty file
+    slots: [std::sync::atomic::AtomicU64; DIRTY_TRACKER_SIZE],
+}
+
+impl Default for DirtyTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DirtyTracker {
+    pub const fn new() -> Self {
+        // Initialize all slots to 0 (empty)
+        #[allow(clippy::declare_interior_mutable_const)]
+        const ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self {
+            slots: [ZERO; DIRTY_TRACKER_SIZE],
+        }
+    }
+
+    /// Mark a path as dirty (has pending writes in staging)
+    /// Returns true if successfully marked, false if table is full
+    #[inline]
+    pub fn mark_dirty(&self, path: &str) -> bool {
+        let hash = fnv1a_hash(path);
+        if hash == 0 {
+            return false; // 0 is reserved for empty
+        }
+
+        let start_slot = (hash as usize) % DIRTY_TRACKER_SIZE;
+        for i in 0..DIRTY_TRACKER_SIZE {
+            let slot = (start_slot + i) % DIRTY_TRACKER_SIZE;
+            let current = self.slots[slot].load(Ordering::Acquire);
+
+            // Empty slot - try to claim it
+            if current == 0
+                && self.slots[slot]
+                    .compare_exchange(0, hash, Ordering::SeqCst, Ordering::Acquire)
+                    .is_ok()
+            {
+                return true;
+            }
+            // CAS failed or slot occupied, continue probing
+
+            // Already marked dirty
+            if current == hash {
+                return true;
+            }
+        }
+        false // Table full
+    }
+
+    /// Clear dirty status for a path
+    /// Called after staging file is committed to CAS
+    pub fn clear_dirty(&self, path: &str) {
+        let hash = fnv1a_hash(path);
+        if hash == 0 {
+            return;
+        }
+
+        let start_slot = (hash as usize) % DIRTY_TRACKER_SIZE;
+        for i in 0..DIRTY_TRACKER_SIZE {
+            let slot = (start_slot + i) % DIRTY_TRACKER_SIZE;
+            let current = self.slots[slot].load(Ordering::Acquire);
+
+            if current == 0 {
+                return; // Empty slot - not found
+            }
+
+            if current == hash {
+                // Found - clear it
+                self.slots[slot].store(0, Ordering::Release);
+                return;
+            }
+        }
+    }
+
+    /// Check if a path is dirty (has pending writes)
+    /// Used in stat/read to redirect to staging file
+    #[inline]
+    pub fn is_dirty(&self, path: &str) -> bool {
+        let hash = fnv1a_hash(path);
+        if hash == 0 {
+            return false;
+        }
+
+        let start_slot = (hash as usize) % DIRTY_TRACKER_SIZE;
+        for i in 0..DIRTY_TRACKER_SIZE {
+            let slot = (start_slot + i) % DIRTY_TRACKER_SIZE;
+            let current = self.slots[slot].load(Ordering::Acquire);
+
+            if current == 0 {
+                return false; // Empty slot - not found
+            }
+
+            if current == hash {
+                return true; // Found - is dirty
+            }
+        }
+        false
+    }
+
+    /// Get count of dirty entries (for debugging)
+    #[allow(dead_code)]
+    pub fn count(&self) -> usize {
+        self.slots
+            .iter()
+            .filter(|s| s.load(Ordering::Relaxed) != 0)
+            .count()
+    }
+}
+
 #[inline(always)]
 fn rdtsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
