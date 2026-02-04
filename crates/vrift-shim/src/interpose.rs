@@ -288,7 +288,7 @@ pub static IT_READLINK: Interpose = Interpose {
     old_func: real_readlink as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_RENAME: Interpose = Interpose {
     new_func: c_rename_bridge as _,
@@ -796,4 +796,3 @@ pub unsafe extern "C" fn fchownat(
 ) -> c_int {
     crate::syscalls::misc::fchownat_shim(dirfd, path, owner, group, flags)
 }
-
