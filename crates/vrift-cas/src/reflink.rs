@@ -98,6 +98,8 @@ fn try_reflink_linux(src: &Path, dst: &Path) -> Result<(), ReflinkError> {
 
         match err.raw_os_error() {
             Some(libc::EXDEV) => Err(ReflinkError::CrossDevice),
+            // EOPNOTSUPP and ENOTSUP have the same value on Linux, use allow to handle both platforms
+            #[allow(unreachable_patterns)]
             Some(libc::EOPNOTSUPP) | Some(libc::ENOTSUP) => Err(ReflinkError::NotSupported),
             _ => Err(ReflinkError::Io(err)),
         }
