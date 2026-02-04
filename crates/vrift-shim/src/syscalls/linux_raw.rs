@@ -1680,3 +1680,138 @@ pub unsafe fn raw_fchownat(
         }
     }
 }
+
+/// Raw truncate syscall
+#[inline(always)]
+pub unsafe fn raw_truncate(path: *const c_char, length: off_t) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 76i64, // SYS_truncate
+            in("rdi") path,
+            in("rsi") length as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 45i64, // SYS_truncate
+            in("x0") path,
+            in("x1") length as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
+/// Raw ftruncate syscall
+#[inline(always)]
+pub unsafe fn raw_ftruncate(fd: c_int, length: off_t) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 77i64, // SYS_ftruncate
+            in("rdi") fd as i64,
+            in("rsi") length as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 46i64, // SYS_ftruncate
+            in("x0") fd as i64,
+            in("x1") length as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
+/// Raw linkat syscall
+#[inline(always)]
+pub unsafe fn raw_linkat(
+    olddirfd: c_int,
+    oldpath: *const c_char,
+    newdirfd: c_int,
+    newpath: *const c_char,
+    flags: c_int,
+) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 265i64, // SYS_linkat
+            in("rdi") olddirfd as i64,
+            in("rsi") oldpath,
+            in("rdx") newdirfd as i64,
+            in("r10") newpath,
+            in("r8") flags as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 37i64, // SYS_linkat
+            in("x0") olddirfd as i64,
+            in("x1") oldpath,
+            in("x2") newdirfd as i64,
+            in("x3") newpath,
+            in("x4") flags as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}

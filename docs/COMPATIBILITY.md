@@ -145,8 +145,8 @@ All syscall gaps are categorized below. Each **Must Fix** item has or requires a
 
 | Syscall | Risk | Test | Status | Sprint |
 |:--------|:-----|:-----|:------:|:------:|
-| `exchangedata` | Atomic swap bypasses VFS | `test_gap_exchangedata.sh` | ⏳ Pending | S2 |
-| `fchown/fchownat` | Ownership bypass via FD | `test_gap_fchown_bypass.sh` | ❌ **Bypass Confirmed** | S1 |
+| `exchangedata` | Atomic swap bypasses VFS | `test_gap_exchangedata.sh` | ✅ **Fixed** | S2 |
+| `fchown/fchownat` | Ownership bypass via FD | `test_gap_fchown_bypass.sh` | ✅ **Fixed** | S1 |
 
 
 ### 🟡 Can Defer (P2-P3) — Non-blocking, Low Risk

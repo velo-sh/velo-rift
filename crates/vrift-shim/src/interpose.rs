@@ -765,3 +765,27 @@ pub unsafe extern "C" fn fchownat(
 ) -> c_int {
     crate::syscalls::misc::fchownat_shim(dirfd, path, owner, group, flags)
 }
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn truncate(path: *const c_char, length: off_t) -> c_int {
+    crate::syscalls::misc::truncate_shim(path, length)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn ftruncate(fd: c_int, length: off_t) -> c_int {
+    crate::syscalls::io::ftruncate_shim(fd, length)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn linkat(
+    olddirfd: c_int,
+    oldpath: *const c_char,
+    newdirfd: c_int,
+    newpath: *const c_char,
+    flags: c_int,
+) -> c_int {
+    crate::syscalls::misc::linkat_shim(olddirfd, oldpath, newdirfd, newpath, flags)
+}
