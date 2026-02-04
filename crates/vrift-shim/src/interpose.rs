@@ -21,13 +21,10 @@ use crate::syscalls::mmap::{mmap_shim, munmap_shim};
 #[cfg(target_os = "macos")]
 use crate::syscalls::path::realpath_shim;
 
-use libc::{c_char, c_int, c_long, mode_t};
+use libc::{c_char, c_int, mode_t};
 
 #[cfg(target_os = "macos")]
-use libc::{c_void, dirent, pid_t, size_t, ssize_t, timespec, timeval, DIR};
-
-#[cfg(target_os = "linux")]
-use libc::{size_t, ssize_t};
+use libc::{c_long, c_void, dirent, pid_t, size_t, ssize_t, timespec, timeval, DIR};
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
@@ -637,68 +634,4 @@ pub unsafe extern "C" fn openat64(
     mode: mode_t,
 ) -> c_int {
     crate::syscalls::open::velo_openat_impl(dirfd, path, flags, mode)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut libc::stat) -> c_int {
-    crate::syscalls::stat::velo_stat_impl(path, buf)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn stat64(path: *const c_char, buf: *mut libc::stat) -> c_int {
-    crate::syscalls::stat::velo_stat_impl(path, buf)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn lstat(path: *const c_char, buf: *mut libc::stat) -> c_int {
-    crate::syscalls::stat::velo_lstat_impl(path, buf)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn lstat64(path: *const c_char, buf: *mut libc::stat) -> c_int {
-    crate::syscalls::stat::velo_lstat_impl(path, buf)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut libc::stat) -> c_int {
-    crate::syscalls::stat::velo_fstat_impl(fd, buf)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn fstat64(fd: c_int, buf: *mut libc::stat) -> c_int {
-    crate::syscalls::stat::velo_fstat_impl(fd, buf)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn fstatat(
-    dirfd: c_int,
-    path: *const c_char,
-    buf: *mut libc::stat,
-    flags: c_int,
-) -> c_int {
-    crate::syscalls::stat::velo_fstatat_impl(dirfd, path, buf, flags)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn fstatat64(
-    dirfd: c_int,
-    path: *const c_char,
-    buf: *mut libc::stat,
-    flags: c_int,
-) -> c_int {
-    crate::syscalls::stat::velo_fstatat_impl(dirfd, path, buf, flags)
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
-    crate::syscalls::misc::velo_access_impl(path, mode)
 }
