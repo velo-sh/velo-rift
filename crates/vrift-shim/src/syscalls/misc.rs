@@ -482,7 +482,7 @@ pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
                     return Some(-1);
                 }
             }
-            return None;
+            // RFC-0052: Even if file not in manifest, still check VFS prefix below
         }
     }
 
