@@ -237,10 +237,10 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::tempdir;
 
-    #[tokio::test]
-    async fn test_manifest_upsert_and_get() {
+    fn create_test_handler() -> (CommandHandler, tempfile::TempDir) {
         let temp = tempdir().unwrap();
         let config = ProjectConfig::from_project_root(temp.path().to_path_buf());
 
@@ -248,7 +248,70 @@ mod tests {
         let vdir_path = temp.path().join("test.vdir");
         let vdir = VDir::create_or_open(&vdir_path).unwrap();
 
-        let mut handler = CommandHandler::new(config, vdir);
+        (CommandHandler::new(config, vdir), temp)
+    }
+
+    // ==================== Handshake Tests ====================
+
+    #[tokio::test]
+    async fn test_handshake_returns_server_version() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let response = handler
+            .handle_request(VeloRequest::Handshake {
+                client_version: "1.0.0".to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::HandshakeAck { server_version } => {
+                assert!(!server_version.is_empty());
+            }
+            _ => panic!("Expected HandshakeAck"),
+        }
+    }
+
+    // ==================== Status Tests ====================
+
+    #[tokio::test]
+    async fn test_status_returns_ready() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let response = handler.handle_request(VeloRequest::Status).await;
+
+        match response {
+            VeloResponse::StatusAck { status } => {
+                assert_eq!(status, "ready");
+            }
+            _ => panic!("Expected StatusAck"),
+        }
+    }
+
+    // ==================== RegisterWorkspace Tests ====================
+
+    #[tokio::test]
+    async fn test_register_workspace_returns_id() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let response = handler
+            .handle_request(VeloRequest::RegisterWorkspace {
+                project_root: "/tmp/myproject".to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::RegisterAck { workspace_id } => {
+                assert!(!workspace_id.is_empty());
+            }
+            _ => panic!("Expected RegisterAck"),
+        }
+    }
+
+    // ==================== ManifestUpsert Tests ====================
+
+    #[tokio::test]
+    async fn test_manifest_upsert_and_get() {
+        let (mut handler, _temp) = create_test_handler();
 
         // Upsert
         let entry = VnodeEntry {
@@ -279,8 +342,276 @@ mod tests {
         match response {
             VeloResponse::ManifestAck { entry: Some(e) } => {
                 assert_eq!(e.size, 1000);
+                assert_eq!(e.content_hash, [42; 32]);
+                assert_eq!(e.mtime, 1234567890);
             }
             _ => panic!("Expected ManifestAck with entry"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manifest_upsert_overwrites_existing() {
+        let (mut handler, _temp) = create_test_handler();
+
+        // First upsert
+        handler
+            .handle_request(VeloRequest::ManifestUpsert {
+                path: "file.txt".to_string(),
+                entry: VnodeEntry {
+                    content_hash: [0; 32],
+                    size: 100,
+                    mtime: 0,
+                    mode: 0,
+                    flags: 0,
+                    _pad: 0,
+                },
+            })
+            .await;
+
+        // Second upsert with different size
+        handler
+            .handle_request(VeloRequest::ManifestUpsert {
+                path: "file.txt".to_string(),
+                entry: VnodeEntry {
+                    content_hash: [0; 32],
+                    size: 200,
+                    mtime: 0,
+                    mode: 0,
+                    flags: 0,
+                    _pad: 0,
+                },
+            })
+            .await;
+
+        // Verify new size
+        let response = handler
+            .handle_request(VeloRequest::ManifestGet {
+                path: "file.txt".to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::ManifestAck { entry: Some(e) } => {
+                assert_eq!(e.size, 200);
+            }
+            _ => panic!("Expected 200"),
+        }
+    }
+
+    // ==================== ManifestGet Tests ====================
+
+    #[tokio::test]
+    async fn test_manifest_get_nonexistent_returns_none() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let response = handler
+            .handle_request(VeloRequest::ManifestGet {
+                path: "nonexistent.txt".to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::ManifestAck { entry: None } => {}
+            _ => panic!("Expected ManifestAck with None"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manifest_get_preserves_all_fields() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let original = VnodeEntry {
+            content_hash: [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31, 32,
+            ],
+            size: 123456789,
+            mtime: 9876543210,
+            mode: 0o755,
+            flags: 0x03,
+            _pad: 0,
+        };
+
+        handler
+            .handle_request(VeloRequest::ManifestUpsert {
+                path: "test.bin".to_string(),
+                entry: original.clone(),
+            })
+            .await;
+
+        let response = handler
+            .handle_request(VeloRequest::ManifestGet {
+                path: "test.bin".to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::ManifestAck { entry: Some(e) } => {
+                assert_eq!(e.content_hash, original.content_hash);
+                assert_eq!(e.size, original.size);
+                assert_eq!(e.mtime, original.mtime);
+                assert_eq!(e.mode, original.mode);
+                assert_eq!(e.flags, original.flags);
+            }
+            _ => panic!("Expected all fields preserved"),
+        }
+    }
+
+    // ==================== ManifestRemove Tests ====================
+
+    #[tokio::test]
+    async fn test_manifest_remove_clears_dirty() {
+        let (mut handler, _temp) = create_test_handler();
+
+        // Insert with dirty flag
+        handler
+            .handle_request(VeloRequest::ManifestUpsert {
+                path: "dirty.txt".to_string(),
+                entry: VnodeEntry {
+                    content_hash: [0; 32],
+                    size: 0,
+                    mtime: 0,
+                    mode: 0,
+                    flags: 0x01, // FLAG_DIRTY
+                    _pad: 0,
+                },
+            })
+            .await;
+
+        // Remove (clears dirty in current implementation)
+        let response = handler
+            .handle_request(VeloRequest::ManifestRemove {
+                path: "dirty.txt".to_string(),
+            })
+            .await;
+
+        assert!(matches!(
+            response,
+            VeloResponse::ManifestAck { entry: None }
+        ));
+    }
+
+    // ==================== ManifestReingest Tests ====================
+
+    #[tokio::test]
+    async fn test_reingest_hashes_and_stores_content() {
+        let (mut handler, temp) = create_test_handler();
+
+        // Create temp file
+        let temp_file = temp.path().join("staging").join("test.tmp");
+        std::fs::create_dir_all(temp_file.parent().unwrap()).unwrap();
+        let mut f = std::fs::File::create(&temp_file).unwrap();
+        f.write_all(b"Hello, World!").unwrap();
+        drop(f);
+
+        let response = handler
+            .handle_request(VeloRequest::ManifestReingest {
+                vpath: "hello.txt".to_string(),
+                temp_path: temp_file.to_str().unwrap().to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::ManifestAck { entry: Some(e) } => {
+                // Verify expected BLAKE3 hash of "Hello, World!"
+                let expected = blake3::hash(b"Hello, World!");
+                assert_eq!(e.content_hash, *expected.as_bytes());
+                assert_eq!(e.size, 13);
+            }
+            VeloResponse::Error(e) => panic!("Reingest failed: {}", e),
+            _ => panic!("Expected ManifestAck"),
+        }
+
+        // Verify entry is in VDir
+        let response = handler
+            .handle_request(VeloRequest::ManifestGet {
+                path: "hello.txt".to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::ManifestAck { entry: Some(e) } => {
+                assert_eq!(e.size, 13);
+            }
+            _ => panic!("Entry not found after reingest"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reingest_nonexistent_file_returns_error() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let response = handler
+            .handle_request(VeloRequest::ManifestReingest {
+                vpath: "test.txt".to_string(),
+                temp_path: "/nonexistent/path/file.tmp".to_string(),
+            })
+            .await;
+
+        match response {
+            VeloResponse::Error(msg) => {
+                assert!(msg.contains("Read error"));
+            }
+            _ => panic!("Expected Error for nonexistent file"),
+        }
+    }
+
+    // ==================== Unhandled Request Tests ====================
+
+    #[tokio::test]
+    async fn test_unhandled_request_returns_not_implemented() {
+        let (mut handler, _temp) = create_test_handler();
+
+        // CasGet is not yet implemented
+        let response = handler
+            .handle_request(VeloRequest::CasGet { hash: [0; 32] })
+            .await;
+
+        match response {
+            VeloResponse::Error(msg) => {
+                assert!(msg.contains("Not implemented"));
+            }
+            _ => panic!("Expected Not implemented error"),
+        }
+    }
+
+    // ==================== Multiple Operations Tests ====================
+
+    #[tokio::test]
+    async fn test_multiple_files_independent() {
+        let (mut handler, _temp) = create_test_handler();
+
+        // Insert multiple files
+        for i in 0..10 {
+            handler
+                .handle_request(VeloRequest::ManifestUpsert {
+                    path: format!("file_{}.txt", i),
+                    entry: VnodeEntry {
+                        content_hash: [0; 32],
+                        size: i as u64 * 100,
+                        mtime: 0,
+                        mode: 0,
+                        flags: 0,
+                        _pad: 0,
+                    },
+                })
+                .await;
+        }
+
+        // Verify each file
+        for i in 0..10 {
+            let response = handler
+                .handle_request(VeloRequest::ManifestGet {
+                    path: format!("file_{}.txt", i),
+                })
+                .await;
+
+            match response {
+                VeloResponse::ManifestAck { entry: Some(e) } => {
+                    assert_eq!(e.size, i as u64 * 100);
+                }
+                _ => panic!("File {} not found", i),
+            }
         }
     }
 }

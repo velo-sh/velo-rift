@@ -236,7 +236,11 @@ pub fn fnv1a_hash(s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::thread;
     use tempfile::tempdir;
+
+    // ==================== Basic Functionality ====================
 
     #[test]
     fn test_vdir_create_and_lookup() {
@@ -284,5 +288,314 @@ mod tests {
         // Clear dirty
         assert!(vdir.mark_dirty(fnv1a_hash("main.o"), false));
         assert!(!vdir.lookup(fnv1a_hash("main.o")).unwrap().is_dirty());
+    }
+
+    // ==================== Edge Cases ====================
+
+    #[test]
+    fn test_lookup_nonexistent_path() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let vdir = VDir::create_or_open(&path).unwrap();
+        assert!(vdir.lookup(fnv1a_hash("nonexistent.txt")).is_none());
+    }
+
+    #[test]
+    fn test_mark_dirty_nonexistent_returns_false() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+        assert!(!vdir.mark_dirty(fnv1a_hash("nonexistent.txt"), true));
+    }
+
+    #[test]
+    fn test_upsert_updates_existing_entry() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+
+        // Insert
+        let entry1 = VDirEntry {
+            path_hash: fnv1a_hash("file.txt"),
+            size: 100,
+            ..Default::default()
+        };
+        vdir.upsert(entry1).unwrap();
+        assert_eq!(vdir.lookup(fnv1a_hash("file.txt")).unwrap().size, 100);
+
+        // Update with new size
+        let entry2 = VDirEntry {
+            path_hash: fnv1a_hash("file.txt"),
+            size: 200,
+            ..Default::default()
+        };
+        vdir.upsert(entry2).unwrap();
+        assert_eq!(vdir.lookup(fnv1a_hash("file.txt")).unwrap().size, 200);
+    }
+
+    #[test]
+    fn test_entry_count_increments() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+        assert_eq!(vdir.header().entry_count, 0);
+
+        vdir.upsert(VDirEntry {
+            path_hash: fnv1a_hash("a.txt"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(vdir.header().entry_count, 1);
+
+        vdir.upsert(VDirEntry {
+            path_hash: fnv1a_hash("b.txt"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(vdir.header().entry_count, 2);
+
+        // Update existing - should NOT increment
+        vdir.upsert(VDirEntry {
+            path_hash: fnv1a_hash("a.txt"),
+            size: 999,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(vdir.header().entry_count, 2);
+    }
+
+    // ==================== Generation Counter ====================
+
+    #[test]
+    fn test_generation_increments_on_upsert() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+        let gen_before = vdir.header().generation;
+
+        vdir.upsert(VDirEntry {
+            path_hash: fnv1a_hash("file.txt"),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(vdir.header().generation, gen_before + 1);
+    }
+
+    #[test]
+    fn test_generation_increments_on_dirty_mark() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+
+        vdir.upsert(VDirEntry {
+            path_hash: fnv1a_hash("file.txt"),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let gen_before = vdir.header().generation;
+        vdir.mark_dirty(fnv1a_hash("file.txt"), true);
+        assert_eq!(vdir.header().generation, gen_before + 1);
+    }
+
+    // ==================== Persistence ====================
+
+    #[test]
+    fn test_vdir_persists_after_reopen() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        // Create and insert
+        {
+            let mut vdir = VDir::create_or_open(&path).unwrap();
+            vdir.upsert(VDirEntry {
+                path_hash: fnv1a_hash("persistent.txt"),
+                size: 42,
+                cas_hash: [7; 32],
+                ..Default::default()
+            })
+            .unwrap();
+            vdir.flush().unwrap();
+        }
+
+        // Reopen and verify
+        {
+            let vdir = VDir::create_or_open(&path).unwrap();
+            let entry = vdir.lookup(fnv1a_hash("persistent.txt"));
+            assert!(entry.is_some());
+            assert_eq!(entry.unwrap().size, 42);
+            assert_eq!(entry.unwrap().cas_hash, [7; 32]);
+        }
+    }
+
+    #[test]
+    fn test_vdir_header_valid_after_reopen() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        // Create with entries
+        {
+            let mut vdir = VDir::create_or_open(&path).unwrap();
+            for i in 0..10 {
+                vdir.upsert(VDirEntry {
+                    path_hash: fnv1a_hash(&format!("file_{}.txt", i)),
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+            vdir.flush().unwrap();
+        }
+
+        // Reopen and verify header
+        {
+            let vdir = VDir::create_or_open(&path).unwrap();
+            let header = vdir.header();
+            assert_eq!(header.magic, VDIR_MAGIC);
+            assert_eq!(header.version, VDIR_VERSION);
+            assert_eq!(header.entry_count, 10);
+            assert!(header.generation >= 10);
+        }
+    }
+
+    // ==================== Flag Operations ====================
+
+    #[test]
+    fn test_all_flags() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+
+        // Test DIR flag
+        let dir_entry = VDirEntry {
+            path_hash: fnv1a_hash("mydir/"),
+            flags: FLAG_DIR,
+            ..Default::default()
+        };
+        vdir.upsert(dir_entry).unwrap();
+        assert!(vdir.lookup(fnv1a_hash("mydir/")).unwrap().is_dir());
+
+        // Test SYMLINK flag
+        let symlink_entry = VDirEntry {
+            path_hash: fnv1a_hash("link"),
+            flags: FLAG_SYMLINK,
+            ..Default::default()
+        };
+        vdir.upsert(symlink_entry).unwrap();
+        let e = vdir.lookup(fnv1a_hash("link")).unwrap();
+        assert_eq!(e.flags & FLAG_SYMLINK, FLAG_SYMLINK);
+    }
+
+    // ==================== Stress Tests ====================
+
+    #[test]
+    fn test_insert_many_entries() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+
+        // Insert 1000 entries
+        for i in 0..1000 {
+            let entry = VDirEntry {
+                path_hash: fnv1a_hash(&format!("path/to/file_{}.rs", i)),
+                size: i as u64,
+                ..Default::default()
+            };
+            vdir.upsert(entry).unwrap();
+        }
+
+        assert_eq!(vdir.header().entry_count, 1000);
+
+        // Verify random lookups
+        assert_eq!(
+            vdir.lookup(fnv1a_hash("path/to/file_0.rs")).unwrap().size,
+            0
+        );
+        assert_eq!(
+            vdir.lookup(fnv1a_hash("path/to/file_500.rs")).unwrap().size,
+            500
+        );
+        assert_eq!(
+            vdir.lookup(fnv1a_hash("path/to/file_999.rs")).unwrap().size,
+            999
+        );
+    }
+
+    #[test]
+    fn test_concurrent_reads() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        // Setup: insert entries
+        {
+            let mut vdir = VDir::create_or_open(&path).unwrap();
+            for i in 0..100 {
+                vdir.upsert(VDirEntry {
+                    path_hash: fnv1a_hash(&format!("file_{}", i)),
+                    size: i as u64,
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+            vdir.flush().unwrap();
+        }
+
+        // Concurrent reads from multiple threads
+        let path = Arc::new(path);
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let p = Arc::clone(&path);
+                thread::spawn(move || {
+                    let vdir = VDir::create_or_open(&p).unwrap();
+                    for i in 0..100 {
+                        let entry = vdir.lookup(fnv1a_hash(&format!("file_{}", i)));
+                        assert!(entry.is_some());
+                        assert_eq!(entry.unwrap().size, i as u64);
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    // ==================== Hash Function Tests ====================
+
+    #[test]
+    fn test_fnv1a_deterministic() {
+        let hash1 = fnv1a_hash("src/main.rs");
+        let hash2 = fnv1a_hash("src/main.rs");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_fnv1a_different_paths_different_hashes() {
+        let hash1 = fnv1a_hash("a.txt");
+        let hash2 = fnv1a_hash("b.txt");
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_fnv1a_empty_string() {
+        let hash = fnv1a_hash("");
+        // FNV offset basis
+        assert_eq!(hash, 0xcbf29ce484222325);
+    }
+
+    #[test]
+    fn test_fnv1a_long_path() {
+        let long_path = "a/".repeat(500) + "file.txt";
+        let hash = fnv1a_hash(&long_path);
+        assert_ne!(hash, 0);
     }
 }
