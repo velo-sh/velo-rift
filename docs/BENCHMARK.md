@@ -1,13 +1,13 @@
 # VRift Performance Report
 
-Generated: 2026-02-05 20:52
+Generated: 2026-02-05 21:33
 
 ## Key Metrics
 
 | Dataset | Files | Blobs | Dedup | Speed |
 |---------|-------|-------|-------|-------|
-| xsmall | 16,667 | 13,783 | 17.3% | 165/s |
-| small | 23,982 | 20,590 | 14.1% | 129/s |
+| xsmall | 16,667 | 13,783 | 17.3% | 3,761/s |
+| small | 23,982 | 20,590 | 14.1% | 3,220/s |
 
 ## Deduplication Efficiency
 
@@ -20,5 +20,5 @@ Space savings from content-addressable storage:
 
 Performance when CAS already contains content:
 
-- **xsmall**: 10,918 files/sec (66.4x faster than first ingest)
-- **small**: 12,312 files/sec (95.3x faster than first ingest)
+- **xsmall**: 11,462 files/sec (3.0x faster than first ingest)
+- **small**: 10,943 files/sec (3.4x faster than first ingest)

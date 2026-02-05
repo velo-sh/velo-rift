@@ -14,7 +14,7 @@ echo "🔧 Auto-fixing clippy (machine-applicable only)..."
 # --fix: auto-apply fixes, --allow-staged: work on staged files
 # --allow-dirty: don't fail if there are unstaged changes
 # Only apply machine-applicable fixes (safe, no semantic changes)
-cargo clippy --fix --allow-staged --allow-dirty --workspace --exclude vrift-fuse --exclude vrift-shim --all-targets 2>/dev/null || true
+cargo clippy --fix --allow-staged --allow-dirty --workspace --exclude vrift-fuse --exclude vrift-shim --all-targets || true
 
 echo "🔍 Running cargo clippy check..."
 cargo clippy --workspace --exclude vrift-fuse --exclude vrift-shim --all-targets -- -D warnings || {
@@ -27,8 +27,8 @@ git add -u
 
 echo "🐍 Auto-fixing Python (Ruff)..."
 # Safe auto-fixes only (no semantic changes)
-uv run ruff check --fix tests/ scripts/ 2>/dev/null || true
-uv run ruff format tests/ scripts/ 2>/dev/null || true
+uv run ruff check --fix tests/ scripts/ || true
+uv run ruff format tests/ scripts/ || true
 
 echo "📝 Re-staging Python auto-fixed files..."
 git add -u
