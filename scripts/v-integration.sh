@@ -75,7 +75,7 @@ EOF
 # 3. Test Daemon Auto-Start & Ingest
 echo "[*] Testing Daemon Auto-Start & Ingest..."
 # Note: Ingest Solid Tier-2 doesn't use the daemon currently.
-vrift ingest "$DATA_DIR" --output "$MANIFEST"
+vrift ingest "$DATA_DIR" --prefix /data --output "$MANIFEST"
 
 # Trigger daemon auto-start via a command that requires it
 echo "[*] Triggering daemon auto-start via status check..."

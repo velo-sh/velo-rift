@@ -1691,7 +1691,7 @@ pub unsafe fn raw_truncate(path: *const c_char, length: off_t) -> c_int {
             "syscall",
             in("rax") 76i64, // SYS_truncate
             in("rdi") path,
-            in("rsi") length as i64,
+            in("rsi") length,
             lateout("rax") ret,
             lateout("rcx") _,
             lateout("r11") _,
@@ -1710,7 +1710,7 @@ pub unsafe fn raw_truncate(path: *const c_char, length: off_t) -> c_int {
             "svc #0",
             in("x8") 45i64, // SYS_truncate
             in("x0") path,
-            in("x1") length as i64,
+            in("x1") length,
             lateout("x0") ret,
         );
         if ret < 0 {

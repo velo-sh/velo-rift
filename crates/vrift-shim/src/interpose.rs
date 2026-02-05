@@ -716,11 +716,7 @@ pub unsafe extern "C" fn openat64(
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn chmod(path: *const c_char, mode: mode_t) -> c_int {
-    // Check VFS prefix to block mutations on VFS-managed files
-    if let Some(err) = crate::syscalls::misc::quick_block_vfs_mutation(path) {
-        return err;
-    }
-    crate::syscalls::linux_raw::raw_chmod(path, mode)
+    crate::syscalls::misc::chmod_shim(path, mode)
 }
 
 #[cfg(target_os = "linux")]
@@ -731,30 +727,20 @@ pub unsafe extern "C" fn fchmodat(
     mode: mode_t,
     flags: c_int,
 ) -> c_int {
-    // Check VFS prefix to block mutations on VFS-managed files
-    if let Some(err) = crate::syscalls::misc::quick_block_vfs_mutation(path) {
-        return err;
-    }
-    crate::syscalls::linux_raw::raw_fchmodat(dirfd, path, mode, flags)
+    crate::syscalls::misc::fchmodat_shim(dirfd, path, mode, flags)
 }
 
 // Linux unlink/rm interception - blocks VFS mutations
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
-    if let Some(err) = crate::syscalls::misc::quick_block_vfs_mutation(path) {
-        return err;
-    }
-    crate::syscalls::linux_raw::raw_unlink(path)
+    crate::syscalls::misc::unlink_shim(path)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
-    if let Some(err) = crate::syscalls::misc::quick_block_vfs_mutation(path) {
-        return err;
-    }
-    crate::syscalls::linux_raw::raw_unlinkat(dirfd, path, flags)
+    crate::syscalls::misc::unlinkat_shim(dirfd, path, flags)
 }
 
 // Linux utimensat/touch interception
@@ -766,20 +752,14 @@ pub unsafe extern "C" fn utimensat(
     times: *const libc::timespec,
     flags: c_int,
 ) -> c_int {
-    if let Some(err) = crate::syscalls::misc::quick_block_vfs_mutation(path) {
-        return err;
-    }
-    crate::syscalls::linux_raw::raw_utimensat(dirfd, path, times, flags)
+    crate::syscalls::misc::utimensat_shim(dirfd, path, times, flags)
 }
 
 // Linux utimes interception (for touch command)
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn utimes(path: *const c_char, times: *const libc::timeval) -> c_int {
-    if let Some(err) = crate::syscalls::misc::quick_block_vfs_mutation(path) {
-        return err;
-    }
-    crate::syscalls::linux_raw::raw_utimes(path, times)
+    crate::syscalls::misc::utimes_shim(path, times)
 }
 
 // P0-P1 Gap Fix: Linux fchown/fchownat exports
