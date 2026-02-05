@@ -189,11 +189,14 @@ pub fn ingest_solid_tier1_dedup(
     let metadata = file.metadata()?;
     let size = metadata.len();
 
-    // Acquire shared lock with retry
-    let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
-
-    // Tiered hash
-    let hash = tiered_hash(&locked_file, size)?;
+    // P3 Optimization: Try optimistic hash (no flock) for small read-only files
+    let hash = if let Some(h) = optimistic_hash_with_validation(&file, &metadata)? {
+        h
+    } else {
+        // Standard path: acquire flock for larger or writable files
+        let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
+        tiered_hash(&locked_file, size)?
+    };
     let hash_key = hex::encode(hash);
     let cas_target = cas_path(cas_root, &hash, size);
 
@@ -210,8 +213,7 @@ pub fn ingest_solid_tier1_dedup(
         link_or_clone_or_copy(source, &cas_target)?;
     }
 
-    // Drop the lock guard before modifying source
-    drop(locked_file);
+    // Lock (if acquired) is automatically dropped here
 
     // Always replace source with symlink (even if CAS blob already existed)
     fs::remove_file(source)?;
@@ -296,11 +298,14 @@ pub fn ingest_solid_tier2_dedup(
     let metadata = file.metadata()?;
     let size = metadata.len();
 
-    // Acquire shared lock with retry
-    let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
-
-    // Tiered hash
-    let hash = tiered_hash(&locked_file, size)?;
+    // P3 Optimization: Try optimistic hash (no flock) for small read-only files
+    let hash = if let Some(h) = optimistic_hash_with_validation(&file, &metadata)? {
+        h
+    } else {
+        // Standard path: acquire flock for larger or writable files
+        let locked_file = lock_with_retry(file, FlockArg::LockShared)?;
+        tiered_hash(&locked_file, size)?
+    };
     let hash_key = hex::encode(hash);
 
     // In-memory dedup: if hash already seen, skip filesystem write
