@@ -6,6 +6,7 @@
 # ROOT CAUSE: watch.rs Line 156-159 returns on ANY error
 #
 # This is a RACE CONDITION bug, not a .tmp file bug.
+# NOTE: Uses 3-second timeout per iteration to avoid hanging (BUG #3)
 # ==============================================================================
 
 set -euo pipefail
@@ -13,6 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VDIRD_BIN="$PROJECT_ROOT/target/release/vrift-vdird"
+TIMEOUT_SEC=3
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 
@@ -38,13 +40,18 @@ for i in $(seq 1 $ITERATIONS); do
     ) &
     STORM_PID=$!
     
-    # Start daemon during storm
+    # Start daemon during storm (with timeout to prevent hang - BUG #3)
     "$VDIRD_BIN" "$TEST_DIR" > "$TEST_DIR/log" 2>&1 &
     VDIRD_PID=$!
+    
+    # Timeout watchdog
+    ( sleep $TIMEOUT_SEC && kill -9 $VDIRD_PID 2>/dev/null ) &
+    WATCHDOG_PID=$!
     sleep 2
     
     kill $STORM_PID 2>/dev/null || true
     kill -9 $VDIRD_PID 2>/dev/null || true
+    kill $WATCHDOG_PID 2>/dev/null || true
     wait 2>/dev/null || true
     
     if grep -q "Watch exited\|Failed to start FS watch" "$TEST_DIR/log" 2>/dev/null; then

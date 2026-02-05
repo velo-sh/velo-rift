@@ -6,6 +6,7 @@
 # EXPECTED: FS Watch should NEVER process files under .vrift/
 #
 # If .vrift is properly ignored, daemon_state.tmp would never be watched
+# NOTE: Uses 5-second timeout to avoid hanging (BUG #3: daemon can hang)
 # ==============================================================================
 
 set -euo pipefail
@@ -13,6 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VDIRD_BIN="$PROJECT_ROOT/target/release/vrift-vdird"
+TIMEOUT_SEC=5
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 
@@ -35,9 +37,14 @@ mkdir -p "$TEST_DIR/.vrift"
 mkdir -p "$TEST_DIR/src"
 echo "int main(){}" > "$TEST_DIR/src/main.c"
 
-echo "📍 Starting vrift-vdird..."
+echo "📍 Starting vrift-vdird (with ${TIMEOUT_SEC}s timeout watchdog)..."
 "$VDIRD_BIN" "$TEST_DIR" > "$DAEMON_LOG" 2>&1 &
 VDIRD_PID=$!
+
+# Timeout watchdog to prevent hanging (BUG #3)
+( sleep $TIMEOUT_SEC && kill -9 $VDIRD_PID 2>/dev/null ) &
+WATCHDOG_PID=$!
+
 sleep 2
 
 echo "📍 Creating files in .vrift directory (should be IGNORED)..."
@@ -51,6 +58,7 @@ echo "// source" > "$TEST_DIR/src/app.c"
 sleep 1
 
 kill -9 $VDIRD_PID 2>/dev/null || true
+kill $WATCHDOG_PID 2>/dev/null || true
 wait $VDIRD_PID 2>/dev/null || true
 
 echo ""
