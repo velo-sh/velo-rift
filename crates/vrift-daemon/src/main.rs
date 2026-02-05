@@ -43,16 +43,20 @@ use vrift_ipc::{VeloRequest, VeloResponse};
 use vrift_manifest::lmdb::{AssetTier, LmdbManifest};
 
 // RFC-0043: Minimal registry for workspace discovery
+// TEMPORARILY DISABLED: Investigating UE blocking issues
+#[allow(dead_code)]
 #[derive(serde::Deserialize)]
 struct MinimalManifestEntry {
     project_root: PathBuf,
 }
 
+#[allow(dead_code)]
 #[derive(serde::Deserialize)]
 struct MinimalRegistry {
     manifests: std::collections::HashMap<String, MinimalManifestEntry>,
 }
 
+#[allow(dead_code)]
 fn load_registered_workspaces() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let path = PathBuf::from(home).join(".vrift/registry/manifests.json");
@@ -413,16 +417,17 @@ async fn start_daemon() -> Result<()> {
     });
 
     // RFC-0043: Warm up all registered workspaces on start so mmaps are ready for shims
-    {
-        for project_root in load_registered_workspaces() {
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                if let Err(e) = get_or_create_workspace(&state_clone, project_root).await {
-                    tracing::warn!("Failed to warm up workspace: {}", e);
-                }
-            });
-        }
-    }
+    // TEMPORARILY DISABLED: Investigating UE blocking issues
+    // {
+    //     for project_root in load_registered_workspaces() {
+    //         let state_clone = state.clone();
+    //         tokio::spawn(async move {
+    //             if let Err(e) = get_or_create_workspace(&state_clone, project_root).await {
+    //                 tracing::warn!("Failed to warm up workspace: {}", e);
+    //             }
+    //         });
+    //     }
+    // }
 
     loop {
         tokio::select! {
@@ -891,10 +896,15 @@ async fn handle_request(
             );
 
             // 4. Run parallel ingest in blocking task (Rayon would block tokio runtime)
+            tracing::info!(
+                "Collected {} files, starting parallel ingest in spawn_blocking...",
+                total_files
+            );
             let file_paths_clone = file_paths.clone();
             let cas_root_clone = cas_root.clone();
             let results = match tokio::task::spawn_blocking(move || {
-                parallel_ingest_with_progress(
+                tracing::info!("spawn_blocking: entering parallel_ingest_with_progress");
+                let r = parallel_ingest_with_progress(
                     &file_paths_clone,
                     &cas_root_clone,
                     mode,
@@ -902,7 +912,9 @@ async fn handle_request(
                     |_result, _idx| {
                         // Progress callback (could stream to client in future)
                     },
-                )
+                );
+                tracing::info!("spawn_blocking: parallel_ingest done, {} results", r.len());
+                r
             })
             .await
             {

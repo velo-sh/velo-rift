@@ -394,10 +394,8 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                 let is_phantom = mode.to_lowercase() == "phantom";
                 let is_tier1 = tier.to_lowercase() == "tier1";
 
-                match daemon::ingest_via_daemon(
-                    &directory, &output, threads, is_phantom, is_tier1, &directory,
-                )
-                .await
+                match daemon::ingest_via_daemon(&directory, &output, threads, is_phantom, is_tier1)
+                    .await
                 {
                     Ok(result) => {
                         let elapsed_secs = result.duration_ms as f64 / 1000.0;

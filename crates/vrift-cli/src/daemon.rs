@@ -148,6 +148,40 @@ pub async fn connect_to_daemon(project_root: &Path) -> Result<UnixStream> {
     }
 }
 
+/// Simple connection to daemon - only handshake, no workspace registration
+/// Used for standalone operations like IngestFullScan
+async fn connect_simple() -> Result<UnixStream> {
+    let mut stream = match UnixStream::connect(SOCKET_PATH).await {
+        Ok(s) => s,
+        Err(_) => {
+            tracing::info!("Daemon not running. Attempting to start...");
+            spawn_daemon()?;
+            let mut s = None;
+            for _ in 0..10 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                if let Ok(conn) = UnixStream::connect(SOCKET_PATH).await {
+                    s = Some(conn);
+                    break;
+                }
+            }
+            s.context("Failed to connect to daemon after starting it")?
+        }
+    };
+
+    // Only handshake - no workspace registration
+    let handshake = VeloRequest::Handshake {
+        client_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    send_request(&mut stream, handshake).await?;
+    let resp = read_response(&mut stream).await?;
+
+    match resp {
+        VeloResponse::HandshakeAck { .. } => Ok(stream),
+        VeloResponse::Error(e) => anyhow::bail!("Handshake failed: {}", e),
+        _ => anyhow::bail!("Unexpected handshake response"),
+    }
+}
+
 fn spawn_daemon() -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let bin_dir = current_exe.parent().context("Failed into get bin dir")?;
@@ -201,15 +235,16 @@ pub async fn read_response(stream: &mut UnixStream) -> Result<VeloResponse> {
 
 /// Ingest files via daemon (unified architecture)
 /// CLI becomes thin client, daemon handles all ingest logic
+/// Note: IngestFullScan is a standalone operation that doesn't require workspace registration
 pub async fn ingest_via_daemon(
     path: &Path,
     manifest_path: &Path,
     threads: Option<usize>,
     phantom: bool,
     tier1: bool,
-    project_root: &Path,
 ) -> Result<IngestResult> {
-    let mut stream = connect_to_daemon(project_root).await?;
+    // Use simple connection - IngestFullScan doesn't need workspace context
+    let mut stream = connect_simple().await?;
 
     let req = VeloRequest::IngestFullScan {
         path: path.to_string_lossy().to_string(),
