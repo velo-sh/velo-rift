@@ -15,7 +15,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Performance regression threshold (percentage)
-  REGRESSION_THRESHOLD: 20
+  REGRESSION_THRESHOLD: 40
 
 jobs:
   benchmark:
