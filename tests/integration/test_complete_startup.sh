@@ -8,10 +8,21 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VRIFT_CLI="$PROJECT_ROOT/target/release/vrift"
 VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
 VDIRD_BIN="$PROJECT_ROOT/target/release/vrift-vdird"
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+
+# Platform-specific shim detection
+OS=$(uname -s)
+if [ "$OS" == "Darwin" ]; then
+    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+    SHIM_ENV_NAME="DYLD_INSERT_LIBRARIES"
+else
+    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.so"
+    SHIM_ENV_NAME="LD_PRELOAD"
+fi
+
 TEST_WORKSPACE="/tmp/vrift_startup_test_$$"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+
 PASS=0; FAIL=0
 
 log_pass() { echo -e "   ${GREEN}✓ $1${NC}"; PASS=$((PASS+1)); }
@@ -69,25 +80,25 @@ echo "📍 STEP 3: Shim Injection"
 echo "═══════════════════════════════════════════════════════════════"
 export VRIFT_PROJECT_ROOT="$TEST_WORKSPACE"
 export VRIFT_INCEPTION=1
-export DYLD_INSERT_LIBRARIES="$SHIM_LIB"
+export "$SHIM_ENV_NAME"="$SHIM_LIB"
 if cat "$TEST_WORKSPACE/src/hello.c" 2>/dev/null | grep -q "int main"; then
     log_pass "Shim allows file read"
 else
     log_fail "Shim blocked file read"
 fi
 echo "shim_test" > "$TEST_WORKSPACE/shim_test.txt" && log_pass "Shim allows file write" || log_fail "Shim blocked write"
-unset DYLD_INSERT_LIBRARIES
+unset "$SHIM_ENV_NAME"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "📍 STEP 4: Compiler Workflow"
 echo "═══════════════════════════════════════════════════════════════"
-export DYLD_INSERT_LIBRARIES="$SHIM_LIB"
+export "$SHIM_ENV_NAME"="$SHIM_LIB"
 gcc -c "$TEST_WORKSPACE/src/hello.c" -o "$TEST_WORKSPACE/build/hello.o" 2>/dev/null && log_pass "GCC compile" || log_fail "GCC compile"
 gcc "$TEST_WORKSPACE/build/hello.o" -o "$TEST_WORKSPACE/build/hello" 2>/dev/null && log_pass "GCC link" || log_fail "GCC link"
 "$TEST_WORKSPACE/build/hello" && EXIT_CODE=$? || EXIT_CODE=$?
 [ $EXIT_CODE -eq 42 ] && log_pass "Binary runs (exit=$EXIT_CODE)" || log_fail "Binary wrong exit ($EXIT_CODE)"
-unset DYLD_INSERT_LIBRARIES VRIFT_PROJECT_ROOT VRIFT_INCEPTION
+unset "$SHIM_ENV_NAME" VRIFT_PROJECT_ROOT VRIFT_INCEPTION
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"

@@ -6,10 +6,16 @@ on:
     paths:
       - 'crates/vrift-cas/**'
       - 'crates/vrift-cli/**'
+      - 'crates/vrift-shim/**'
+      - 'crates/vrift-vdird/**'
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  # Performance regression threshold (percentage)
+  REGRESSION_THRESHOLD: 20
 
 jobs:
   benchmark:
@@ -20,6 +26,9 @@ jobs:
       
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
       
       - name: Build release
         run: cargo build --release -p vrift-cli
@@ -35,6 +44,13 @@ jobs:
             echo "content_$i" > "$dir/file_$i.txt"
           done
       
+      - name: Restore baseline
+        id: restore-baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/baseline.json
+          key: benchmark-baseline-${{ runner.os }}
+      
       - name: Run ingest benchmark
         id: benchmark
         run: |
@@ -42,18 +58,67 @@ jobs:
           CAS=$(mktemp -d)
           VRIFT="${{ github.workspace }}/target/release/vrift"
           
-          # Time the ingest
+          # Warm up run (ignore timing)
+          "$VRIFT" --the-source-root "$CAS" ingest /tmp/bench-test -o /tmp/warmup.bin 2>/dev/null || true
+          rm -rf "$CAS"/*
+          
+          # Timed run
           START=$(date +%s.%N)
           "$VRIFT" --the-source-root "$CAS" ingest /tmp/bench-test -o /tmp/manifest.bin
           END=$(date +%s.%N)
           
           TIME=$(echo "$END - $START" | bc)
           FILES=$(find /tmp/bench-test -type f | wc -l)
-          THROUGHPUT=$(echo "scale=0; $FILES / $TIME" | bc)
+          THROUGHPUT=$(echo "scale=2; $FILES / $TIME" | bc)
           
           echo "files=$FILES" >> $GITHUB_OUTPUT
           echo "time=$TIME" >> $GITHUB_OUTPUT
           echo "throughput=$THROUGHPUT" >> $GITHUB_OUTPUT
+          
+          # Save current metrics
+          echo "{\"throughput\": $THROUGHPUT, \"time\": $TIME, \"files\": $FILES}" > /tmp/current.json
+      
+      - name: Check for regression
+        id: regression
+        run: |
+          CURRENT_THROUGHPUT=${{ steps.benchmark.outputs.throughput }}
+          THRESHOLD=${{ env.REGRESSION_THRESHOLD }}
+          
+          if [ -f /tmp/baseline.json ]; then
+            BASELINE_THROUGHPUT=$(jq -r '.throughput' /tmp/baseline.json)
+            
+            # Calculate percentage change
+            CHANGE=$(echo "scale=2; (($CURRENT_THROUGHPUT - $BASELINE_THROUGHPUT) / $BASELINE_THROUGHPUT) * 100" | bc)
+            ABS_CHANGE=$(echo "$CHANGE" | tr -d '-')
+            
+            echo "baseline=$BASELINE_THROUGHPUT" >> $GITHUB_OUTPUT
+            echo "change=$CHANGE" >> $GITHUB_OUTPUT
+            
+            # Check for significant regression (negative change exceeds threshold)
+            IS_REGRESSION=$(echo "$CHANGE < -$THRESHOLD" | bc)
+            if [ "$IS_REGRESSION" -eq 1 ]; then
+              echo "status=REGRESSION" >> $GITHUB_OUTPUT
+              echo "::error::Performance regression detected! Throughput dropped by ${ABS_CHANGE}% (threshold: ${THRESHOLD}%)"
+              echo "::error::Baseline: ${BASELINE_THROUGHPUT} files/s, Current: ${CURRENT_THROUGHPUT} files/s"
+            else
+              echo "status=OK" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "status=NEW_BASELINE" >> $GITHUB_OUTPUT
+            echo "baseline=N/A" >> $GITHUB_OUTPUT
+            echo "change=N/A" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Update baseline (main branch only)
+        if: github.ref == 'refs/heads/main' && steps.regression.outputs.status != 'REGRESSION'
+        run: cp /tmp/current.json /tmp/baseline.json
+      
+      - name: Save baseline
+        if: github.ref == 'refs/heads/main' && steps.regression.outputs.status != 'REGRESSION'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/baseline.json
+          key: benchmark-baseline-${{ runner.os }}-${{ github.sha }}
       
       - name: Report results
         run: |
@@ -64,3 +129,19 @@ jobs:
           echo "| Files | ${{ steps.benchmark.outputs.files }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Time | ${{ steps.benchmark.outputs.time }}s |" >> $GITHUB_STEP_SUMMARY
           echo "| Throughput | ${{ steps.benchmark.outputs.throughput }} files/s |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Regression Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Baseline | ${{ steps.regression.outputs.baseline }} files/s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Change | ${{ steps.regression.outputs.change }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ steps.regression.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Fail on regression
+        if: steps.regression.outputs.status == 'REGRESSION'
+        run: |
+          echo "❌ Performance regression detected!"
+          echo "Throughput dropped from ${{ steps.regression.outputs.baseline }} to ${{ steps.benchmark.outputs.throughput }} files/s"
+          echo "Change: ${{ steps.regression.outputs.change }}%"
+          exit 1
