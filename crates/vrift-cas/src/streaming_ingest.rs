@@ -4,11 +4,9 @@
 //! - Scanner thread produces paths
 //! - Worker threads consume and process in parallel
 //!
-//! Memory efficient: Vec items with default 1024 capacity, grow if needed.
+//! Zero-copy: uses DirEntry::into_path() to transfer PathBuf ownership.
 
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -21,16 +19,13 @@ use crate::{CasError, IngestMode, IngestResult};
 /// Queue size (number of items in flight)
 const QUEUE_SIZE: usize = 1024;
 
-/// Default path buffer capacity (most paths fit in 1024 bytes)
-const DEFAULT_PATH_CAP: usize = 1024;
-
 /// Batch size for Rayon processing
 const BATCH_SIZE: usize = 256;
 
-/// Item in the ingest queue
+/// Item in the ingest queue - uses PathBuf directly (zero-copy from DirEntry)
 struct IngestItem {
-    /// Path bytes (Vec allows growth for long paths)
-    path: Vec<u8>,
+    /// Path from DirEntry::into_path() - no copy needed
+    path: Option<PathBuf>,
     /// File size from dirent (avoid redundant stat)
     file_size: u64,
 }
@@ -38,27 +33,25 @@ struct IngestItem {
 impl IngestItem {
     fn new() -> Self {
         Self {
-            path: Vec::with_capacity(DEFAULT_PATH_CAP),
+            path: None,
             file_size: 0,
         }
     }
 
-    fn set(&mut self, path: &Path, size: u64) {
-        self.path.clear();
-        self.path.extend_from_slice(path.as_os_str().as_bytes());
+    /// Take ownership of path from DirEntry (zero-copy)
+    fn set(&mut self, path: PathBuf, size: u64) {
+        self.path = Some(path);
         self.file_size = size;
     }
 
     fn path(&self) -> &Path {
-        Path::new(OsStr::from_bytes(&self.path))
+        self.path.as_deref().unwrap_or(Path::new(""))
     }
 
     fn recycle(&mut self) {
-        self.path.clear();
-        // Shrink back to default if it grew too large
-        if self.path.capacity() > DEFAULT_PATH_CAP * 2 {
-            self.path.shrink_to(DEFAULT_PATH_CAP);
-        }
+        // Just drop the path, no shrink needed
+        self.path = None;
+        self.file_size = 0;
     }
 }
 
@@ -143,9 +136,10 @@ pub fn streaming_ingest(
             .filter(|e| e.file_type().is_file())
         {
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let path = entry.into_path(); // zero-copy: take ownership
 
             let mut item = p.acquire();
-            item.set(entry.path(), size);
+            item.set(path, size);
 
             // Push with backpressure (spin if queue full)
             loop {
@@ -263,8 +257,9 @@ where
             .filter(|e| e.file_type().is_file())
         {
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let path = entry.into_path(); // zero-copy
             let mut item = p.acquire();
-            item.set(entry.path(), size);
+            item.set(path, size);
 
             loop {
                 match wq.push(item) {
@@ -366,21 +361,22 @@ mod tests {
     }
 
     #[test]
-    fn test_item_recycle() {
+    fn test_item_set_and_path() {
         let mut item = IngestItem::new();
-        assert_eq!(item.path.capacity(), DEFAULT_PATH_CAP);
+        assert!(item.path.is_none());
 
-        // Set normal path
-        item.set(Path::new("/short/path"), 100);
-        assert!(item.path.capacity() <= DEFAULT_PATH_CAP);
+        // Set path
+        item.set(PathBuf::from("/short/path"), 100);
+        assert_eq!(item.path().to_str().unwrap(), "/short/path");
+        assert_eq!(item.file_size, 100);
 
-        // Set very long path (forces growth)
+        // Set very long path
         let long_path = "/".to_string() + &"a".repeat(3000);
-        item.set(Path::new(&long_path), 100);
-        assert!(item.path.capacity() > DEFAULT_PATH_CAP);
+        item.set(PathBuf::from(&long_path), 200);
+        assert_eq!(item.path().to_str().unwrap(), long_path);
 
-        // Recycle should shrink
+        // Recycle should clear
         item.recycle();
-        assert!(item.path.capacity() <= DEFAULT_PATH_CAP * 2);
+        assert!(item.path.is_none());
     }
 }
