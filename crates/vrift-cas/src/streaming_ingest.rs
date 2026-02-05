@@ -79,32 +79,24 @@ pub fn streaming_ingest(
     });
 
     // Worker loop
-    let cas = cas_root.to_path_buf();
+    let cas = cas_root;
 
-    // Independent workers: each worker pops and processes items directly
+    // Independent workers: each pops and processes directly
     thread_pool.install(|| {
         rayon::scope(|s| {
             for _ in 0..num_threads {
-                let wq = Arc::clone(&work_queue);
-                let done = Arc::clone(&scanner_done);
-                let r = Arc::clone(&results);
-                let cas_path = cas.clone();
-
-                s.spawn(move |_| {
-                    loop {
-                        if let Some(path) = wq.pop() {
-                            let result = match mode {
-                                IngestMode::Phantom => ingest_phantom(&path, &cas_path),
-                                IngestMode::SolidTier1 => ingest_solid_tier1(&path, &cas_path),
-                                IngestMode::SolidTier2 => ingest_solid_tier2(&path, &cas_path),
-                            };
-                            r.lock().unwrap().push(result);
-                            // path automatically dropped here
-                        } else if done.load(Ordering::Acquire) && wq.is_empty() {
-                            break;
-                        } else {
-                            std::thread::yield_now();
-                        }
+                s.spawn(|_| loop {
+                    if let Some(path) = work_queue.pop() {
+                        let result = match mode {
+                            IngestMode::Phantom => ingest_phantom(&path, cas),
+                            IngestMode::SolidTier1 => ingest_solid_tier1(&path, cas),
+                            IngestMode::SolidTier2 => ingest_solid_tier2(&path, cas),
+                        };
+                        results.lock().unwrap().push(result);
+                    } else if scanner_done.load(Ordering::Acquire) && work_queue.is_empty() {
+                        break;
+                    } else {
+                        std::thread::yield_now();
                     }
                 });
             }
@@ -174,31 +166,24 @@ where
     });
 
     // Workers
-    let cas = cas_root.to_path_buf();
+    let cas = cas_root;
 
     thread_pool.install(|| {
         rayon::scope(|s| {
             for _ in 0..num_threads {
-                let wq = Arc::clone(&work_queue);
-                let done = Arc::clone(&scanner_done);
-                let r = Arc::clone(&results);
-                let cnt = Arc::clone(&counter);
-                let cb = Arc::clone(&on_progress);
-                let cas_path = cas.clone();
-
-                s.spawn(move |_| loop {
-                    if let Some(path) = wq.pop() {
+                s.spawn(|_| loop {
+                    if let Some(path) = work_queue.pop() {
                         let result = match mode {
-                            IngestMode::Phantom => ingest_phantom(&path, &cas_path),
-                            IngestMode::SolidTier1 => ingest_solid_tier1(&path, &cas_path),
-                            IngestMode::SolidTier2 => ingest_solid_tier2(&path, &cas_path),
+                            IngestMode::Phantom => ingest_phantom(&path, cas),
+                            IngestMode::SolidTier1 => ingest_solid_tier1(&path, cas),
+                            IngestMode::SolidTier2 => ingest_solid_tier2(&path, cas),
                         };
 
-                        let idx = cnt.fetch_add(1, Ordering::Relaxed);
-                        cb(&result, idx);
+                        let idx = counter.fetch_add(1, Ordering::Relaxed);
+                        on_progress(&result, idx);
 
-                        r.lock().unwrap().push(result);
-                    } else if done.load(Ordering::Acquire) && wq.is_empty() {
+                        results.lock().unwrap().push(result);
+                    } else if scanner_done.load(Ordering::Acquire) && work_queue.is_empty() {
                         break;
                     } else {
                         std::thread::yield_now();
