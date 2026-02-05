@@ -150,8 +150,12 @@ impl Default for IngestConfig {
         Self {
             threads: None,
             default_tier: "tier2".to_string(),
-            // Only essential system directories - users can add more in config
-            ignore_patterns: vec![".vrift".to_string()],
+            // System and junk files - can be customized in .vrift/config.toml
+            ignore_patterns: vec![
+                ".git".to_string(),      // Version control
+                ".vrift".to_string(),    // Vrift system directory
+                ".DS_Store".to_string(), // macOS junk
+            ],
         }
     }
 }
