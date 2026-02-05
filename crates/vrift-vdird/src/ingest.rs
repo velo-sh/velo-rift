@@ -194,17 +194,19 @@ impl IngestHandler {
         let rel_path = self.to_manifest_key(path);
         let tier = self.classify_tier(&rel_path);
 
-        // Store file content to CAS and get hash
-        match self.cas.store_file(path) {
-            Ok(content_hash) => {
+        // Zero-copy ingest: reflink → hardlink → copy (RFC-0040)
+        use vrift_cas::ingest_solid_tier2;
+
+        match ingest_solid_tier2(path, self.cas.root()) {
+            Ok(result) => {
                 // Get metadata for manifest entry
                 match std::fs::metadata(path) {
                     Ok(meta) => {
                         use std::os::unix::fs::MetadataExt;
 
                         let vnode = vrift_ipc::VnodeEntry {
-                            content_hash,
-                            size: meta.size(),
+                            content_hash: result.hash,
+                            size: result.size,
                             mtime: meta.mtime() as u64,
                             mode: meta.mode(),
                             flags: 0,
@@ -216,10 +218,11 @@ impl IngestHandler {
 
                         info!(
                             path = %rel_path,
-                            size = meta.size(),
+                            size = result.size,
                             tier = ?tier,
-                            hash = %vrift_cas::CasStore::hash_to_hex(&content_hash)[..8],
-                            "Ingest: file stored to CAS and registered in manifest"
+                            hash = %vrift_cas::CasStore::hash_to_hex(&result.hash)[..8],
+                            was_new = result.was_new,
+                            "Ingest: file stored to CAS (zero-copy)"
                         );
                     }
                     Err(e) => {

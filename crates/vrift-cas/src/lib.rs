@@ -305,25 +305,11 @@ impl CasStore {
 
     /// Store a file in the CAS by reading from the filesystem.
     ///
-    /// Optimized for both small and large files:
-    /// - Small files (<= 1MB): single read into memory
-    /// - Large files (> 1MB): mmap to avoid double read
+    /// NOTE: For high-performance zero-copy ingest, use `ingest_solid_tier2`
+    /// from `zero_copy_ingest` module instead. This method is a simple fallback.
     pub fn store_file<P: AsRef<Path>>(&self, path: P) -> Result<Blake3Hash> {
-        let path = path.as_ref();
-        let metadata = fs::metadata(path)?;
-        let size = metadata.len();
-
-        // Small file optimization: single read
-        const MMAP_THRESHOLD: u64 = 1024 * 1024; // 1MB
-        if size <= MMAP_THRESHOLD {
-            let data = fs::read(path)?;
-            return self.store(&data);
-        }
-
-        // Large file optimization: mmap + streaming hash
-        let file = File::open(path)?;
-        let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(io::Error::other)?;
-        self.store(&mmap)
+        let data = fs::read(path)?;
+        self.store(&data)
     }
 
     /// Retrieve bytes from the CAS by hash.
