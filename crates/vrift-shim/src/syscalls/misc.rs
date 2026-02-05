@@ -410,12 +410,15 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
+        // During early init, use quick check but allow non-prefix paths
         if let Some(err) = quick_block_vfs_mutation(path) {
             return err;
         }
         return crate::syscalls::linux_raw::raw_unlink(path);
     }
-    block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_unlink(path))
+    // RFC-0039: Allow unlink if file is NOT in manifest (cross-domain mv cleanup)
+    // Only block unlink on files that ARE in the manifest (protected VFS entries)
+    block_existing_vfs_entry(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_unlink(path))
 }
 
 #[no_mangle]
@@ -442,7 +445,8 @@ pub unsafe extern "C" fn unlinkat_shim(dirfd: c_int, path: *const c_char, flags:
             }
             return crate::syscalls::linux_raw::raw_unlinkat(dirfd, path, flags);
         }
-        block_vfs_mutation(path)
+        // RFC-0039: Allow unlink if file is NOT in manifest (cross-domain mv cleanup)
+        block_existing_vfs_entry(path)
             .unwrap_or_else(|| crate::syscalls::linux_raw::raw_unlinkat(dirfd, path, flags))
     }
 }
