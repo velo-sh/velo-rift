@@ -82,6 +82,8 @@ pub enum VeloRequest {
         path: String,
         /// Output manifest path
         manifest_path: String,
+        /// CAS root directory (TheSource)
+        cas_root: String,
         /// Number of threads (None = auto)
         threads: Option<usize>,
         /// Use Phantom mode (move instead of link)

@@ -838,6 +838,7 @@ async fn handle_request(
         VeloRequest::IngestFullScan {
             path,
             manifest_path,
+            cas_root,
             threads,
             phantom,
             tier1,
@@ -852,6 +853,7 @@ async fn handle_request(
             tracing::info!(
                 path = %path,
                 manifest = %manifest_path,
+                cas_root = %cas_root,
                 threads = ?threads,
                 phantom = phantom,
                 tier1 = tier1,
@@ -889,11 +891,8 @@ async fn handle_request(
                 IngestMode::SolidTier2
             };
 
-            // 3. Get CAS path
-            let cas_root = vrift_manifest::normalize_path(
-                &std::env::var("VR_THE_SOURCE")
-                    .unwrap_or_else(|_| "~/.vrift/the_source".to_string()),
-            );
+            // 3. Use CAS path from request (not env var)
+            let cas_root_path = vrift_manifest::normalize_path(&cas_root);
 
             // 4. Run parallel ingest in blocking task (Rayon would block tokio runtime)
             tracing::info!(
@@ -901,7 +900,7 @@ async fn handle_request(
                 total_files
             );
             let file_paths_clone = file_paths.clone();
-            let cas_root_clone = cas_root.clone();
+            let cas_root_clone = cas_root_path.clone();
             let results = match tokio::task::spawn_blocking(move || {
                 tracing::info!("spawn_blocking: entering parallel_ingest_with_progress");
                 let r = parallel_ingest_with_progress(

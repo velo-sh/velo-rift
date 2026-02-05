@@ -73,7 +73,7 @@ run_benchmark() {
     
     echo -n "Ingest: "
     START=$(python3 -c "import time; print(time.time())")
-    "$VRIFT" --the-source-root "$CAS" ingest node_modules -o /tmp/m.bin
+    "$VRIFT" --the-source-root "$CAS" ingest node_modules --via-daemon -o /tmp/m.bin
     END=$(python3 -c "import time; print(time.time())")
     
     TIME=$(python3 -c "print(f'{$END - $START:.2f}s')")

@@ -56,6 +56,7 @@ impl CommandHandler {
             VeloRequest::IngestFullScan {
                 path,
                 manifest_path,
+                cas_root: _, // vdird uses config.cas_path instead
                 threads,
                 phantom,
                 tier1,

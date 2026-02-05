@@ -239,16 +239,24 @@ pub async fn read_response(stream: &mut UnixStream) -> Result<VeloResponse> {
 pub async fn ingest_via_daemon(
     path: &Path,
     manifest_path: &Path,
+    cas_root: &Path,
     threads: Option<usize>,
     phantom: bool,
     tier1: bool,
 ) -> Result<IngestResult> {
+    // Canonicalize paths before sending to daemon (daemon's cwd may differ)
+    let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let abs_cas = cas_root
+        .canonicalize()
+        .unwrap_or_else(|_| cas_root.to_path_buf());
+
     // Use simple connection - IngestFullScan doesn't need workspace context
     let mut stream = connect_simple().await?;
 
     let req = VeloRequest::IngestFullScan {
-        path: path.to_string_lossy().to_string(),
+        path: abs_path.to_string_lossy().to_string(),
         manifest_path: manifest_path.to_string_lossy().to_string(),
+        cas_root: abs_cas.to_string_lossy().to_string(),
         threads,
         phantom,
         tier1,
