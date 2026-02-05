@@ -190,6 +190,7 @@ def benchmark_vrift_ingest(
         # Parse actual ingest time: "VRift Complete in X.XXs"
         if "Complete in" in line:
             import re
+
             match = re.search(r"(\d+\.?\d*)\s*s", line)
             if match:
                 actual_duration = float(match.group(1))

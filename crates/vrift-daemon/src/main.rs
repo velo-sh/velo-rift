@@ -828,6 +828,10 @@ async fn handle_request(
                 VeloResponse::Error("Workspace not registered".to_string())
             }
         }
+        // IngestFullScan is handled by vDird (per-project daemon), not global daemon
+        VeloRequest::IngestFullScan { .. } => VeloResponse::Error(
+            "IngestFullScan should be sent to vDird, not global daemon".to_string(),
+        ),
     }
 }
 

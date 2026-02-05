@@ -75,6 +75,20 @@ pub enum VeloRequest {
         /// The absolute path to the project root
         project_root: String,
     },
+    /// Full scan ingest request (CLI → vDird)
+    /// CLI becomes thin client, vDird handles all ingest logic
+    IngestFullScan {
+        /// Path to ingest (directory)
+        path: String,
+        /// Output manifest path
+        manifest_path: String,
+        /// Number of threads (None = auto)
+        threads: Option<usize>,
+        /// Use Phantom mode (move instead of link)
+        phantom: bool,
+        /// Use Tier-1 mode (immutable)
+        tier1: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +153,21 @@ pub enum VeloResponse {
     /// Acknowledge workspace registration
     RegisterAck {
         workspace_id: String,
+    },
+    /// Ingest completion acknowledgement
+    IngestAck {
+        /// Total files processed
+        files: u64,
+        /// Unique blobs stored
+        blobs: u64,
+        /// New bytes stored
+        new_bytes: u64,
+        /// Total bytes processed
+        total_bytes: u64,
+        /// Duration in milliseconds
+        duration_ms: u64,
+        /// Manifest path
+        manifest_path: String,
     },
     Error(String),
 }

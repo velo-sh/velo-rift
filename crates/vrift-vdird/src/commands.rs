@@ -53,6 +53,17 @@ impl CommandHandler {
                 self.handle_reingest(&vpath, &temp_path).await
             }
 
+            VeloRequest::IngestFullScan {
+                path,
+                manifest_path,
+                threads,
+                phantom,
+                tier1,
+            } => {
+                self.handle_ingest_full_scan(&path, &manifest_path, threads, phantom, tier1)
+                    .await
+            }
+
             // Not yet implemented - forward to future handlers
             _ => {
                 warn!(?request, "Unhandled request type");
@@ -217,6 +228,140 @@ impl CommandHandler {
                 Err(anyhow::anyhow!("Ingestion failed: {}", e))
             }
         }
+    }
+
+    /// Handle IngestFullScan - unified ingest through daemon
+    /// CLI sends this request instead of doing ingest itself
+    async fn handle_ingest_full_scan(
+        &self,
+        path: &str,
+        manifest_path: &str,
+        threads: Option<usize>,
+        phantom: bool,
+        tier1: bool,
+    ) -> VeloResponse {
+        use std::time::Instant;
+        use vrift_cas::{parallel_ingest_with_progress, IngestMode};
+        use walkdir::WalkDir;
+
+        let source_path = PathBuf::from(path);
+        let manifest_out = PathBuf::from(manifest_path);
+
+        info!(
+            path = %path,
+            manifest = %manifest_path,
+            threads = ?threads,
+            phantom = phantom,
+            tier1 = tier1,
+            "Starting full scan ingest"
+        );
+
+        let start = Instant::now();
+
+        // 1. Collect files
+        let file_paths: Vec<PathBuf> = WalkDir::new(&source_path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.path().to_path_buf())
+            .collect();
+
+        let total_files = file_paths.len() as u64;
+        if total_files == 0 {
+            return VeloResponse::IngestAck {
+                files: 0,
+                blobs: 0,
+                new_bytes: 0,
+                total_bytes: 0,
+                duration_ms: 0,
+                manifest_path: manifest_path.to_string(),
+            };
+        }
+
+        // 2. Determine mode
+        let mode = if phantom {
+            IngestMode::Phantom
+        } else if tier1 {
+            IngestMode::SolidTier1
+        } else {
+            IngestMode::SolidTier2
+        };
+
+        // 3. Run parallel ingest
+        let results = parallel_ingest_with_progress(
+            &file_paths,
+            &self.config.cas_path,
+            mode,
+            threads,
+            |_result, _idx| {
+                // Progress callback (could stream to client in future)
+            },
+        );
+
+        // 4. Collect stats
+        let mut total_bytes = 0u64;
+        let mut new_bytes = 0u64;
+        let mut unique_blobs = 0u64;
+
+        for r in results.iter().flatten() {
+            total_bytes += r.size;
+            if r.was_new {
+                unique_blobs += 1;
+                new_bytes += r.size;
+            }
+        }
+
+        let duration = start.elapsed();
+
+        // 5. Build and write manifest (using vrift_manifest if available)
+        // For now, just write a simple binary manifest
+        if let Err(e) = self.write_manifest(&manifest_out, &file_paths, &results) {
+            return VeloResponse::Error(format!("Failed to write manifest: {}", e));
+        }
+
+        info!(
+            files = total_files,
+            blobs = unique_blobs,
+            new_bytes = new_bytes,
+            duration_ms = duration.as_millis() as u64,
+            "Full scan ingest complete"
+        );
+
+        VeloResponse::IngestAck {
+            files: total_files,
+            blobs: unique_blobs,
+            new_bytes,
+            total_bytes,
+            duration_ms: duration.as_millis() as u64,
+            manifest_path: manifest_path.to_string(),
+        }
+    }
+
+    /// Write manifest file from ingest results
+    fn write_manifest(
+        &self,
+        manifest_path: &Path,
+        _file_paths: &[PathBuf],
+        results: &[Result<vrift_cas::IngestResult, vrift_cas::CasError>],
+    ) -> Result<()> {
+        use std::io::Write;
+
+        // Simple binary manifest: count + entries
+        let entries: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+
+        let mut file = fs::File::create(manifest_path)?;
+
+        // Write count
+        let count = entries.len() as u32;
+        file.write_all(&count.to_le_bytes())?;
+
+        // Write entries (hash + size)
+        for entry in entries {
+            file.write_all(&entry.hash)?;
+            file.write_all(&entry.size.to_le_bytes())?;
+        }
+
+        Ok(())
     }
 }
 

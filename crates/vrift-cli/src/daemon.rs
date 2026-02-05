@@ -73,6 +73,7 @@ pub async fn check_blob(hash: [u8; 32], project_root: &Path) -> Result<bool> {
     }
 }
 
+#[allow(dead_code)]
 pub async fn notify_blob(hash: [u8; 32], size: u64, project_root: &Path) -> Result<()> {
     if let Ok(mut stream) = connect_to_daemon(project_root).await {
         let req = VeloRequest::CasInsert { hash, size };
@@ -196,4 +197,61 @@ pub async fn read_response(stream: &mut UnixStream) -> Result<VeloResponse> {
 
     let resp = bincode::deserialize(&buf)?;
     Ok(resp)
+}
+
+/// Ingest files via daemon (unified architecture)
+/// CLI becomes thin client, daemon handles all ingest logic
+pub async fn ingest_via_daemon(
+    path: &Path,
+    manifest_path: &Path,
+    threads: Option<usize>,
+    phantom: bool,
+    tier1: bool,
+    project_root: &Path,
+) -> Result<IngestResult> {
+    let mut stream = connect_to_daemon(project_root).await?;
+
+    let req = VeloRequest::IngestFullScan {
+        path: path.to_string_lossy().to_string(),
+        manifest_path: manifest_path.to_string_lossy().to_string(),
+        threads,
+        phantom,
+        tier1,
+    };
+
+    tracing::info!("Requesting daemon to ingest: {:?}", path);
+    send_request(&mut stream, req).await?;
+
+    let resp = read_response(&mut stream).await?;
+    match resp {
+        VeloResponse::IngestAck {
+            files,
+            blobs,
+            new_bytes,
+            total_bytes,
+            duration_ms,
+            manifest_path,
+        } => Ok(IngestResult {
+            files,
+            blobs,
+            new_bytes,
+            total_bytes,
+            duration_ms,
+            manifest_path,
+        }),
+        VeloResponse::Error(e) => anyhow::bail!("Daemon ingest failed: {}", e),
+        _ => anyhow::bail!("Unexpected response from daemon: {:?}", resp),
+    }
+}
+
+/// Result from daemon ingest
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct IngestResult {
+    pub files: u64,
+    pub blobs: u64,
+    pub new_bytes: u64,
+    pub total_bytes: u64,
+    pub duration_ms: u64,
+    pub manifest_path: String,
 }

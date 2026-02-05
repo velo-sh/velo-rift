@@ -32,6 +32,7 @@ libc = "0.2"
 # Utilities
 hex = "0.4"
 dirs = "5"
+walkdir = "2"
 
 # RFC-0039: FS Watch for Live Ingest (Layer 2)
 # Use fsevent on macOS (kqueue has panic bugs in notify-rs kqueue crate)

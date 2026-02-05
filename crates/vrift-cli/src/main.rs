@@ -91,6 +91,10 @@ enum Commands {
         /// Show files excluded by security filter
         #[arg(long)]
         show_excluded: bool,
+
+        /// Use daemon for ingest (unified architecture: CLI is thin client)
+        #[arg(long)]
+        via_daemon: bool,
     },
 
     /// Execute a command with VeloVFS virtualization
@@ -375,6 +379,7 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             tier,
             no_security_filter,
             show_excluded,
+            via_daemon,
         } => {
             let (mode, tier) = {
                 let config = vrift_config::config();
@@ -384,19 +389,57 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                 )
             };
 
-            cmd_ingest(
-                &cas_root,
-                &directory,
-                &output,
-                prefix.as_deref(),
-                parallel,
-                threads,
-                &mode,
-                &tier,
-                !no_security_filter,
-                show_excluded,
-            )
-            .await
+            // Unified architecture: CLI as thin client
+            if via_daemon {
+                let is_phantom = mode.to_lowercase() == "phantom";
+                let is_tier1 = tier.to_lowercase() == "tier1";
+
+                match daemon::ingest_via_daemon(
+                    &directory, &output, threads, is_phantom, is_tier1, &directory,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        let elapsed_secs = result.duration_ms as f64 / 1000.0;
+                        let files_per_sec = if elapsed_secs > 0.0 {
+                            result.files as f64 / elapsed_secs
+                        } else {
+                            0.0
+                        };
+                        let dedup_ratio = if result.files > 0 {
+                            100.0 * (1.0 - (result.blobs as f64 / result.files as f64))
+                        } else {
+                            0.0
+                        };
+
+                        println!();
+                        println!("╔════════════════════════════════════════╗");
+                        println!("║  ✅ VRift Complete (via daemon)        ║");
+                        println!("╚════════════════════════════════════════╝");
+                        println!();
+                        println!("   📁 {} files → {} blobs", result.files, result.blobs);
+                        println!("   📊 {:.1}% dedup", dedup_ratio);
+                        println!("   ⚡ {:.0} files/sec", files_per_sec);
+                        println!("   📄 Manifest: {}", result.manifest_path);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                cmd_ingest(
+                    &cas_root,
+                    &directory,
+                    &output,
+                    prefix.as_deref(),
+                    parallel,
+                    threads,
+                    &mode,
+                    &tier,
+                    !no_security_filter,
+                    show_excluded,
+                )
+                .await
+            }
         }
         Commands::Run {
             manifest,
