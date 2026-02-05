@@ -164,24 +164,32 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_ignores_git() {
+    fn test_scan_with_custom_ignore() {
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
 
-        // Create .git directory
-        let git_dir = root.join(".git");
-        fs::create_dir(&git_dir).unwrap();
-        fs::write(git_dir.join("config"), "git config").unwrap();
+        // Create custom directory
+        let custom_dir = root.join("custom");
+        fs::create_dir(&custom_dir).unwrap();
+        fs::write(custom_dir.join("file.txt"), "content").unwrap();
 
-        // Scan
-        let scanner = CompensationScanner::new(root, SystemTime::UNIX_EPOCH);
+        // Create normal file
+        fs::write(root.join("normal.txt"), "content").unwrap();
+
+        // Scanner with custom ignore patterns
+        let mut scanner = CompensationScanner::new(root, SystemTime::UNIX_EPOCH);
+        scanner.config.ignore =
+            crate::ignore::IgnoreMatcher::with_patterns(&["custom".to_string()]);
         let events = scanner.scan();
 
-        // Should not include .git files
+        // Should include normal.txt but not custom/
+        assert!(events.iter().any(
+            |e| matches!(e, IngestEvent::FileChanged { path } if path.ends_with("normal.txt"))
+        ));
         assert!(events.iter().all(|e| {
             match e {
-                IngestEvent::FileChanged { path } => !path.to_string_lossy().contains(".git"),
-                IngestEvent::DirCreated { path } => !path.to_string_lossy().contains(".git"),
+                IngestEvent::FileChanged { path } => !path.to_string_lossy().contains("custom"),
+                IngestEvent::DirCreated { path } => !path.to_string_lossy().contains("custom"),
                 _ => true,
             }
         }));

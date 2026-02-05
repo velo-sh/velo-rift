@@ -159,11 +159,9 @@ impl Default for IngestConfig {
             dedup_window_ms: 200,
             batch_size: 10,
             batch_timeout_ms: 100,
-            // Sensible defaults - user can override in config
+            // Minimal defaults - user configures project-specific patterns
             ignore_patterns: vec![
                 ".vrift".to_string(),    // Vrift system directory (always needed)
-                ".git".to_string(),      // Git directory (almost always needed)
-                "target".to_string(),    // Rust build output
                 ".DS_Store".to_string(), // macOS junk
             ],
         }

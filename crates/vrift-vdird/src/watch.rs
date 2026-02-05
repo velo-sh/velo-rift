@@ -214,8 +214,8 @@ mod tests {
     #[test]
     fn test_watch_config_default() {
         let config = WatchConfig::default();
-        // Test that default ignore patterns include .git and target
-        assert!(config.ignore.should_ignore(Path::new(".git")));
-        assert!(config.ignore.should_ignore(Path::new("target")));
+        // Test that actual defaults are in place (NOT .git or target - those are user-configured)
+        assert!(config.ignore.should_ignore(Path::new(".vrift")));
+        assert!(config.ignore.should_ignore(Path::new(".DS_Store")));
     }
 }

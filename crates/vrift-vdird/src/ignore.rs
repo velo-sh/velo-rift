@@ -67,8 +67,8 @@ mod tests {
 
     #[test]
     fn test_ignore_git() {
-        let matcher = IgnoreMatcher::new();
-        // .git is in config defaults
+        // Use explicit patterns - .git is NOT in code defaults
+        let matcher = IgnoreMatcher::with_patterns(&[".git".to_string()]);
         assert!(matcher.should_ignore(&PathBuf::from("/project/.git/config")));
     }
 
