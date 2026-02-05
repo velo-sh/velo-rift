@@ -195,7 +195,7 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
 
     let socket_handle = socket::run_listener(config, vdir);
 
-    // Wait for all tasks
+    // Wait for any task to complete, or signal for graceful shutdown
     tokio::select! {
         _ = consumer_handle => {
             info!("Consumer exited");
@@ -208,6 +208,9 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
         }
         result = socket_handle => {
             result?;
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received SIGINT/SIGTERM, initiating graceful shutdown...");
         }
     }
 

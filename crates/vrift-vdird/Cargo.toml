@@ -34,7 +34,8 @@ hex = "0.4"
 dirs = "5"
 
 # RFC-0039: FS Watch for Live Ingest (Layer 2)
-notify = { version = "6", default-features = false, features = ["macos_kqueue", "macos_fsevent"] }
+# Use fsevent on macOS (kqueue has panic bugs in notify-rs kqueue crate)
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 
 [dev-dependencies]
 tempfile = "3"

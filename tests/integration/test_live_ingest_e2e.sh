@@ -62,22 +62,28 @@ fi
 echo "Daemon started with PID: $DAEMON_PID"
 
 # Wait for FSWatch to initialize
-sleep 1
+sleep 2
 
 # Test 1: Create a new file
 echo ""
 echo "--- Test 1: File Creation ---"
 echo "Hello, Live Ingest!" > hello.txt
-sleep 1
 
-# Check daemon log for ingest event
-if grep -q "Ingest: file stored to CAS" "$DAEMON_LOG"; then
-    echo -e "${GREEN}✓ File creation detected and stored to CAS${NC}"
-else
-    echo -e "${RED}✗ File creation not detected${NC}"
-    cat "$DAEMON_LOG"
-    exit 1
-fi
+# Retry logic for file creation detection (up to 5 attempts)
+MAX_RETRIES=5
+for i in $(seq 1 $MAX_RETRIES); do
+    sleep 1
+    if grep -q "Ingest: file stored to CAS" "$DAEMON_LOG"; then
+        echo -e "${GREEN}✓ File creation detected and stored to CAS (attempt $i)${NC}"
+        break
+    fi
+    if [ $i -eq $MAX_RETRIES ]; then
+        echo -e "${RED}✗ File creation not detected after $MAX_RETRIES attempts${NC}"
+        cat "$DAEMON_LOG"
+        exit 1
+    fi
+    echo "  Waiting for ingest... (attempt $i/$MAX_RETRIES)"
+done
 
 # Test 2: Modify a file
 echo ""
