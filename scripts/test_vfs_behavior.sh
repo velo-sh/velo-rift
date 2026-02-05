@@ -55,7 +55,16 @@ get_cas_path() {
     local file="$1"
     local inode=$(stat -f %i "$file" 2>/dev/null || ls -i "$file" | awk '{print $1}')
     
-    # Check both common CAS locations
+    # Check explicit root first
+    if [ -n "${VR_THE_SOURCE:-}" ] && [ -d "$VR_THE_SOURCE" ]; then
+        local res=$(find "$VR_THE_SOURCE" -inum "$inode" 2>/dev/null | head -1)
+        if [ -n "$res" ]; then
+            echo "$res"
+            return 0
+        fi
+    fi
+
+    # Check common CAS locations
     local roots=("$HOME/.vrift/cas" "$HOME/.vrift/the_source" "/tmp/vrift/the_source" "/tmp/vrift/cas" "/tmp/vfs_behavior_test/.vrift/cas")
     for root in "${roots[@]}"; do
         if [ -d "$root" ]; then
@@ -79,8 +88,8 @@ setup() {
     unset VRIFT_INCEPTION VRIFT_PROJECT_ROOT
     rm -rf /tmp/vfs_behavior_test
     mkdir -p /tmp/vfs_behavior_test/deps
-    export VRIFT_CAS_ROOT="/tmp/vfs_behavior_test/cas_root"
-    mkdir -p "$VRIFT_CAS_ROOT"
+    export VR_THE_SOURCE="/tmp/vfs_behavior_test/cas_root"
+    mkdir -p "$VR_THE_SOURCE"
     cd /tmp/vfs_behavior_test
     
     # Create files with known content

@@ -66,8 +66,8 @@ get_cas_path() {
     local inode=$(stat -f %i "$file" 2>/dev/null || ls -i "$file" | awk '{print $1}')
     
     # Check explicit root first
-    if [ -n "${VRIFT_CAS_ROOT:-}" ] && [ -d "$VRIFT_CAS_ROOT" ]; then
-        local res=$(find "$VRIFT_CAS_ROOT" -inum "$inode" 2>/dev/null | head -1)
+    if [ -n "${VR_THE_SOURCE:-}" ] && [ -d "$VR_THE_SOURCE" ]; then
+        local res=$(find "$VR_THE_SOURCE" -inum "$inode" 2>/dev/null | head -1)
         if [ -n "$res" ]; then
             echo "$res"
             return 0
@@ -125,9 +125,9 @@ setup() {
     ls -la deps/
     
     # Ingest into CAS with explicit root
-    export VRIFT_CAS_ROOT="$TEST_DIR/cas_root"
-    mkdir -p "$VRIFT_CAS_ROOT"
-    "$VRIFT_BIN" ingest --mode solid --tier tier2 --output .vrift/manifest.lmdb deps 2>&1 | grep -E "Complete|files|blobs" || true
+    export VR_THE_SOURCE="$TEST_DIR/cas_root"
+    mkdir -p "$VR_THE_SOURCE"
+    "$VRIFT_BIN" ingest --mode solid --tier tier1 --output .vrift/manifest.lmdb deps 2>&1 | grep -E "Complete|files|blobs" || true
     
     echo ""
     echo "After ingest:"
