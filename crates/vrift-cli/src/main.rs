@@ -93,8 +93,13 @@ enum Commands {
         show_excluded: bool,
 
         /// Use daemon for ingest (unified architecture: CLI is thin client)
-        #[arg(long)]
+        /// This is now the DEFAULT behavior. Use --direct to bypass daemon.
+        #[arg(long, hide = true)]
         via_daemon: bool,
+
+        /// Bypass daemon and run ingest directly in CLI process (legacy mode)
+        #[arg(long)]
+        direct: bool,
     },
 
     /// Execute a command with VeloVFS virtualization
@@ -380,6 +385,7 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             no_security_filter,
             show_excluded,
             via_daemon,
+            direct,
         } => {
             let (mode, tier) = {
                 let config = vrift_config::config();
@@ -389,8 +395,11 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                 )
             };
 
-            // Unified architecture: CLI as thin client
-            if via_daemon {
+            // Unified architecture: daemon is DEFAULT, --direct bypasses it
+            // via_daemon is kept for backwards compatibility but hidden
+            let use_daemon = !direct || via_daemon;
+
+            if use_daemon {
                 let is_phantom = mode.to_lowercase() == "phantom";
                 let is_tier1 = tier.to_lowercase() == "tier1";
 
@@ -414,7 +423,7 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
 
                         println!();
                         println!("╔════════════════════════════════════════╗");
-                        println!("║  ✅ VRift Complete (via daemon)        ║");
+                        println!("║  ✅ VRift Complete                     ║");
                         println!("╚════════════════════════════════════════╝");
                         println!();
                         println!("   📁 {} files → {} blobs", result.files, result.blobs);
@@ -426,6 +435,7 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                     Err(e) => Err(e),
                 }
             } else {
+                // Legacy direct mode (--direct flag)
                 cmd_ingest(
                     &cas_root,
                     &directory,
