@@ -762,6 +762,12 @@ pub unsafe extern "C" fn utimes(path: *const c_char, times: *const libc::timeval
     crate::syscalls::misc::utimes_shim(path, times)
 }
 
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn utime(path: *const c_char, times: *const libc::c_void) -> c_int {
+    crate::syscalls::misc::utime_shim(path, times)
+}
+
 // P0-P1 Gap Fix: Linux fchown/fchownat exports
 #[cfg(target_os = "linux")]
 #[no_mangle]

@@ -615,6 +615,25 @@ pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::ti
     })
 }
 
+#[no_mangle]
+#[cfg(target_os = "linux")]
+pub unsafe extern "C" fn utime_shim(path: *const c_char, times: *const libc::c_void) -> c_int {
+    // utime(path, utimbuf) is legacy but used by some tools
+    // utimbuf has 2 longs (actime, modtime)
+    // We treat it generically and block if in VFS
+    if let Some(err) = block_vfs_mutation(path) {
+        return err;
+    }
+    // Fallback to raw utimes with NULL (current time) if times is NULL
+    if times.is_null() {
+        return crate::syscalls::linux_raw::raw_utimes(path, std::ptr::null());
+    }
+    // Otherwise use real libc utime via dlsym or just let it pass to libc
+    // For simplicity, we just use the raw assembly for utimes(path, NULL)
+    // if it's in VFS we already blocked it.
+    libc::utime(path, times as _)
+}
+
 /// Helper: Check if path is in VFS and return EPERM if so
 /// RFC-0048: Must check is_vfs_ready() FIRST to avoid deadlock during init (Pattern 2543)
 /// RFC-0052: Standalone mode - check VRIFT_VFS_PREFIX even without daemon

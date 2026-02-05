@@ -174,15 +174,18 @@ cat > "$SRC_DIR/touch.c" << 'EOF'
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <errno.h>
+
 int main(int argc, char **argv) {
+    int ret = 0;
     for (int i = 1; i < argc; i++) {
-        // Create file if doesn't exist
-        int fd = open(argv[i], O_WRONLY | O_CREAT, 0644);
-        if (fd >= 0) close(fd);
-        // Update mtime
-        if (utimes(argv[i], NULL) < 0) { perror(argv[i]); return 1; }
+        // Update mtime - only call utimes to avoid COW side-effects from open()
+        if (utimes(argv[i], NULL) < 0) {
+            perror(argv[i]);
+            ret = 1;
+        }
     }
-    return 0;
+    return ret;
 }
 EOF
 cc -O2 -o "$BIN_DIR/touch" "$SRC_DIR/touch.c"
