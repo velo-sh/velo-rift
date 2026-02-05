@@ -18,7 +18,12 @@
 
 set -e
 
-VRIFT_BIN="${VRIFT_BIN:-$(cd "$(dirname "$0")/.." && pwd)/target/debug/vrift}"
+# Auto-detect VRIFT_BIN
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/target/release/vrift" ]; then
+    VRIFT_BIN="$(cd "$(dirname "$0")/.." && pwd)/target/release/vrift"
+else
+    VRIFT_BIN="$(cd "$(dirname "$0")/.." && pwd)/target/debug/vrift"
+fi
 PASS=0
 FAIL=0
 
@@ -48,8 +53,20 @@ fail() {
 # Get CAS path for a file (by finding its hardlink in CAS)
 get_cas_path() {
     local file="$1"
-    local inode=$(ls -i "$file" | awk '{print $1}')
-    find ~/.vrift/cas -inum "$inode" 2>/dev/null | head -1
+    local inode=$(stat -f %i "$file" 2>/dev/null || ls -i "$file" | awk '{print $1}')
+    
+    # Check both common CAS locations
+    local roots=("$HOME/.vrift/cas" "$HOME/.vrift/the_source" "/tmp/vrift/the_source" "/tmp/vrift/cas" "/tmp/vfs_behavior_test/.vrift/cas")
+    for root in "${roots[@]}"; do
+        if [ -d "$root" ]; then
+            local res=$(find "$root" -inum "$inode" 2>/dev/null | head -1)
+            if [ -n "$res" ]; then
+                echo "$res"
+                return 0
+            fi
+        fi
+    done
+    return 1
 }
 
 # ==============================================================================
@@ -62,6 +79,8 @@ setup() {
     unset VRIFT_INCEPTION VRIFT_PROJECT_ROOT
     rm -rf /tmp/vfs_behavior_test
     mkdir -p /tmp/vfs_behavior_test/deps
+    export VRIFT_CAS_ROOT="/tmp/vfs_behavior_test/cas_root"
+    mkdir -p "$VRIFT_CAS_ROOT"
     cd /tmp/vfs_behavior_test
     
     # Create files with known content
@@ -73,7 +92,7 @@ setup() {
     ls -la deps/
     
     # Ingest deps/ into CAS
-    "$VRIFT_BIN" ingest deps 2>&1 | grep -E "Complete|files|blobs" || true
+    "$VRIFT_BIN" ingest --mode solid --tier tier2 deps 2>&1 | grep -E "Complete|files|blobs" || true
     
     echo ""
     echo "Files after ingest:"
@@ -81,7 +100,7 @@ setup() {
     
     echo ""
     echo "CAS location:"
-    ls ~/.vrift/cas/blake3/ 2>/dev/null | head -5 || echo "CAS empty or not found"
+    ls ~/.vrift/the_source/ 2>/dev/null | head -5 || ls /tmp/vfs_behavior_test/.vrift/cas/ 2>/dev/null | head -5 || echo "CAS empty or not found"
 }
 
 # ==============================================================================

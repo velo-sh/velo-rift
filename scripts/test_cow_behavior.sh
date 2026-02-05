@@ -12,8 +12,16 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SHIM_PATH="$PROJECT_ROOT/target/debug/libvrift_shim.dylib"
-VRIFT_BIN="$PROJECT_ROOT/target/debug/vrift"
+# Auto-detect target directory (prefer release)
+if [ -d "$PROJECT_ROOT/target/release" ]; then
+    TARGET_DIR="release"
+else
+    TARGET_DIR="debug"
+fi
+
+SHIM_PATH="$PROJECT_ROOT/target/$TARGET_DIR/libvrift_shim.dylib"
+VRIFT_BIN="$PROJECT_ROOT/target/$TARGET_DIR/vrift"
+VRIFTD_BIN="$PROJECT_ROOT/target/$TARGET_DIR/vriftd"
 
 PASS=0
 FAIL=0
@@ -56,7 +64,28 @@ with_shim() {
 get_cas_path() {
     local file="$1"
     local inode=$(stat -f %i "$file" 2>/dev/null || ls -i "$file" | awk '{print $1}')
-    find ~/.vrift/cas -inum "$inode" 2>/dev/null | head -1
+    
+    # Check explicit root first
+    if [ -n "${VRIFT_CAS_ROOT:-}" ] && [ -d "$VRIFT_CAS_ROOT" ]; then
+        local res=$(find "$VRIFT_CAS_ROOT" -inum "$inode" 2>/dev/null | head -1)
+        if [ -n "$res" ]; then
+            echo "$res"
+            return 0
+        fi
+    fi
+
+    # Fallback to common CAS locations
+    local roots=("$HOME/.vrift/cas" "$HOME/.vrift/the_source" "/tmp/vrift/the_source" "/tmp/vrift/cas")
+    for root in "${roots[@]}"; do
+        if [ -d "$root" ]; then
+            local res=$(find "$root" -inum "$inode" 2>/dev/null | head -1)
+            if [ -n "$res" ]; then
+                echo "$res"
+                return 0
+            fi
+        fi
+    done
+    return 1
 }
 
 # ==============================================================================
@@ -95,8 +124,10 @@ setup() {
     echo "Before ingest:"
     ls -la deps/
     
-    # Ingest into CAS
-    "$VRIFT_BIN" ingest deps 2>&1 | grep -E "Complete|files|blobs" || true
+    # Ingest into CAS with explicit root
+    export VRIFT_CAS_ROOT="$TEST_DIR/cas_root"
+    mkdir -p "$VRIFT_CAS_ROOT"
+    "$VRIFT_BIN" ingest --mode solid --tier tier2 --output .vrift/manifest.lmdb deps 2>&1 | grep -E "Complete|files|blobs" || true
     
     echo ""
     echo "After ingest:"
@@ -105,7 +136,7 @@ setup() {
     # Start daemon for IPC
     echo ""
     echo "Starting daemon..."
-    "$PROJECT_ROOT/target/debug/vriftd" start 2>&1 &
+    "$VRIFTD_BIN" start 2>&1 &
     DAEMON_PID=$!
     sleep 2
     

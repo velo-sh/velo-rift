@@ -1196,9 +1196,17 @@ impl ShimState {
         // BUG-004: setup_signal_handler and atexit are dangerous during dyld bootstrap.
         // These can trigger system-level deadlocks (Pattern 2682).
         // RFC-OPT-003: Attempted two-phase re-enablement still causes SIGKILL on some binaries.
-        // Keeping disabled until a safer approach is found.
-        // unsafe { setup_signal_handler() };
-        // unsafe { libc::atexit(dump_logs_atexit) };
+        // Keeping disabled until a safer approach is found, OR explicitly enabled for testing.
+        let enable_handlers = unsafe {
+            let env_key = c"VRIFT_ENABLE_SIGNAL_HANDLERS";
+            let val = libc::getenv(env_key.as_ptr());
+            !val.is_null() && CStr::from_ptr(val).to_str().unwrap_or("0") == "1"
+        };
+
+        if enable_handlers {
+            unsafe { setup_signal_handler() };
+            unsafe { libc::atexit(dump_logs_atexit) };
+        }
 
         // Activate VFS - now it's safe to call into Rust from C wrappers.
         activate_vfs();
