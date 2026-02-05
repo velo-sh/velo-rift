@@ -1161,10 +1161,10 @@ async fn cmd_ingest(
                         unique_blobs += 1;
                         new_bytes += ingest_result.size; // Track actual new storage
 
-                        // RFC-0043: Notify daemon of new blob for live index sync
-                        let _ =
-                            daemon::notify_blob(ingest_result.hash, ingest_result.size, directory)
-                                .await;
+                        // RFC-0043: Daemon notification intentionally SKIPPED during batch ingest
+                        // Each notify_blob() opens a new connection with handshake overhead (~100ms)
+                        // This would regress batch performance from 4000 files/s to ~10 files/s
+                        // Daemon can sync via manifest scan on next startup if needed
 
                         // RFC-0039 §5.1.1: If Tier-1, request daemon to strengthen protection (chown + immutable)
                         if is_tier1 {
