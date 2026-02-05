@@ -91,12 +91,21 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
     let vdir = vdir::VDir::create_or_open(&config.vdir_path)?;
     info!(path = %config.vdir_path.display(), "VDir mmap initialized");
 
+    // RFC-0039: Initialize LMDB manifest for Live Ingest
+    let manifest_path = config.project_root.join(".vrift").join("manifest.lmdb");
+    std::fs::create_dir_all(&manifest_path)?;
+    let manifest = std::sync::Arc::new(
+        vrift_manifest::lmdb::LmdbManifest::open(&manifest_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open manifest: {}", e))?,
+    );
+    info!(path = %manifest_path.display(), "LMDB manifest initialized");
+
     // RFC-0039: Create ingest channel (fixed-size for backpressure)
     let (ingest_tx, ingest_rx) = mpsc::channel::<watch::IngestEvent>(4096);
 
     // Phase 1: Start consumer FIRST (consumer-first pattern)
     let ingest_queue = ingest::IngestQueue::new(ingest_rx);
-    let handler = ingest::IngestHandler::new(config.project_root.clone());
+    let handler = ingest::IngestHandler::new(config.project_root.clone(), manifest.clone());
     let consumer_handle = tokio::spawn(async move {
         ingest::run_consumer(ingest_queue, handler).await;
     });

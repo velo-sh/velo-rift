@@ -149,14 +149,21 @@ impl IngestQueue {
     }
 }
 
-/// Handler that processes ingest events and updates VDir
+/// Handler that processes ingest events and updates manifest
 pub struct IngestHandler {
     project_root: std::path::PathBuf,
+    manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
 }
 
 impl IngestHandler {
-    pub fn new(project_root: std::path::PathBuf) -> Self {
-        Self { project_root }
+    pub fn new(
+        project_root: std::path::PathBuf,
+        manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
+    ) -> Self {
+        Self {
+            project_root,
+            manifest,
+        }
     }
 
     /// Process a single ingest event
@@ -178,31 +185,119 @@ impl IngestHandler {
     }
 
     fn handle_file_changed(&self, path: &std::path::Path) {
-        // Get relative path for manifest
         let rel_path = self.to_manifest_key(path);
-        info!(path = %path.display(), rel_path = %rel_path, "Ingest: file changed");
-        // TODO: Hash content and update VDir entry
-        // For now, just log - actual implementation requires VDir reference
+
+        // Read file and compute hash
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                use std::os::unix::fs::MetadataExt;
+
+                // Compute blake3 hash of file content
+                let content_hash = match self.hash_file(path) {
+                    Ok(hash) => hash,
+                    Err(e) => {
+                        info!(path = %path.display(), error = %e, "Failed to hash file");
+                        return;
+                    }
+                };
+
+                let vnode = vrift_ipc::VnodeEntry {
+                    content_hash,
+                    size: meta.size(),
+                    mtime: meta.mtime() as u64,
+                    mode: meta.mode(),
+                    flags: 0,
+                    _pad: 0,
+                };
+
+                // Insert into manifest
+                self.manifest.insert(
+                    &rel_path,
+                    vnode,
+                    vrift_manifest::lmdb::AssetTier::Tier2Mutable,
+                );
+
+                info!(
+                    path = %rel_path,
+                    size = meta.size(),
+                    "Ingest: file registered in manifest"
+                );
+            }
+            Err(e) => {
+                info!(path = %path.display(), error = %e, "Ingest: file not accessible");
+            }
+        }
     }
 
     fn handle_dir_created(&self, path: &std::path::Path) {
         let rel_path = self.to_manifest_key(path);
-        info!(path = %path.display(), rel_path = %rel_path, "Ingest: directory created");
+
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                use std::os::unix::fs::MetadataExt;
+
+                let vnode = vrift_ipc::VnodeEntry {
+                    content_hash: [0u8; 32], // Directories have empty hash
+                    size: 0,
+                    mtime: meta.mtime() as u64,
+                    mode: meta.mode(),
+                    flags: 1, // Directory flag
+                    _pad: 0,
+                };
+
+                self.manifest.insert(
+                    &rel_path,
+                    vnode,
+                    vrift_manifest::lmdb::AssetTier::Tier2Mutable,
+                );
+
+                info!(path = %rel_path, "Ingest: directory registered in manifest");
+            }
+            Err(e) => {
+                info!(path = %path.display(), error = %e, "Ingest: directory not accessible");
+            }
+        }
     }
 
     fn handle_removed(&self, path: &std::path::Path) {
         let rel_path = self.to_manifest_key(path);
-        info!(path = %path.display(), rel_path = %rel_path, "Ingest: removed");
+        self.manifest.remove(&rel_path);
+        info!(path = %rel_path, "Ingest: removed from manifest");
     }
 
     fn handle_symlink_created(&self, path: &std::path::Path, target: &std::path::Path) {
         let rel_path = self.to_manifest_key(path);
-        info!(
-            path = %path.display(),
-            target = %target.display(),
-            rel_path = %rel_path,
-            "Ingest: symlink created"
-        );
+
+        // Use symlink metadata (lstat)
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) => {
+                use std::os::unix::fs::MetadataExt;
+
+                let vnode = vrift_ipc::VnodeEntry {
+                    content_hash: [0u8; 32],
+                    size: 0,
+                    mtime: meta.mtime() as u64,
+                    mode: 0o777,
+                    flags: 2, // Symlink flag
+                    _pad: 0,
+                };
+
+                self.manifest.insert(
+                    &rel_path,
+                    vnode,
+                    vrift_manifest::lmdb::AssetTier::Tier2Mutable,
+                );
+
+                info!(
+                    path = %rel_path,
+                    target = %target.display(),
+                    "Ingest: symlink registered in manifest"
+                );
+            }
+            Err(e) => {
+                info!(path = %path.display(), error = %e, "Ingest: symlink not accessible");
+            }
+        }
     }
 
     /// Convert absolute path to manifest key (relative path)
@@ -210,6 +305,25 @@ impl IngestHandler {
         path.strip_prefix(&self.project_root)
             .map(|p| format!("/{}", p.display()))
             .unwrap_or_else(|_| path.display().to_string())
+    }
+
+    /// Compute blake3 hash of file content
+    fn hash_file(&self, path: &std::path::Path) -> std::io::Result<[u8; 32]> {
+        use std::io::Read;
+
+        let mut file = std::fs::File::open(path)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let n = file.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
+        }
+
+        Ok(*hasher.finalize().as_bytes())
     }
 }
 
