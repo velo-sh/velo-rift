@@ -23,10 +23,10 @@ use crate::syscalls::mmap::{mmap_shim, munmap_shim};
 #[cfg(target_os = "macos")]
 use crate::syscalls::path::realpath_shim;
 
-use libc::{c_char, c_int, c_void, mode_t, size_t, ssize_t};
+use libc::{c_char, c_int, c_void, mode_t};
 
 #[cfg(target_os = "macos")]
-use libc::{c_long, dirent, pid_t, timespec, timeval, DIR};
+use libc::{c_long, dirent, pid_t, size_t, ssize_t, timespec, timeval, DIR};
 
 #[cfg(target_os = "macos")]
 #[repr(C)]

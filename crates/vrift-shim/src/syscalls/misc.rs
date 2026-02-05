@@ -591,6 +591,30 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
     block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::linux_raw::raw_mkdir(path, mode))
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::timeval) -> c_int {
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state != 0
+        || crate::state::SHIM_STATE
+            .load(std::sync::atomic::Ordering::Acquire)
+            .is_null()
+    {
+        if let Some(err) = quick_block_vfs_mutation(path) {
+            return err;
+        }
+        #[cfg(target_os = "macos")]
+        return crate::syscalls::macos_raw::raw_utimes(path, times);
+        #[cfg(target_os = "linux")]
+        return crate::syscalls::linux_raw::raw_utimes(path, times);
+    }
+    block_vfs_mutation(path).unwrap_or_else(|| {
+        #[cfg(target_os = "macos")]
+        return crate::syscalls::macos_raw::raw_utimes(path, times);
+        #[cfg(target_os = "linux")]
+        return crate::syscalls::linux_raw::raw_utimes(path, times);
+    })
+}
+
 /// Helper: Check if path is in VFS and return EPERM if so
 /// RFC-0048: Must check is_vfs_ready() FIRST to avoid deadlock during init (Pattern 2543)
 /// RFC-0052: Standalone mode - check VRIFT_VFS_PREFIX even without daemon
@@ -667,7 +691,6 @@ pub(crate) unsafe fn quick_block_vfs_mutation(path: *const c_char) -> Option<c_i
 // --- chmod/fchmod ---
 
 #[no_mangle]
-#[cfg(target_os = "macos")]
 pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
     // BUG-007: Use raw syscall during early init OR when shim not fully ready
     // to avoid dlsym recursion and TLS pthread deadlock
@@ -681,15 +704,22 @@ pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> 
         if let Some(err) = quick_block_vfs_mutation(path) {
             return err;
         }
+        #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_chmod(path, mode);
+        #[cfg(target_os = "linux")]
+        return crate::syscalls::linux_raw::raw_chmod(path, mode);
     }
 
     // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
-    block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::macos_raw::raw_chmod(path, mode))
+    block_vfs_mutation(path).unwrap_or_else(|| {
+        #[cfg(target_os = "macos")]
+        return crate::syscalls::macos_raw::raw_chmod(path, mode);
+        #[cfg(target_os = "linux")]
+        return crate::syscalls::linux_raw::raw_chmod(path, mode);
+    })
 }
 
 #[no_mangle]
-#[cfg(target_os = "macos")]
 pub unsafe extern "C" fn fchmodat_shim(
     dirfd: c_int,
     path: *const c_char,
@@ -705,11 +735,18 @@ pub unsafe extern "C" fn fchmodat_shim(
         if let Some(err) = quick_block_vfs_mutation(path) {
             return err;
         }
+        #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_fchmodat(dirfd, path, mode, flags);
+        #[cfg(target_os = "linux")]
+        return crate::syscalls::linux_raw::raw_fchmodat(dirfd, path, mode, flags);
     }
     // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
-    block_vfs_mutation(path)
-        .unwrap_or_else(|| crate::syscalls::macos_raw::raw_fchmodat(dirfd, path, mode, flags))
+    block_vfs_mutation(path).unwrap_or_else(|| {
+        #[cfg(target_os = "macos")]
+        return crate::syscalls::macos_raw::raw_fchmodat(dirfd, path, mode, flags);
+        #[cfg(target_os = "linux")]
+        return crate::syscalls::linux_raw::raw_fchmodat(dirfd, path, mode, flags);
+    })
 }
 
 #[no_mangle]
@@ -1081,30 +1118,6 @@ pub unsafe extern "C" fn removexattr_shim(
 // ============================================================================
 // RFC-0047: Timestamp Modification Protection
 // ============================================================================
-
-/// utimes_shim: Block timestamp modifications on VFS files
-#[no_mangle]
-#[cfg(target_os = "macos")]
-pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::timeval) -> c_int {
-    let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0
-        || crate::state::SHIM_STATE
-            .load(std::sync::atomic::Ordering::Acquire)
-            .is_null()
-    {
-        if let Some(err) = quick_block_vfs_mutation(path) {
-            return err;
-        }
-        return crate::syscalls::macos_raw::raw_utimes(path, times);
-    }
-    // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
-    #[cfg(target_os = "macos")]
-    return block_vfs_mutation(path)
-        .unwrap_or_else(|| crate::syscalls::macos_raw::raw_utimes(path, times));
-    #[cfg(target_os = "linux")]
-    return block_vfs_mutation(path)
-        .unwrap_or_else(|| crate::syscalls::linux_raw::raw_utimes(path, times));
-}
 
 /// utimensat_shim: Block timestamp modifications on VFS files (at variant)
 /// Note: macOS doesn't have a direct utimensat syscall - it uses getattrlist/setattrlist
