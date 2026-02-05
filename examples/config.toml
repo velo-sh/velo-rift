@@ -12,6 +12,15 @@ default_mode = "solid"
 # threads = 4
 # Default tier: tier1, tier2, or auto
 default_tier = "tier2"
+# Patterns to ignore during live ingest and file watching
+# Code hardcodes: .vrift, .DS_Store
+# Add project-specific patterns here:
+ignore_patterns = [
+    ".git",
+    # "node_modules",
+    # "target",
+    # "__pycache__",
+]
 
 [tiers]
 # Tier-1 (Immutable) path patterns - symlink + chattr
