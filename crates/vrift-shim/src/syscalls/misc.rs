@@ -241,6 +241,16 @@ pub unsafe extern "C" fn futimes_shim(fd: c_int, times: *const libc::timeval) ->
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
+pub unsafe extern "C" fn futimes_shim(fd: c_int, times: *const libc::timeval) -> c_int {
+    if let Some(err) = quick_block_vfs_fd_mutation(fd) {
+        return err;
+    }
+    // Linux: use libc futimes directly (no raw syscall needed)
+    libc::futimes(fd, times)
+}
+
+#[no_mangle]
+#[cfg(target_os = "linux")]
 pub unsafe extern "C" fn futimens_shim(fd: c_int, times: *const libc::timespec) -> c_int {
     if let Some(err) = quick_block_vfs_fd_mutation(fd) {
         return err;

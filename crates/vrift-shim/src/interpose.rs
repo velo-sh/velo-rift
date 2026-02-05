@@ -865,6 +865,13 @@ pub unsafe extern "C" fn utime(path: *const c_char, times: *const libc::c_void) 
     crate::syscalls::misc::utime_shim(path, times)
 }
 
+// Linux futimes interception (FD-based timestamp mutation)
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn futimes(fd: c_int, times: *const libc::timeval) -> c_int {
+    crate::syscalls::misc::futimes_shim(fd, times)
+}
+
 // P0-P1 Gap Fix: Linux fchown/fchownat exports
 #[cfg(target_os = "linux")]
 #[no_mangle]
