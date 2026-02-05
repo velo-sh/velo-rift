@@ -1,43 +1,29 @@
 {
-    "name": "vrift-bench-monorepo",
-    "description": "Monorepo benchmark: Multiple packages with shared deps (~300K files)",
-    "private": true,
-    "workspaces": [
-        "packages/*"
-    ],
+    "name": "vrift-bench-large",
+    "description": "Large benchmark: ~100K+ files (production-scale)",
     "dependencies": {
-        "turbo": "^2.0.0"
-    },
-    "devDependencies": {
-        "typescript": "^5.3.3"
-    },
-    "packages": {
-        "web": {
-            "extends": "./medium_package.json"
-        },
-        "mobile": {
-            "extends": "./small_package.json"
-        },
-        "shared": {
-            "extends": "./xsmall_package.json"
-        },
-        "docs": {
-            "dependencies": {
-                "next": "^14.0.0",
-                "nextra": "^2.13.4",
-                "nextra-theme-docs": "^2.13.4"
-            }
-        },
-        "storybook": {
-            "dependencies": {
-                "@storybook/react": "^7.6.0",
-                "@storybook/nextjs": "^7.6.0",
-                "@storybook/addon-essentials": "^7.6.0"
-            }
-        },
-        "automation": {
-            "extends": "../velo-rift-node_modules_package.json"
-        }
-    },
-    "_note": "This is a template for monorepo testing. To use: create packages/ subdirectories and install deps in each."
+        "next": "^14.0.4",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "@mui/material": "^5.15.0",
+        "@mui/icons-material": "^5.15.0",
+        "@emotion/react": "^11.11.1",
+        "@emotion/styled": "^11.11.0",
+        "typescript": "^5.3.2",
+        "webpack": "^5.89.0",
+        "babel-loader": "^9.1.3",
+        "@babel/core": "^7.23.5",
+        "@babel/preset-env": "^7.23.5",
+        "@babel/preset-react": "^7.23.3",
+        "@babel/preset-typescript": "^7.23.3",
+        "eslint": "^8.55.0",
+        "eslint-config-next": "^14.0.4",
+        "prettier": "^3.1.1",
+        "jest": "^29.7.0",
+        "@testing-library/react": "^14.1.2",
+        "storybook": "^7.6.5",
+        "tailwindcss": "^3.3.6",
+        "postcss": "^8.4.32",
+        "autoprefixer": "^10.4.16"
+    }
 }
