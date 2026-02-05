@@ -1,8 +1,8 @@
 //! Streaming Ingest with Producer-Consumer Pipeline
 //!
 //! Uses a ring buffer queue to overlap scanning and ingesting:
-//! - Scanner thread produces paths
-//! - Worker threads consume and process in parallel
+//! - Scanner thread produces paths to bounded queue
+//! - Worker threads pop and process independently (no batch blocking)
 //!
 //! Zero-copy: uses DirEntry::into_path() to transfer PathBuf ownership.
 
@@ -11,79 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam::queue::ArrayQueue;
-use rayon::prelude::*;
 use walkdir::WalkDir;
 
 use crate::{CasError, IngestMode, IngestResult};
 
-/// Queue size (number of items in flight)
+/// Queue size (number of paths in flight)
 const QUEUE_SIZE: usize = 1024;
-
-/// Batch size for Rayon processing
-const BATCH_SIZE: usize = 256;
-
-/// Item in the ingest queue - uses PathBuf directly (zero-copy from DirEntry)
-struct IngestItem {
-    /// Path from DirEntry::into_path() - no copy needed
-    path: Option<PathBuf>,
-    /// File size from dirent (avoid redundant stat)
-    file_size: u64,
-}
-
-impl IngestItem {
-    fn new() -> Self {
-        Self {
-            path: None,
-            file_size: 0,
-        }
-    }
-
-    /// Take ownership of path from DirEntry (zero-copy)
-    fn set(&mut self, path: PathBuf, size: u64) {
-        self.path = Some(path);
-        self.file_size = size;
-    }
-
-    fn path(&self) -> &Path {
-        self.path.as_deref().unwrap_or(Path::new(""))
-    }
-
-    fn recycle(&mut self) {
-        // Just drop the path, no shrink needed
-        self.path = None;
-        self.file_size = 0;
-    }
-}
-
-impl Default for IngestItem {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Pool of reusable IngestItems
-struct ItemPool {
-    items: ArrayQueue<IngestItem>,
-}
-
-impl ItemPool {
-    fn new(size: usize) -> Self {
-        let items = ArrayQueue::new(size);
-        for _ in 0..size {
-            let _ = items.push(IngestItem::new());
-        }
-        Self { items }
-    }
-
-    fn acquire(&self) -> IngestItem {
-        self.items.pop().unwrap_or_default()
-    }
-
-    fn release(&self, mut item: IngestItem) {
-        item.recycle();
-        let _ = self.items.push(item); // Ignore if pool is full
-    }
-}
 
 /// Streaming ingest with producer-consumer pipeline
 ///
@@ -103,11 +36,8 @@ pub fn streaming_ingest(
 ) -> Vec<Result<IngestResult, CasError>> {
     use crate::zero_copy_ingest::{ingest_phantom, ingest_solid_tier1, ingest_solid_tier2};
 
-    // Work queue: scanner -> workers
-    let work_queue: Arc<ArrayQueue<IngestItem>> = Arc::new(ArrayQueue::new(QUEUE_SIZE));
-
-    // Item pool for recycling
-    let pool: Arc<ItemPool> = Arc::new(ItemPool::new(QUEUE_SIZE));
+    // Work queue: scanner -> workers (direct PathBuf, no wrapper)
+    let work_queue: Arc<ArrayQueue<PathBuf>> = Arc::new(ArrayQueue::new(QUEUE_SIZE));
 
     // Scanner done flag
     let scanner_done = Arc::new(AtomicBool::new(false));
@@ -125,8 +55,7 @@ pub fn streaming_ingest(
 
     // Scanner thread
     let source_path = source.to_path_buf();
-    let wq: Arc<ArrayQueue<IngestItem>> = Arc::clone(&work_queue);
-    let p: Arc<ItemPool> = Arc::clone(&pool);
+    let wq: Arc<ArrayQueue<PathBuf>> = Arc::clone(&work_queue);
     let done = Arc::clone(&scanner_done);
 
     let scanner = std::thread::spawn(move || {
@@ -135,18 +64,15 @@ pub fn streaming_ingest(
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             let path = entry.into_path(); // zero-copy: take ownership
 
-            let mut item = p.acquire();
-            item.set(path, size);
-
             // Push with backpressure (spin if queue full)
+            let mut p = path;
             loop {
-                match wq.push(item) {
+                match wq.push(p) {
                     Ok(()) => break,
                     Err(returned) => {
-                        item = returned;
+                        p = returned;
                         std::hint::spin_loop();
                     }
                 }
@@ -155,55 +81,37 @@ pub fn streaming_ingest(
         done.store(true, Ordering::Release);
     });
 
-    // Worker loop: consume batches and process with Rayon
+    // Worker loop
     let cas = cas_root.to_path_buf();
 
+    // Independent workers: each worker pops and processes items directly
     thread_pool.install(|| {
-        loop {
-            // Collect a batch
-            let mut batch: Vec<IngestItem> = Vec::with_capacity(BATCH_SIZE);
+        rayon::scope(|s| {
+            for _ in 0..num_threads {
+                let wq = Arc::clone(&work_queue);
+                let done = Arc::clone(&scanner_done);
+                let r = Arc::clone(&results);
+                let cas_path = cas.clone();
 
-            while batch.len() < BATCH_SIZE {
-                if let Some(item) = work_queue.pop() {
-                    batch.push(item);
-                } else if scanner_done.load(Ordering::Acquire) && work_queue.is_empty() {
-                    break;
-                } else {
-                    // Brief pause before retry
-                    std::thread::yield_now();
-                    break;
-                }
-            }
-
-            if batch.is_empty() {
-                if scanner_done.load(Ordering::Acquire) {
-                    break;
-                }
-                std::thread::yield_now();
-                continue;
-            }
-
-            // Process batch in parallel
-            let batch_results: Vec<_> = batch
-                .par_iter()
-                .map(|item| {
-                    let path = item.path();
-                    match mode {
-                        IngestMode::Phantom => ingest_phantom(path, &cas),
-                        IngestMode::SolidTier1 => ingest_solid_tier1(path, &cas),
-                        IngestMode::SolidTier2 => ingest_solid_tier2(path, &cas),
+                s.spawn(move |_| {
+                    loop {
+                        if let Some(path) = wq.pop() {
+                            let result = match mode {
+                                IngestMode::Phantom => ingest_phantom(&path, &cas_path),
+                                IngestMode::SolidTier1 => ingest_solid_tier1(&path, &cas_path),
+                                IngestMode::SolidTier2 => ingest_solid_tier2(&path, &cas_path),
+                            };
+                            r.lock().unwrap().push(result);
+                            // path automatically dropped here
+                        } else if done.load(Ordering::Acquire) && wq.is_empty() {
+                            break;
+                        } else {
+                            std::thread::yield_now();
+                        }
                     }
-                })
-                .collect();
-
-            // Store results
-            results.lock().unwrap().extend(batch_results);
-
-            // Recycle items
-            for item in batch {
-                pool.release(item);
+                });
             }
-        }
+        });
     });
 
     // Wait for scanner
@@ -230,8 +138,7 @@ where
     use crate::zero_copy_ingest::{ingest_phantom, ingest_solid_tier1, ingest_solid_tier2};
     use std::sync::atomic::AtomicUsize;
 
-    let work_queue: Arc<ArrayQueue<IngestItem>> = Arc::new(ArrayQueue::new(QUEUE_SIZE));
-    let pool: Arc<ItemPool> = Arc::new(ItemPool::new(QUEUE_SIZE));
+    let work_queue: Arc<ArrayQueue<PathBuf>> = Arc::new(ArrayQueue::new(QUEUE_SIZE));
     let scanner_done = Arc::new(AtomicBool::new(false));
     let results: Arc<std::sync::Mutex<Vec<Result<IngestResult, CasError>>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -246,8 +153,7 @@ where
 
     // Scanner
     let source_path = source.to_path_buf();
-    let wq: Arc<ArrayQueue<IngestItem>> = Arc::clone(&work_queue);
-    let p: Arc<ItemPool> = Arc::clone(&pool);
+    let wq: Arc<ArrayQueue<PathBuf>> = Arc::clone(&work_queue);
     let done: Arc<AtomicBool> = Arc::clone(&scanner_done);
 
     let scanner = std::thread::spawn(move || {
@@ -256,16 +162,13 @@ where
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            let path = entry.into_path(); // zero-copy
-            let mut item = p.acquire();
-            item.set(path, size);
-
+            let path = entry.into_path();
+            let mut p = path;
             loop {
-                match wq.push(item) {
+                match wq.push(p) {
                     Ok(()) => break,
                     Err(returned) => {
-                        item = returned;
+                        p = returned;
                         std::hint::spin_loop();
                     }
                 }
@@ -277,50 +180,36 @@ where
     // Workers
     let cas = cas_root.to_path_buf();
 
-    thread_pool.install(|| loop {
-        let mut batch: Vec<IngestItem> = Vec::with_capacity(BATCH_SIZE);
+    thread_pool.install(|| {
+        rayon::scope(|s| {
+            for _ in 0..num_threads {
+                let wq = Arc::clone(&work_queue);
+                let done = Arc::clone(&scanner_done);
+                let r = Arc::clone(&results);
+                let cnt = Arc::clone(&counter);
+                let cb = Arc::clone(&on_progress);
+                let cas_path = cas.clone();
 
-        while batch.len() < BATCH_SIZE {
-            if let Some(item) = work_queue.pop() {
-                batch.push(item);
-            } else if scanner_done.load(Ordering::Acquire) && work_queue.is_empty() {
-                break;
-            } else {
-                std::thread::yield_now();
-                break;
+                s.spawn(move |_| loop {
+                    if let Some(path) = wq.pop() {
+                        let result = match mode {
+                            IngestMode::Phantom => ingest_phantom(&path, &cas_path),
+                            IngestMode::SolidTier1 => ingest_solid_tier1(&path, &cas_path),
+                            IngestMode::SolidTier2 => ingest_solid_tier2(&path, &cas_path),
+                        };
+
+                        let idx = cnt.fetch_add(1, Ordering::Relaxed);
+                        cb(&result, idx);
+
+                        r.lock().unwrap().push(result);
+                    } else if done.load(Ordering::Acquire) && wq.is_empty() {
+                        break;
+                    } else {
+                        std::thread::yield_now();
+                    }
+                });
             }
-        }
-
-        if batch.is_empty() {
-            if scanner_done.load(Ordering::Acquire) {
-                break;
-            }
-            std::thread::yield_now();
-            continue;
-        }
-
-        let batch_results: Vec<_> = batch
-            .par_iter()
-            .map(|item| {
-                let path = item.path();
-                let result = match mode {
-                    IngestMode::Phantom => ingest_phantom(path, &cas),
-                    IngestMode::SolidTier1 => ingest_solid_tier1(path, &cas),
-                    IngestMode::SolidTier2 => ingest_solid_tier2(path, &cas),
-                };
-
-                let idx = counter.fetch_add(1, Ordering::Relaxed);
-                on_progress(&result, idx);
-
-                result
-            })
-            .collect();
-
-        results.lock().unwrap().extend(batch_results);
-
-        for item in batch {
-            pool.release(item);
-        }
+        });
     });
 
     scanner.join().expect("Scanner thread panicked");
@@ -358,25 +247,5 @@ mod tests {
 
         assert_eq!(results.len(), 100);
         assert!(results.iter().all(|r| r.is_ok()));
-    }
-
-    #[test]
-    fn test_item_set_and_path() {
-        let mut item = IngestItem::new();
-        assert!(item.path.is_none());
-
-        // Set path
-        item.set(PathBuf::from("/short/path"), 100);
-        assert_eq!(item.path().to_str().unwrap(), "/short/path");
-        assert_eq!(item.file_size, 100);
-
-        // Set very long path
-        let long_path = "/".to_string() + &"a".repeat(3000);
-        item.set(PathBuf::from(&long_path), 200);
-        assert_eq!(item.path().to_str().unwrap(), long_path);
-
-        // Recycle should clear
-        item.recycle();
-        assert!(item.path.is_none());
     }
 }
