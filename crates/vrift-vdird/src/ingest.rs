@@ -276,9 +276,19 @@ impl IngestHandler {
             Ok(meta) => {
                 use std::os::unix::fs::MetadataExt;
 
+                // Store target path as blob in CAS (for symlink reconstruction)
+                let target_bytes = target.as_os_str().as_encoded_bytes();
+                let content_hash = match self.cas.store(target_bytes) {
+                    Ok(hash) => hash,
+                    Err(e) => {
+                        info!(path = %path.display(), error = %e, "Ingest: failed to store symlink target");
+                        return;
+                    }
+                };
+
                 let vnode = vrift_ipc::VnodeEntry {
-                    content_hash: [0u8; 32],
-                    size: 0,
+                    content_hash,
+                    size: target_bytes.len() as u64,
                     mtime: meta.mtime() as u64,
                     mode: 0o777,
                     flags: 2, // Symlink flag
@@ -294,7 +304,8 @@ impl IngestHandler {
                 info!(
                     path = %rel_path,
                     target = %target.display(),
-                    "Ingest: symlink registered in manifest"
+                    hash = %vrift_cas::CasStore::hash_to_hex(&content_hash)[..8],
+                    "Ingest: symlink stored to CAS and registered in manifest"
                 );
             }
             Err(e) => {
