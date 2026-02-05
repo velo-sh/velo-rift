@@ -30,11 +30,10 @@ extern "C" {
 #[cfg(target_os = "macos")]
 use crate::syscalls::misc::{
     chflags_shim, chmod_shim, exchangedata_shim, execve_shim, faccessat_shim, fchflags_shim,
-    fchmod_shim, fchmodat_shim, fchown_shim, fchownat_shim, flock_shim, futimes_shim,
-    getattrlist_shim, link_shim, linkat_shim, mkdir_shim, mkdirat_shim, posix_spawn_shim,
-    posix_spawnp_shim, removexattr_shim, rmdir_shim, setattrlist_shim, setrlimit_shim,
-    setxattr_shim, symlink_shim, symlinkat_shim, truncate_shim, unlink_shim, unlinkat_shim,
-    utimensat_shim, utimes_shim,
+    fchmod_shim, fchmodat_shim, fchown_shim, fchownat_shim, flock_shim, futimes_shim, link_shim,
+    linkat_shim, mkdir_shim, mkdirat_shim, posix_spawn_shim, posix_spawnp_shim, removexattr_shim,
+    rmdir_shim, setrlimit_shim, setxattr_shim, symlink_shim, symlinkat_shim, truncate_shim,
+    unlink_shim, unlinkat_shim, utimensat_shim, utimes_shim,
 };
 
 #[cfg(target_os = "macos")]
