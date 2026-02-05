@@ -6,15 +6,16 @@
 use crate::syscalls::dir::{chdir_shim, closedir_shim, getcwd_shim, opendir_shim, readdir_shim};
 #[cfg(target_os = "macos")]
 use crate::syscalls::io::{
-    close_shim, dup2_shim, dup_shim, fchdir_shim, ftruncate_shim, lseek_shim, read_shim, write_shim,
+    close_shim, dup2_shim, dup_shim, fchdir_shim, ftruncate_shim, lseek_shim, read_shim,
+    sendfile_shim, write_shim,
 };
 #[cfg(target_os = "macos")]
 use crate::syscalls::misc::{
-    chflags_shim, chmod_shim, exchangedata_shim, execve_shim, faccessat_shim, fchmod_shim,
-    fchmodat_shim, fchown_shim, fchownat_shim, flock_shim, link_shim, linkat_shim, mkdir_shim,
-    mkdirat_shim, posix_spawn_shim, posix_spawnp_shim, removexattr_shim, rmdir_shim,
-    setrlimit_shim, setxattr_shim, symlink_shim, symlinkat_shim, truncate_shim, unlink_shim,
-    unlinkat_shim, utimensat_shim, utimes_shim,
+    chflags_shim, chmod_shim, exchangedata_shim, execve_shim, faccessat_shim, fchflags_shim,
+    fchmod_shim, fchmodat_shim, fchown_shim, fchownat_shim, flock_shim, futimes_shim, link_shim,
+    linkat_shim, mkdir_shim, mkdirat_shim, posix_spawn_shim, posix_spawnp_shim, removexattr_shim,
+    rmdir_shim, setrlimit_shim, setxattr_shim, symlink_shim, symlinkat_shim, truncate_shim,
+    unlink_shim, unlinkat_shim, utimensat_shim, utimes_shim,
 };
 
 #[cfg(target_os = "macos")]
@@ -207,6 +208,19 @@ extern "C" {
         path1: *const c_char,
         path2: *const c_char,
         options: libc::c_uint,
+    ) -> c_int;
+    #[link_name = "futimes"]
+    fn real_futimes(fd: c_int, times: *const timeval) -> c_int;
+    #[link_name = "fchflags"]
+    fn real_fchflags(fd: c_int, flags: libc::c_uint) -> c_int;
+    #[link_name = "sendfile"]
+    fn real_sendfile(
+        fd: c_int,
+        s: c_int,
+        offset: libc::off_t,
+        len: *mut libc::off_t,
+        hdtr: *mut c_void,
+        flags: c_int,
     ) -> c_int;
 }
 
@@ -602,6 +616,27 @@ pub static IT_SYMLINKAT: Interpose = Interpose {
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
+pub static IT_FUTIMES: Interpose = Interpose {
+    new_func: futimes_shim as _,
+    old_func: real_futimes as _,
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_FCHFLAGS: Interpose = Interpose {
+    new_func: fchflags_shim as _,
+    old_func: real_fchflags as _,
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_SENDFILE: Interpose = Interpose {
+    new_func: sendfile_shim as _,
+    old_func: real_sendfile as _,
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
 pub static IT_FCHMOD: Interpose = Interpose {
     new_func: fchmod_shim as _,
     old_func: real_fchmod as _,
@@ -805,4 +840,45 @@ pub unsafe extern "C" fn linkat(
     flags: c_int,
 ) -> c_int {
     crate::syscalls::misc::linkat_shim(olddirfd, oldpath, newdirfd, newpath, flags)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn futimens(fd: c_int, times: *const libc::timespec) -> c_int {
+    crate::syscalls::misc::futimens_shim(fd, times)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn sendfile(
+    out_fd: c_int,
+    in_fd: c_int,
+    offset: *mut libc::off_t,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    crate::syscalls::io::sendfile_shim(out_fd, in_fd, offset, count)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn copy_file_range(
+    fd_in: c_int,
+    off_in: *mut libc::off_t,
+    fd_out: c_int,
+    off_out: *mut libc::off_t,
+    len: libc::size_t,
+    flags: libc::c_uint,
+) -> libc::ssize_t {
+    crate::syscalls::io::copy_file_range_shim(fd_in, off_in, fd_out, off_out, len, flags)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn openat2(
+    dirfd: c_int,
+    p: *const c_char,
+    how: *const c_void,
+    size: libc::size_t,
+) -> c_int {
+    crate::syscalls::open::openat2_shim(dirfd, p, how as _, size)
 }

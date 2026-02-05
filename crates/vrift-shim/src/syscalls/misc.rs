@@ -183,6 +183,81 @@ unsafe fn renameat_impl(old: *const c_char, new: *const c_char) -> Option<c_int>
     None // Let real syscall handle
 }
 
+/// Helper to block mutation on VFS-managed files via FD
+pub(crate) unsafe fn quick_block_vfs_fd_mutation(fd: c_int) -> Option<c_int> {
+    let _guard = ShimGuard::enter()?;
+    let state = ShimState::get()?;
+
+    // 1. Try to resolve FD to path (OS specific)
+    #[cfg(target_os = "macos")]
+    {
+        let mut path_buf = [0i8; 1024];
+        if libc::fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr()) == 0 {
+            let path_cstr = CStr::from_ptr(path_buf.as_ptr());
+            if let Ok(path_str) = path_cstr.to_str() {
+                if state.psfs_applicable(path_str) {
+                    crate::set_errno(libc::EPERM);
+                    return Some(-1);
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let fd_path = format!("/proc/self/fd/{}\0", fd);
+        let mut path_buf = [0u8; 1024];
+        let n = libc::readlink(
+            fd_path.as_ptr() as *const c_char,
+            path_buf.as_mut_ptr() as *mut c_char,
+            path_buf.len(),
+        );
+        if n > 0 && (n as usize) < path_buf.len() {
+            if let Ok(path_str) = std::str::from_utf8(&path_buf[..n as usize]) {
+                if state.psfs_applicable(path_str) {
+                    crate::set_errno(libc::EPERM);
+                    return Some(-1);
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: Check FD tracking table
+    if crate::syscalls::io::is_vfs_fd(fd) {
+        crate::set_errno(libc::EPERM);
+        return Some(-1);
+    }
+
+    None
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn futimes_shim(fd: c_int, times: *const libc::timeval) -> c_int {
+    if let Some(err) = quick_block_vfs_fd_mutation(fd) {
+        return err;
+    }
+    crate::syscalls::macos_raw::raw_futimes(fd, times)
+}
+
+#[no_mangle]
+#[cfg(target_os = "linux")]
+pub unsafe extern "C" fn futimens_shim(fd: c_int, times: *const libc::timespec) -> c_int {
+    if let Some(err) = quick_block_vfs_fd_mutation(fd) {
+        return err;
+    }
+    // Linux futimens is utimensat with dirfd and NULL path
+    crate::syscalls::linux_raw::raw_utimensat(fd, std::ptr::null(), times, 0)
+}
+
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn fchflags_shim(fd: c_int, flags: libc::c_uint) -> c_int {
+    if let Some(err) = quick_block_vfs_fd_mutation(fd) {
+        return err;
+    }
+    crate::syscalls::macos_raw::raw_fchflags(fd, flags)
+}
+
 /// RFC-0047: Link (hardlink) implementation with VFS boundary enforcement
 /// Hardlinks crossing VFS boundary or into CAS are forbidden (returns EXDEV)
 unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {

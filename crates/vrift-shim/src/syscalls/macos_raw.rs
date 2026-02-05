@@ -1229,6 +1229,18 @@ const SYS_FCHOWNAT: i64 = 468;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_EXCHANGEDATA: i64 = 223;
 
+/// SYS_futimes = 206 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_FUTIMES: i64 = 206;
+
+/// SYS_fchflags = 124 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_FCHFLAGS: i64 = 124;
+
+/// SYS_sendfile = 337 on macOS
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_SENDFILE: i64 = 337;
+
 /// Raw fchown syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
@@ -1306,6 +1318,91 @@ pub unsafe fn raw_exchangedata(
         in("x0") path1 as i64,
         in("x1") path2 as i64,
         in("x2") options as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+/// Raw futimes syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_futimes(fd: libc::c_int, times: *const libc::timeval) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_FUTIMES,
+        in("x0") fd as i64,
+        in("x1") times as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+/// Raw fchflags syscall for macOS ARM64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_fchflags(fd: libc::c_int, flags: libc::c_uint) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_FCHFLAGS,
+        in("x0") fd as i64,
+        in("x1") flags as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+/// Raw sendfile syscall for macOS ARM64.
+/// Note: sendfile on macOS has a complex signature:
+/// int sendfile(int fd, int s, off_t offset, off_t *len, struct sf_hdtr *hdtr, int flags);
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_sendfile(
+    fd: libc::c_int,
+    s: libc::c_int,
+    offset: libc::off_t,
+    len: *mut libc::off_t,
+    hdtr: *mut libc::c_void,
+    flags: libc::c_int,
+) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_SENDFILE,
+        in("x0") fd as i64,
+        in("x1") s as i64,
+        in("x2") offset,
+        in("x3") len as i64,
+        in("x4") hdtr as i64,
+        in("x5") flags as i64,
         lateout("x0") ret,
         err = out(reg) err,
         options(nostack)

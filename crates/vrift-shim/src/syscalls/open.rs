@@ -357,3 +357,46 @@ pub unsafe extern "C" fn velo_openat_impl(
     };
     open_impl(p, f, m).unwrap_or_else(|| raw_openat_internal(dirfd, p, f, m))
 }
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct open_how {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn openat2_shim(
+    dirfd: c_int,
+    p: *const c_char,
+    how: *const open_how,
+    size: libc::size_t,
+) -> c_int {
+    if how.is_null() || size < std::mem::size_of::<open_how>() {
+        return crate::syscalls::linux_raw::raw_openat2(dirfd, p, how as _, size);
+    }
+
+    passthrough_if_init!(
+        crate::syscalls::linux_raw::raw_openat2,
+        dirfd,
+        p,
+        how as _,
+        size
+    );
+
+    if CIRCUIT_TRIPPED.load(Ordering::Relaxed) {
+        return crate::syscalls::linux_raw::raw_openat2(dirfd, p, how as _, size);
+    }
+
+    let how_ref = &*how;
+    let flags = how_ref.flags as c_int;
+    let mode = how_ref.mode as mode_t;
+
+    // Use regular open_impl for VFS redirection
+    // Note: open_impl doesn't currenty support 'resolve' flags of openat2,
+    // but covering path redirection is the primary goal.
+    open_impl(p, flags, mode)
+        .unwrap_or_else(|| crate::syscalls::linux_raw::raw_openat2(dirfd, p, how as _, size))
+}

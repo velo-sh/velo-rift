@@ -1721,3 +1721,161 @@ pub unsafe fn raw_truncate(path: *const c_char, length: off_t) -> c_int {
         }
     }
 }
+
+/// Raw sendfile syscall
+#[inline(always)]
+pub unsafe fn raw_sendfile(
+    out_fd: c_int,
+    in_fd: c_int,
+    offset: *mut off_t,
+    count: size_t,
+) -> ssize_t {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 40i64, // SYS_sendfile
+            in("rdi") out_fd as i64,
+            in("rsi") in_fd as i64,
+            in("rdx") offset,
+            in("r10") count as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 71i64, // SYS_sendfile
+            in("x0") out_fd as i64,
+            in("x1") in_fd as i64,
+            in("x2") offset,
+            in("x3") count as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+}
+
+/// Raw copy_file_range syscall
+#[inline(always)]
+pub unsafe fn raw_copy_file_range(
+    fd_in: c_int,
+    off_in: *mut off_t,
+    fd_out: c_int,
+    off_out: *mut off_t,
+    len: size_t,
+    flags: c_uint,
+) -> ssize_t {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 326i64, // SYS_copy_file_range
+            in("rdi") fd_in as i64,
+            in("rsi") off_in,
+            in("rdx") fd_out as i64,
+            in("r10") off_out,
+            in("r8") len as i64,
+            in("r9") flags as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 285i64, // SYS_copy_file_range
+            in("x0") fd_in as i64,
+            in("x1") off_in,
+            in("x2") fd_out as i64,
+            in("x3") off_out,
+            in("x4") len as i64,
+            in("x5") flags as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+}
+
+/// Raw openat2 syscall
+#[inline(always)]
+pub unsafe fn raw_openat2(
+    dirfd: c_int,
+    pathname: *const c_char,
+    how: *const c_void, // struct open_how
+    size: size_t,
+) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 437i64, // SYS_openat2
+            in("rdi") dirfd as i64,
+            in("rsi") pathname,
+            in("rdx") how,
+            in("r10") size as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 437i64, // SYS_openat2
+            in("x0") dirfd as i64,
+            in("x1") pathname,
+            in("x2") how,
+            in("x3") size as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
+use libc::c_uint;

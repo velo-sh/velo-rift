@@ -113,9 +113,10 @@ All syscalls relevant to VFS virtualization. Status indicates implementation sta
 | **`mkdirat`** | Mutation | ✅ | ✅ | ✅ | `test_gap_mkdirat_bypass` | VFS: EROFS guard |
 | **`symlinkat`** | Mutation | ✅ | ✅ | ✅ | `test_gap_symlinkat_bypass` | VFS: EROFS guard |
 | **`fchmod`** | Permission | ✅ | ✅ | ✅ | `test_gap_fchmod_bypass` | VFS: EROFS guard (F_GETPATH/procfs) |
-| **`futimens`** | Time | ⏳ | ⏳ | ⏳ | `test_gap_futimens_bypass` | **GAP: Can modify times via FD** |
-| **`sendfile`** | I/O | ⏳ | ⏳ | ⏳ | `test_gap_sendfile_bypass` | **GAP: Copy data between FDs** |
-| **`copy_file_range`** | I/O | ⏳ | N/A | ⏳ | `test_gap_copy_file_range` | **GAP: Copy data between FDs (Linux)** |
+| **`openat2`** | I/O | ✅ | N/A | ✅ | - | Linux 5.6+ support |
+| **`futimens/futimes`** | Time | ✅ | ✅ | ✅ | `test_secondary_mutation` | Blocked via FD resolution |
+| **`sendfile`** | I/O | ✅ | ✅ | ✅ | `test_secondary_mutation` | Blocked drain FD |
+| **`copy_file_range`** | I/O | ✅ | N/A | ✅ | `test_secondary_mutation` | Blocked drain FD (Linux) |
 
 
 ---
@@ -138,6 +139,10 @@ All syscall gaps are categorized below. Each **Must Fix** item has or requires a
 | `dup/dup2` | ✅ | `test_gap_dup_tracking.sh` | FD tracking |
 | `readlinkat` | ✅ | `test_gap_readlinkat.sh` | Dirfd resolution works |
 | `hardlink boundary` | ✅ | `test_value_2_rename.sh` (4/4) | EXDEV enforced |
+| `futimes/futimens` | ✅ | `test_secondary_mutation.c` | Blocked via FD |
+| `sendfile` | ✅ | `test_secondary_mutation.c` | Blocked drain FD |
+| `copy_file_range` | ✅ | `test_secondary_mutation.c` | Blocked drain FD |
+| `openat2` | ✅ | Internal | Linux support |
 
 
 
@@ -147,16 +152,13 @@ All syscall gaps are categorized below. Each **Must Fix** item has or requires a
 |:--------|:-----|:-----|:------:|:------:|
 | `exchangedata` | Atomic swap bypasses VFS | `test_gap_exchangedata.sh` | ✅ **Fixed** | S2 |
 | `fchown/fchownat` | Ownership bypass via FD | `test_gap_fchown_bypass.sh` | ✅ **Fixed** | S1 |
+| `openat2` | Linux 5.6+ support | Internal | ✅ **Fixed** | S2 |
 
 
 ### 🟡 Can Defer (P2-P3) — Non-blocking, Low Risk
 
 | Syscall | Risk | Test (POC) | Status | Notes |
 |:--------|:-----|:-----------|:------:|:------|
-| `futimens/futimes` | Modify times via FD | `test_futimens_gap.c` ✅ | ⏳ | Proven bypass, low impact |
-| `sendfile` | Copy data bypass | `test_sendfile_gap.c` ✅ | ⏳ | Proven bypass, rare use |
-
-| `copy_file_range` | Copy data bypass (Linux) | `test_copy_file_range_gap.c` ✅ | ⏳ | Linux only |
 | `creat` | Legacy file creation | TBD | ⏳ | Rare, can use open |
 | `getattrlist/setattrlist` | macOS metadata | TBD | ⏳ | Advanced, rare |
 | `fstatvfs` | FS stats bypass | TBD | ⏳ | Read-only, no mutation |
@@ -168,7 +170,7 @@ All syscall gaps are categorized below. Each **Must Fix** item has or requires a
 | `pread`, `pwrite` | Uses already-intercepted FDs |
 | `readv`, `writev` | Uses already-intercepted FDs |
 | `lchown` | Output files only, not VFS |
-| `openat2` | Linux 5.6+, rare, openat fallback |
+| `openat2` | Supported (VFS path redirection) |
 | `execveat` | Linux-only, rare |
 | `splice`, `tee`, `vmsplice` | Kernel pipe operations |
 

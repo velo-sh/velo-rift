@@ -315,3 +315,54 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
         return crate::syscalls::linux_raw::raw_close(fd);
     }
 }
+
+// ============================================================================
+// sendfile / copy_file_range shims - prevent VFS write bypass
+// ============================================================================
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn sendfile_shim(
+    fd: c_int,
+    s: c_int,
+    offset: libc::off_t,
+    len: *mut libc::off_t,
+    hdtr: *mut libc::c_void,
+    flags: c_int,
+) -> c_int {
+    // macOS: 's' is the drain (out_fd). Block if it points to VFS territory.
+    if crate::syscalls::misc::quick_block_vfs_fd_mutation(s).is_some() {
+        return -1;
+    }
+    crate::syscalls::macos_raw::raw_sendfile(fd, s, offset, len, hdtr, flags)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn sendfile_shim(
+    out_fd: c_int,
+    in_fd: c_int,
+    offset: *mut libc::off_t,
+    count: libc::size_t,
+) -> libc::ssize_t {
+    if crate::syscalls::misc::quick_block_vfs_fd_mutation(out_fd).is_some() {
+        return -1;
+    }
+    crate::syscalls::linux_raw::raw_sendfile(out_fd, in_fd, offset, count)
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn copy_file_range_shim(
+    fd_in: c_int,
+    off_in: *mut libc::off_t,
+    fd_out: c_int,
+    off_out: *mut libc::off_t,
+    len: libc::size_t,
+    flags: libc::c_uint,
+) -> libc::ssize_t {
+    if crate::syscalls::misc::quick_block_vfs_fd_mutation(fd_out).is_some() {
+        return -1;
+    }
+    crate::syscalls::linux_raw::raw_copy_file_range(fd_in, off_in, fd_out, off_out, len, flags)
+}
