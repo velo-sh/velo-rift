@@ -423,6 +423,6 @@ pub unsafe extern "C" fn openat2_shim(
 #[no_mangle]
 pub unsafe extern "C" fn creat_shim(path: *const c_char, mode: mode_t) -> c_int {
     let flags = libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC;
-    // Route through open_shim (macOS uses c_open_bridge, Linux uses velo_open_impl)
-    open_shim(path, flags, mode)
+    // Route through open_shim_c_impl (platform-generic entry point)
+    open_shim_c_impl(path, flags, mode)
 }

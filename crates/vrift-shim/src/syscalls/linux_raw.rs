@@ -1878,4 +1878,10 @@ pub unsafe fn raw_openat2(
     }
 }
 
+/// Raw realpath (via libc::realpath)
+#[inline(always)]
+pub unsafe fn raw_realpath(path: *const c_char, resolved: *mut c_char) -> *mut c_char {
+    libc::realpath(path, resolved)
+}
+
 use libc::c_uint;

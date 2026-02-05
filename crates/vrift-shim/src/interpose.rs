@@ -971,11 +971,19 @@ pub unsafe extern "C" fn openat2(
 ) -> c_int {
     crate::syscalls::open::openat2_shim(dirfd, p, how as _, size)
 }
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn creat(path: *const c_char, mode: mode_t) -> c_int {
+    crate::syscalls::open::creat_shim(path, mode)
+}
+
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn creat(path: *const c_char, mode: mode_t) -> c_int {
     c_creat_bridge(path, mode)
 }
 
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn getattrlist(
     path: *const c_char,
@@ -987,6 +995,7 @@ pub unsafe extern "C" fn getattrlist(
     c_getattrlist_bridge(path, attrlist, attrbuf, attrbufsize, options)
 }
 
+#[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn setattrlist(
     path: *const c_char,
