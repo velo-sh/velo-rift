@@ -360,10 +360,10 @@ pub unsafe extern "C" fn velo_openat_impl(
 
 #[cfg(target_os = "linux")]
 #[repr(C)]
-struct open_how {
-    flags: u64,
-    mode: u64,
-    resolve: u64,
+pub struct open_how {
+    pub flags: u64,
+    pub mode: u64,
+    pub resolve: u64,
 }
 
 #[cfg(target_os = "linux")]
