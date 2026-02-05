@@ -3,7 +3,6 @@
 //! Provides file descriptor tracking for VFS files, enabling proper
 //! handling of dup/dup2, fchdir, lseek, ftruncate, etc.
 
-#[cfg(target_os = "macos")]
 use crate::state::ShimGuard;
 use libc::{c_int, c_void, off_t, size_t, ssize_t};
 use std::sync::atomic::AtomicUsize;

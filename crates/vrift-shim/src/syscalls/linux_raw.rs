@@ -1581,6 +1581,45 @@ pub unsafe fn raw_chdir(path: *const c_char) -> c_int {
     }
 }
 
+/// Raw fchdir syscall
+#[inline(always)]
+pub unsafe fn raw_fchdir(fd: c_int) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 81i64, // SYS_fchdir
+            in("rdi") fd as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 50i64, // SYS_fchdir
+            in("x0") fd as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+}
+
 // =============================================================================
 // Ownership Operations (P0-P1 Gap Fix)
 // =============================================================================
