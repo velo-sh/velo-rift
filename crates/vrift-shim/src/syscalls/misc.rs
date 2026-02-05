@@ -1263,7 +1263,6 @@ pub unsafe extern "C" fn flock_shim(fd: c_int, op: c_int) -> c_int {
 }
 
 #[no_mangle]
-#[cfg(target_os = "macos")]
 pub unsafe extern "C" fn symlink_shim(p1: *const c_char, p2: *const c_char) -> c_int {
     block_vfs_mutation(p2).unwrap_or_else(|| libc::symlink(p1, p2))
 }

@@ -1,6 +1,11 @@
 // Symbols imported from reals.rs via crate::reals
+#[cfg(target_os = "macos")]
 use crate::state::*;
+#[cfg(target_os = "linux")]
+use libc::c_int;
+#[cfg(target_os = "macos")]
 use libc::{c_int, c_void};
+#[cfg(target_os = "macos")]
 use std::ffi::CStr;
 
 #[no_mangle]
