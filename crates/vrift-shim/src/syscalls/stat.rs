@@ -234,17 +234,26 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
 }
 
 #[no_mangle]
-#[cfg(target_os = "macos")]
 pub unsafe extern "C" fn velo_access_impl(path: *const c_char, mode: c_int) -> c_int {
     // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
     let _guard = match ShimGuard::enter() {
         Some(g) => g,
-        None => return crate::syscalls::macos_raw::raw_access(path, mode),
+        None => {
+            #[cfg(target_os = "macos")]
+            return crate::syscalls::macos_raw::raw_access(path, mode);
+            #[cfg(target_os = "linux")]
+            return crate::syscalls::linux_raw::raw_access(path, mode);
+        }
     };
 
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
-        Err(_) => return crate::syscalls::macos_raw::raw_access(path, mode),
+        Err(_) => {
+            #[cfg(target_os = "macos")]
+            return crate::syscalls::macos_raw::raw_access(path, mode);
+            #[cfg(target_os = "linux")]
+            return crate::syscalls::linux_raw::raw_access(path, mode);
+        }
     };
 
     if ShimState::get()
@@ -254,16 +263,21 @@ pub unsafe extern "C" fn velo_access_impl(path: *const c_char, mode: c_int) -> c
         return 0;
     }
 
-    crate::syscalls::macos_raw::raw_access(path, mode)
+    #[cfg(target_os = "macos")]
+    return crate::syscalls::macos_raw::raw_access(path, mode);
+    #[cfg(target_os = "linux")]
+    return crate::syscalls::linux_raw::raw_access(path, mode);
 }
 
 #[no_mangle]
-#[cfg(target_os = "macos")]
 pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int {
     // BUG-007: Use raw syscall during early init to avoid recursion
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
+        #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_access(path, mode);
+        #[cfg(target_os = "linux")]
+        return crate::syscalls::linux_raw::raw_access(path, mode);
     }
 
     velo_access_impl(path, mode)

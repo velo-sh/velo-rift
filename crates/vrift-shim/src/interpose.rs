@@ -838,7 +838,7 @@ pub unsafe extern "C" fn rmdir(path: *const c_char) -> c_int {
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
-    crate::syscalls::dir::access_shim_linux(path, mode)
+    crate::syscalls::stat::access_shim(path, mode)
 }
 
 // Linux utimensat/touch interception
