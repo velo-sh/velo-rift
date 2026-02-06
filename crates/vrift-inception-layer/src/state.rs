@@ -1198,11 +1198,35 @@ impl InceptionLayerState {
             project_root_fs.set(&root.to_string_lossy());
         }
 
-        // Use libc::malloc to avoid Rust allocator TLS dependency during bootstrap
+        // RFC-CRIT-001: Bootstrap-Safe Allocation using raw_mmap
+        // Replaces malloc to avoid fstat->shim->malloc deadlock on macOS (BUG-007)
+        let size = std::mem::size_of::<InceptionLayerState>();
+
+        #[cfg(target_os = "macos")]
         let ptr = unsafe {
-            libc::malloc(std::mem::size_of::<InceptionLayerState>()) as *mut InceptionLayerState
+            crate::syscalls::macos_raw::raw_mmap(
+                ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            ) as *mut InceptionLayerState
         };
-        if ptr.is_null() {
+
+        #[cfg(target_os = "linux")]
+        let ptr = unsafe {
+            crate::syscalls::linux_raw::raw_mmap(
+                ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            ) as *mut InceptionLayerState
+        };
+
+        if ptr == libc::MAP_FAILED as *mut InceptionLayerState {
             return None;
         }
 
