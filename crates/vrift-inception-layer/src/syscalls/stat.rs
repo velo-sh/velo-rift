@@ -43,10 +43,10 @@ pub struct statx {
 /// RFC-0044: Virtual stat implementation using Hot Stat Cache
 /// Returns None to fallback to OS, Some(0) on success, Some(-1) on error
 unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int> {
-    let state = ShimState::get()?;
+    let state = InceptionLayerState::get()?;
 
     // Check if in VFS domain (O(1) prefix check)
-    if !state.psfs_applicable(path_str) {
+    if !state.inception_applicable(path_str) {
         return None;
     }
 
@@ -89,7 +89,7 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
         (*buf).st_dev = 0x52494654; // "RIFT"
         (*buf).st_nlink = 1;
         (*buf).st_ino = vrift_ipc::fnv1a_hash(path_str) as _;
-        vfs_record!(EventType::StatHit, vrift_ipc::fnv1a_hash(path_str), 0);
+        inception_record!(EventType::StatHit, vrift_ipc::fnv1a_hash(path_str), 0);
         return Some(0);
     }
 
@@ -114,11 +114,11 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
         (*buf).st_dev = 0x52494654; // "RIFT"
         (*buf).st_nlink = 1;
         (*buf).st_ino = vrift_ipc::fnv1a_hash(path_str) as _;
-        vfs_record!(EventType::StatHit, vrift_ipc::fnv1a_hash(path_str), 0);
+        inception_record!(EventType::StatHit, vrift_ipc::fnv1a_hash(path_str), 0);
         return Some(0);
     }
 
-    vfs_record!(
+    inception_record!(
         EventType::StatMiss,
         vrift_ipc::fnv1a_hash(path_str),
         -libc::ENOENT
@@ -136,7 +136,7 @@ unsafe fn stat_impl(
         return None;
     }
 
-    let _guard = ShimGuard::enter()?;
+    let _guard = InceptionLayerGuard::enter()?;
     let path_str = CStr::from_ptr(path).to_str().ok()?;
 
     // RFC-0044: Symlink following logic not yet implemented for VFS
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn velo_stat_impl(path: *const c_char, buf: *mut libc_stat
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn stat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
+pub unsafe extern "C" fn stat_inception(path: *const c_char, buf: *mut libc_stat) -> c_int {
     // Standard interpose entry point
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0 {
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn velo_lstat_impl(path: *const c_char, buf: *mut libc_sta
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) -> c_int {
+pub unsafe extern "C" fn lstat_inception(path: *const c_char, buf: *mut libc_stat) -> c_int {
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0 {
         #[cfg(target_os = "macos")]
@@ -190,7 +190,7 @@ pub unsafe extern "C" fn lstat_shim(path: *const c_char, buf: *mut libc_stat) ->
 
 #[no_mangle]
 pub unsafe extern "C" fn velo_fstat_impl(fd: c_int, buf: *mut libc_stat) -> c_int {
-    // 🔥 ULTRA-FAST PATH: No ShimGuard for common case
+    // 🔥 ULTRA-FAST PATH: No InceptionLayerGuard for common case
     if let Some(reactor) = crate::sync::get_reactor() {
         let entry_ptr = reactor.fd_table.get(fd as u32);
         if !entry_ptr.is_null() {
@@ -202,7 +202,7 @@ pub unsafe extern "C" fn velo_fstat_impl(fd: c_int, buf: *mut libc_stat) -> c_in
         }
     }
 
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -219,7 +219,7 @@ pub unsafe extern "C" fn velo_fstat_impl(fd: c_int, buf: *mut libc_stat) -> c_in
         }
 
         if entry.is_vfs {
-            if let Some(state) = ShimState::get() {
+            if let Some(state) = InceptionLayerState::get() {
                 if let Some(vnode) = state.query_manifest(&entry.path) {
                     std::ptr::write_bytes(buf, 0, 1);
                     (*buf).st_size = vnode.size as _;
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn velo_fstat_impl(fd: c_int, buf: *mut libc_stat) -> c_in
                     (*buf).st_dev = 0x52494654;
                     (*buf).st_nlink = 1;
                     (*buf).st_ino = vrift_ipc::fnv1a_hash(&entry.path) as _;
-                    vfs_record!(EventType::StatHit, (*buf).st_ino, 0);
+                    inception_record!(EventType::StatHit, (*buf).st_ino, 0);
                     return 0;
                 }
             }
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn velo_fstat_impl(fd: c_int, buf: *mut libc_stat) -> c_in
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
+pub unsafe extern "C" fn fstat_inception(fd: c_int, buf: *mut libc_stat) -> c_int {
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0 {
         #[cfg(target_os = "macos")]
@@ -263,7 +263,7 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut libc_stat) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn velo_access_impl(path: *const c_char, mode: c_int) -> c_int {
     // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -283,8 +283,8 @@ pub unsafe extern "C" fn velo_access_impl(path: *const c_char, mode: c_int) -> c
         }
     };
 
-    if ShimState::get()
-        .map(|s| s.psfs_applicable(path_str))
+    if InceptionLayerState::get()
+        .map(|s| s.inception_applicable(path_str))
         .unwrap_or(false)
     {
         return 0;
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn velo_access_impl(path: *const c_char, mode: c_int) -> c
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn access_shim(path: *const c_char, mode: c_int) -> c_int {
+pub unsafe extern "C" fn access_inception(path: *const c_char, mode: c_int) -> c_int {
     // BUG-007: Use raw syscall during early init to avoid recursion
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -318,7 +318,7 @@ pub unsafe extern "C" fn velo_fstatat_impl(
     flags: c_int,
 ) -> c_int {
     // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -343,16 +343,20 @@ pub unsafe extern "C" fn velo_fstatat_impl(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fstatat_shim(
+pub unsafe extern "C" fn fstatat_inception(
     dirfd: c_int,
     path: *const c_char,
     buf: *mut libc_stat,
     flags: c_int,
 ) -> c_int {
     // BUG-007 / RFC-0051: Use raw syscall during early init to avoid dlsym recursion.
-    // Also check if SHIM_STATE is null to avoid TLS deadlock hazards.
+    // Also check if INCEPTION_LAYER_STATE is null to avoid TLS deadlock hazards.
     let init_state = crate::state::INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+    if init_state != 0
+        || crate::state::INCEPTION_LAYER_STATE
+            .load(Ordering::Acquire)
+            .is_null()
+    {
         #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_fstatat64(dirfd, path, buf, flags);
         #[cfg(target_os = "linux")]
@@ -362,9 +366,9 @@ pub unsafe extern "C" fn fstatat_shim(
     velo_fstatat_impl(dirfd, path, buf, flags)
 }
 
-/// Linux-specific fstatat shim called from interpose bridge
+/// Linux-specific fstatat inception layer call
 #[cfg(target_os = "linux")]
-pub unsafe fn fstatat_shim_linux(
+pub unsafe fn fstatat_inception_linux(
     dirfd: c_int,
     path: *const c_char,
     buf: *mut libc_stat,
@@ -388,7 +392,7 @@ pub unsafe fn fstatat_shim_linux(
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn statx_shim(
+pub unsafe extern "C" fn statx_inception(
     dirfd: c_int,
     path: *const c_char,
     flags: c_int,
@@ -406,7 +410,11 @@ pub unsafe extern "C" fn statx_shim(
     }
 
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+    if init_state != 0
+        || crate::state::INCEPTION_LAYER_STATE
+            .load(Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::linux_raw::raw_statx(
             dirfd,
             path,
@@ -430,8 +438,8 @@ pub unsafe extern "C" fn statx_shim(
     };
 
     // VFS lookup
-    if let Some(state) = ShimState::get() {
-        if state.psfs_applicable(path_str) {
+    if let Some(state) = InceptionLayerState::get() {
+        if state.inception_applicable(path_str) {
             if let Some(entry) = state.query_manifest(path_str) {
                 std::ptr::write_bytes(buf, 0, 1);
                 (*buf).stx_mask = 0x7FF; // basic stats
@@ -442,7 +450,7 @@ pub unsafe extern "C" fn statx_shim(
                 (*buf).stx_mtime.tv_sec = entry.mtime as _;
                 (*buf).stx_blksize = 4096;
                 (*buf).stx_blocks = entry.size.div_ceil(512);
-                vfs_record!(EventType::StatHit, (*buf).stx_ino, 0);
+                inception_record!(EventType::StatHit, (*buf).stx_ino, 0);
                 return 0;
             }
         }

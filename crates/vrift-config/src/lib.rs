@@ -188,7 +188,7 @@ impl Config {
         &self.daemon.cow_temp_dir
     }
 
-    /// Get log directory for daemon and shim
+    /// Get log directory for daemon and inception-layer
     pub fn log_dir(&self) -> &Path {
         &self.daemon.log_dir
     }
@@ -337,9 +337,9 @@ pub struct DaemonConfig {
     pub debug: bool,
     /// Manifest mmap path for hot stat cache (RFC-0044)
     pub mmap_path: PathBuf,
-    /// CoW temporary file directory for shim
+    /// CoW temporary file directory for inception-layer
     pub cow_temp_dir: PathBuf,
-    /// Log directory for daemon and shim
+    /// Log directory for daemon and inception-layer
     pub log_dir: PathBuf,
 }
 

@@ -1,11 +1,11 @@
-//! # velo-shim
+//! # velo-inception-layer
 //!
-//! LD_PRELOAD / DYLD_INSERT_LIBRARIES shim for Velo Rift virtual filesystem.
+//! LD_PRELOAD / DYLD_INSERT_LIBRARIES inception-layer for Velo Rift virtual filesystem.
 //! Industrial-grade, zero-allocation, and recursion-safe.
 //!
 //! # ⚠️ TLS SAFETY WARNING (Pattern 2648/2649)
 //!
-//! This shim runs during macOS `dyld` bootstrap phase. **ANY Rust TLS access
+//! This inception layer runs during macOS `dyld` bootstrap phase. **ANY Rust TLS access
 //! before `TLS_READY` flag is set will deadlock the process.**
 //!
 //! ## Forbidden during init phase:
@@ -16,10 +16,10 @@
 //!
 //! ## Required testing after ANY change to init path:
 //! ```bash
-//! DYLD_INSERT_LIBRARIES=target/debug/libvrift_shim.dylib /tmp/test_minimal
+//! DYLD_INSERT_LIBRARIES=target/debug/libvrift_inception_layer.dylib /tmp/test_minimal
 //! ```
 //!
-//! See `docs/SHIM_SAFETY_GUIDE.md` for full documentation.
+//! See `docs/INCEPTION_LAYER_SAFETY_GUIDE.md` for full documentation.
 
 // Allow dead code during incremental restoration - functions will be connected in later phases
 #![allow(dead_code)]
@@ -41,8 +41,8 @@ pub mod sync;
 pub mod syscalls;
 
 extern "C" {
-    fn set_vfs_errno(e: libc::c_int);
-    fn get_vfs_errno() -> libc::c_int;
+    fn set_inception_errno(e: libc::c_int);
+    fn get_inception_errno() -> libc::c_int;
 }
 
 /// RFC-0051: Platform-agnostic errno access
@@ -57,7 +57,7 @@ pub unsafe extern "C" fn set_errno(e: libc::c_int) {
     }
     #[cfg(target_os = "linux")]
     {
-        set_vfs_errno(e);
+        set_inception_errno(e);
     }
 }
 
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn get_errno() -> libc::c_int {
     }
     #[cfg(target_os = "linux")]
     {
-        get_vfs_errno()
+        get_inception_errno()
     }
 }
 

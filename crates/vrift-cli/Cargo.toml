@@ -16,7 +16,7 @@ walkdir.workspace = true
 notify.workspace = true
 vrift-cas.workspace = true
 vrift-manifest.workspace = true
-vrift-shim.workspace = true
+vrift-inception-layer.workspace = true
 vrift-fuse = { workspace = true, optional = true }
 vrift-lock.workspace = true
 vrift-config.workspace = true

@@ -11,7 +11,7 @@
 //! ```text
 //! dyld -> libSystem_initializer -> __malloc_init -> _os_feature_table_once -> fstat
 //!                                                                               ↓
-//!                                                                         fstat_shim (infinite recursion)
+//!                                                                         fstat_inception (infinite recursion)
 //! ```
 //!
 //! ## Root Cause Analysis
@@ -19,9 +19,9 @@
 //! 1. **Timing**: `fstat` is called inside `__malloc_init` BEFORE malloc is ready
 //!
 //! 2. **Interpose Redirection**: With `DYLD_INSERT_LIBRARIES` active, all calls to
-//!    `fstat` get redirected to our `fstat_shim` via the `__DATA,__interpose` section
+//!    `fstat` get redirected to our `fstat_inception` via the `__DATA,__interpose` section
 //!
-//! 3. **dlsym Dependency**: `fstat_shim` was using `dlsym(RTLD_NEXT)` to get the
+//! 3. **dlsym Dependency**: `fstat_inception` was using `dlsym(RTLD_NEXT)` to get the
 //!    real fstat pointer. But `dlsym` internally uses malloc (not yet initialized)!
 //!
 //! 4. **IT_FSTAT.old_func Trap**: We tried using the interpose table's `old_func`
@@ -46,13 +46,13 @@
 //! ## Affected Shims
 //!
 //! The following shims use raw syscalls during early init (`INITIALIZING >= 2`)
-//! or when in recursion (ShimGuard fails):
+//! or when in recursion (InceptionLayerGuard fails):
 //!
-//! - `fstat_shim` → [`raw_fstat64`] (SYS_fstat64 = 339)
-//! - `close_shim` → [`raw_close`] (SYS_close = 6)
-//! - `mmap_shim` → [`raw_mmap`] (SYS_mmap = 197)
-//! - `munmap_shim` → [`raw_munmap`] (SYS_munmap = 73)
-//! - `access_shim` → [`raw_access`] (SYS_access = 33)
+//! - `fstat_inception` → [`raw_fstat64`] (SYS_fstat64 = 339)
+//! - `close_inception` → [`raw_close`] (SYS_close = 6)
+//! - `mmap_inception` → [`raw_mmap`] (SYS_mmap = 197)
+//! - `munmap_inception` → [`raw_munmap`] (SYS_munmap = 73)
+//! - `access_inception` → [`raw_access`] (SYS_access = 33)
 //!
 //! ## References
 //!

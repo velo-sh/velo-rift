@@ -2152,11 +2152,11 @@ dependencies = [
  "vrift-cas",
  "vrift-config",
  "vrift-fuse",
+ "vrift-inception-layer",
  "vrift-ipc",
  "vrift-lock",
  "vrift-manifest",
  "vrift-runtime",
- "vrift-shim",
  "walkdir",
 ]
 
@@ -2211,6 +2211,16 @@ dependencies = [
  "log",
  "vrift-cas",
  "vrift-manifest",
+]
+
+[[package]]
+name = "vrift-inception-layer"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "rkyv",
+ "vrift-ipc",
 ]
 
 [[package]]
@@ -2280,16 +2290,6 @@ dependencies = [
  "vrift-cas",
  "vrift-manifest",
  "walkdir",
-]
-
-[[package]]
-name = "vrift-shim"
-version = "0.1.0"
-dependencies = [
- "cc",
- "libc",
- "rkyv",
- "vrift-ipc",
 ]
 
 [[package]]

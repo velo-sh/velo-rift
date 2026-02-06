@@ -10,9 +10,9 @@ use std::ffi::CStr;
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn opendir_shim(path: *const libc::c_char) -> *mut c_void {
+pub unsafe extern "C" fn opendir_inception(path: *const libc::c_char) -> *mut c_void {
     // RFC-0050: Use IT_OPENDIR.old_func from interpose table to avoid recursion.
-    // dlsym(RTLD_NEXT) returns the shim itself due to __interpose mechanism.
+    // dlsym(RTLD_NEXT) returns the inception layer itself due to __interpose mechanism.
     let real = std::mem::transmute::<
         *const (),
         unsafe extern "C" fn(*const libc::c_char) -> *mut c_void,
@@ -30,14 +30,14 @@ pub unsafe extern "C" fn opendir_shim(path: *const libc::c_char) -> *mut c_void 
         Err(_) => return real(path),
     };
 
-    // Get shim state
-    let state = match ShimState::get() {
+    // Get inception layer state
+    let state = match InceptionLayerState::get() {
         Some(s) => s,
         None => return real(path),
     };
 
     // Check if path is in VFS domain
-    if !state.psfs_applicable(path_str) {
+    if !state.inception_applicable(path_str) {
         return real(path);
     }
 
@@ -82,8 +82,8 @@ static mut DIRENT_BUF: libc::dirent = libc::dirent {
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn readdir_shim(dir: *mut c_void) -> *mut libc::dirent {
-    // RFC-0050: Use IT_READDIR.old_func to avoid recursion (same fix as opendir_shim)
+pub unsafe extern "C" fn readdir_inception(dir: *mut c_void) -> *mut libc::dirent {
+    // RFC-0050: Use IT_READDIR.old_func to avoid recursion (same fix as opendir_inception)
     let real = std::mem::transmute::<
         *const (),
         unsafe extern "C" fn(*mut c_void) -> *mut libc::dirent,
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn readdir_shim(dir: *mut c_void) -> *mut libc::dirent {
     let syn_dir = dir as *mut SyntheticDir;
 
     // Try to read from synthetic dir if it's one of ours
-    if let Some(state) = ShimState::get() {
+    if let Some(state) = InceptionLayerState::get() {
         let dirs = state.open_dirs.lock();
         if dirs.contains_key(&(dir as usize)) {
             drop(dirs); // Release lock before accessing syn_dir
@@ -141,8 +141,8 @@ pub unsafe extern "C" fn readdir_shim(dir: *mut c_void) -> *mut libc::dirent {
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn closedir_shim(dir: *mut c_void) -> c_int {
-    // RFC-0050: Use IT_CLOSEDIR.old_func to avoid recursion (same fix as opendir_shim)
+pub unsafe extern "C" fn closedir_inception(dir: *mut c_void) -> c_int {
+    // RFC-0050: Use IT_CLOSEDIR.old_func to avoid recursion (same fix as opendir_inception)
     let real = std::mem::transmute::<*const (), unsafe extern "C" fn(*mut c_void) -> c_int>(
         crate::interpose::IT_CLOSEDIR.old_func,
     );
@@ -155,7 +155,7 @@ pub unsafe extern "C" fn closedir_shim(dir: *mut c_void) -> c_int {
     }
 
     // Check if this is a synthetic directory
-    if let Some(state) = ShimState::get() {
+    if let Some(state) = InceptionLayerState::get() {
         let is_synthetic = {
             let mut dirs = state.open_dirs.lock();
             dirs.remove(&(dir as usize)).is_some()
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn closedir_shim(dir: *mut c_void) -> c_int {
     real(dir)
 }
 #[no_mangle]
-pub unsafe extern "C" fn getcwd_shim(
+pub unsafe extern "C" fn getcwd_inception(
     buf: *mut libc::c_char,
     size: libc::size_t,
 ) -> *mut libc::c_char {
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn getcwd_shim(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn chdir_shim(path: *const libc::c_char) -> c_int {
+pub unsafe extern "C" fn chdir_inception(path: *const libc::c_char) -> c_int {
     // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_chdir(path);

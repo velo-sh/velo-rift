@@ -3,7 +3,7 @@
 //! Provides file descriptor tracking for VFS files, enabling proper
 //! handling of dup/dup2, fchdir, lseek, ftruncate, etc.
 
-use crate::state::ShimGuard;
+use crate::state::InceptionLayerGuard;
 use libc::{c_int, c_void, off_t, size_t, ssize_t};
 use std::sync::atomic::AtomicUsize;
 
@@ -43,7 +43,7 @@ pub fn track_fd(fd: c_int, path: &str, is_vfs: bool, cached_stat: Option<libc::s
         cached_stat,
     }));
 
-    // Safety: Reactor is guaranteed to be initialized after ShimState::init()
+    // Safety: Reactor is guaranteed to be initialized after InceptionLayerState::init()
     if let Some(reactor) = crate::sync::get_reactor() {
         let old = reactor.fd_table.set(fd as u32, entry);
         if !old.is_null() {
@@ -97,12 +97,12 @@ pub fn is_vfs_fd(fd: c_int) -> bool {
 // ============================================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
-    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+pub unsafe extern "C" fn dup_inception(oldfd: c_int) -> c_int {
+    // BUG-007: Use raw syscall during early init OR when inception layer not fully ready
     // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
         return crate::syscalls::linux_raw::raw_dup(oldfd);
     }
 
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -137,12 +137,12 @@ pub unsafe extern "C" fn dup_shim(oldfd: c_int) -> c_int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
-    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+pub unsafe extern "C" fn dup2_inception(oldfd: c_int, newfd: c_int) -> c_int {
+    // BUG-007: Use raw syscall during early init OR when inception layer not fully ready
     // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
         return crate::syscalls::linux_raw::raw_dup2(oldfd, newfd);
     }
 
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -180,14 +180,14 @@ pub unsafe extern "C" fn dup2_shim(oldfd: c_int, newfd: c_int) -> c_int {
 }
 
 // ============================================================================
-// fchdir shim - update virtual CWD from FD
+// fchdir inception layer - update virtual CWD from FD
 // ============================================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn fchdir_shim(fd: c_int) -> c_int {
+pub unsafe extern "C" fn fchdir_inception(fd: c_int) -> c_int {
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -206,11 +206,11 @@ pub unsafe extern "C" fn fchdir_shim(fd: c_int) -> c_int {
 }
 
 // ============================================================================
-// lseek shim - passthrough with tracking
+// lseek inception layer - passthrough with tracking
 // ============================================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn lseek_shim(fd: c_int, offset: off_t, whence: c_int) -> off_t {
+pub unsafe extern "C" fn lseek_inception(fd: c_int, offset: off_t, whence: c_int) -> off_t {
     // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_lseek(fd, offset, whence);
@@ -219,11 +219,11 @@ pub unsafe extern "C" fn lseek_shim(fd: c_int, offset: off_t, whence: c_int) -> 
 }
 
 // ============================================================================
-// ftruncate shim - truncate VFS file's CoW copy
+// ftruncate inception layer - truncate VFS file's CoW copy
 // ============================================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn ftruncate_shim(fd: c_int, length: off_t) -> c_int {
+pub unsafe extern "C" fn ftruncate_inception(fd: c_int, length: off_t) -> c_int {
     // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_ftruncate(fd, length);
@@ -232,11 +232,11 @@ pub unsafe extern "C" fn ftruncate_shim(fd: c_int, length: off_t) -> c_int {
 }
 
 // ============================================================================
-// close shim - untrack and trigger COW reingest
+// close inception layer - untrack and trigger COW reingest
 // ============================================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn write_shim(fd: c_int, buf: *const c_void, count: size_t) -> ssize_t {
+pub unsafe extern "C" fn write_inception(fd: c_int, buf: *const c_void, count: size_t) -> ssize_t {
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_write(fd, buf, count);
     #[cfg(target_os = "linux")]
@@ -244,7 +244,7 @@ pub unsafe extern "C" fn write_shim(fd: c_int, buf: *const c_void, count: size_t
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn read_shim(fd: c_int, buf: *mut c_void, count: size_t) -> ssize_t {
+pub unsafe extern "C" fn read_inception(fd: c_int, buf: *mut c_void, count: size_t) -> ssize_t {
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_read(fd, buf, count);
     #[cfg(target_os = "linux")]
@@ -252,8 +252,8 @@ pub unsafe extern "C" fn read_shim(fd: c_int, buf: *mut c_void, count: size_t) -
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
-    use crate::state::{EventType, ShimGuard, ShimState};
+pub unsafe extern "C" fn close_inception(fd: c_int) -> c_int {
+    use crate::state::{EventType, InceptionLayerGuard, InceptionLayerState};
 
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -263,7 +263,7 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
         return crate::syscalls::linux_raw::raw_close(fd);
     }
 
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
         }
     };
 
-    let state = match ShimState::get() {
+    let state = match InceptionLayerState::get() {
         Some(s) => s,
         None => {
             #[cfg(target_os = "macos")]
@@ -299,7 +299,7 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
 
     // Use a hash of the FD or 0 if not tracked for general close event
     let file_id = 0; // Simplified for general close
-    vfs_record!(EventType::Close, file_id, fd);
+    inception_record!(EventType::Close, file_id, fd);
 
     // Final close of the file
     #[cfg(target_os = "macos")]
@@ -309,7 +309,7 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
 
     // Offload IPC task to Worker (asynchronous)
     if let Some(info) = cow_info {
-        vfs_log!(
+        inception_log!(
             "COW CLOSE: fd={} vpath='{}' temp='{}'",
             fd,
             info.vpath,
@@ -345,7 +345,7 @@ pub unsafe extern "C" fn close_shim(fd: c_int) -> c_int {
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub unsafe extern "C" fn sendfile_shim(
+pub unsafe extern "C" fn sendfile_inception(
     fd: c_int,
     s: c_int,
     offset: libc::off_t,
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn sendfile_shim(
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
-pub unsafe extern "C" fn sendfile_shim(
+pub unsafe extern "C" fn sendfile_inception(
     out_fd: c_int,
     in_fd: c_int,
     offset: *mut libc::off_t,
@@ -376,7 +376,7 @@ pub unsafe extern "C" fn sendfile_shim(
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
-pub unsafe extern "C" fn copy_file_range_shim(
+pub unsafe extern "C" fn copy_file_range_inception(
     fd_in: c_int,
     off_in: *mut libc::off_t,
     fd_out: c_int,

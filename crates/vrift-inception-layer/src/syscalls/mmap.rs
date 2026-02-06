@@ -1,7 +1,7 @@
 use libc::{c_int, c_void, off_t, size_t};
 
 #[no_mangle]
-pub unsafe extern "C" fn mmap_shim(
+pub unsafe extern "C" fn mmap_inception(
     addr: *mut c_void,
     len: size_t,
     prot: c_int,
@@ -18,7 +18,7 @@ pub unsafe extern "C" fn mmap_shim(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn munmap_shim(addr: *mut c_void, len: size_t) -> c_int {
+pub unsafe extern "C" fn munmap_inception(addr: *mut c_void, len: size_t) -> c_int {
     // RFC-0051: Always use raw syscall for munmap to avoid any dlsym dependency.
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_munmap(addr, len);

@@ -8,7 +8,7 @@ pub unsafe extern "C" fn velo_readlink_impl(
     bufsiz: size_t,
 ) -> ssize_t {
     // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -25,7 +25,7 @@ pub unsafe extern "C" fn velo_readlink_impl(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn readlink_shim(
+pub unsafe extern "C" fn readlink_inception(
     path: *const c_char,
     buf: *mut c_char,
     bufsiz: size_t,
@@ -46,7 +46,7 @@ pub unsafe extern "C" fn velo_realpath_impl(
     resolved_path: *mut c_char,
 ) -> *mut c_char {
     // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => {
             #[cfg(target_os = "macos")]
@@ -63,7 +63,7 @@ pub unsafe extern "C" fn velo_realpath_impl(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn realpath_shim(
+pub unsafe extern "C" fn realpath_inception(
     path: *const c_char,
     resolved_path: *mut c_char,
 ) -> *mut c_char {

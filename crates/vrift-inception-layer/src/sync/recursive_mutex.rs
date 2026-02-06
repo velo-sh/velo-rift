@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// A Recursive Mutex using raw pthread primitives.
 ///
 /// This allows a thread to acquire the same lock multiple times without deadlocking.
-/// Designed for use in shim's deep call chains.
+/// Designed for use in inception-layer's deep call chains.
 pub struct RecursiveMutex<T> {
     inner: UnsafeCell<libc::pthread_mutex_t>,
     data: UnsafeCell<T>,

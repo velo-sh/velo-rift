@@ -154,7 +154,7 @@ unsafe fn sync_rpc(
 
         if now >= trip_time + recovery_delay {
             // Recovery window: try to reset circuit breaker
-            vfs_info!(
+            inception_info!(
                 "Circuit breaker recovery attempt after {}s",
                 now - trip_time
             );
@@ -169,7 +169,7 @@ unsafe fn sync_rpc(
     if fd < 0 {
         let count = CIRCUIT_BREAKER_FAILED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
         let threshold = CIRCUIT_BREAKER_THRESHOLD.load(Ordering::Relaxed);
-        vfs_record!(EventType::IpcFail, 0, count as i32);
+        inception_record!(EventType::IpcFail, 0, count as i32);
         if count >= threshold && !CIRCUIT_TRIPPED.swap(true, Ordering::SeqCst) {
             // Record trip time for auto-recovery
             let now = std::time::SystemTime::now()
@@ -177,17 +177,17 @@ unsafe fn sync_rpc(
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             CIRCUIT_TRIP_TIME.store(now, Ordering::Relaxed);
-            vfs_error!(
+            inception_error!(
                 "DAEMON CONNECTION FAILED {} TIMES. CIRCUIT BREAKER TRIPPED. WILL RETRY AFTER {}s.",
                 count,
                 CIRCUIT_RECOVERY_DELAY.load(Ordering::Relaxed)
             );
-            vfs_record!(EventType::CircuitTripped, 0, count as i32);
+            inception_record!(EventType::CircuitTripped, 0, count as i32);
         }
         return None;
     }
 
-    vfs_record!(EventType::IpcSuccess, 0, fd);
+    inception_record!(EventType::IpcSuccess, 0, fd);
 
     // Success - reset failure count
     CIRCUIT_BREAKER_FAILED_COUNT.store(0, Ordering::Relaxed);

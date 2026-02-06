@@ -20,16 +20,16 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
         Err(_) => return None,
     };
 
-    let state = ShimState::get()?;
+    let state = InceptionLayerState::get()?;
 
     let vpath = match state.resolve_path(path_str) {
         Some(p) => {
-            vfs_log!(
-                "open path='{}' -> resolved='{}' (VFS HIT)",
+            inception_log!(
+                "open path='{}' -> resolved='{}' (HIT)",
                 path_str,
                 p.absolute
             );
-            vfs_record!(EventType::OpenHit, p.manifest_key_hash, 0);
+            inception_record!(EventType::OpenHit, p.manifest_key_hash, 0);
             p
         }
         None => return None,
@@ -37,7 +37,7 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
 
     let entry = match state.query_manifest_ipc(&vpath) {
         Some(e) => {
-            vfs_log!(
+            inception_log!(
                 "manifest lookup '{}': FOUND (mode=0o{:o}, size={})",
                 vpath.manifest_key,
                 e.mode,
@@ -52,12 +52,12 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
             let is_write =
                 (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_APPEND | libc::O_TRUNC)) != 0;
 
-            vfs_log!(
+            inception_log!(
                 "manifest lookup '{}': NOT FOUND -> passthrough + track (is_write={})",
                 vpath.manifest_key,
                 is_write
             );
-            vfs_record!(EventType::OpenMiss, vpath.manifest_key_hash, 0);
+            inception_record!(EventType::OpenMiss, vpath.manifest_key_hash, 0);
 
             let fd = unsafe { raw_open(path, flags, mode) };
             if fd >= 0 {
@@ -82,7 +82,7 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
     let is_write = (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_APPEND | libc::O_TRUNC)) != 0;
 
     if is_write {
-        vfs_log!("open write request for '{}'", vpath.absolute);
+        inception_log!("open write request for '{}'", vpath.absolute);
 
         // M4: Mark path as dirty in DirtyTracker (enables stat redirect to staging)
         DIRTY_TRACKER.mark_dirty(&vpath.manifest_key);
@@ -130,8 +130,8 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
         unsafe { libc::close(temp_fd) };
         let temp_cpath = std::ffi::CString::new(temp_path.as_str()).ok()?;
 
-        vfs_log!("COW TRIGGERED: '{}' -> '{}'", vpath.absolute, temp_path);
-        vfs_record!(EventType::CowTriggered, vpath.manifest_key_hash, 0);
+        inception_log!("COW TRIGGERED: '{}' -> '{}'", vpath.absolute, temp_path);
+        inception_record!(EventType::CowTriggered, vpath.manifest_key_hash, 0);
 
         let blob_cpath = std::ffi::CString::new(blob_path.as_str()).ok()?;
         let src_fd = unsafe { libc::open(blob_cpath.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
@@ -225,7 +225,7 @@ fn hex_encode(hash: &[u8; 32]) -> String {
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_int {
+pub unsafe extern "C" fn open_inception(p: *const c_char, f: c_int, m: mode_t) -> c_int {
     // Route through C bridge for early-init safety (avoids Rust TLS during dyld bootstrap)
     // C's c_open_bridge checks INITIALIZING state before calling any Rust code
     extern "C" {
@@ -236,7 +236,12 @@ pub unsafe extern "C" fn open_shim(p: *const c_char, f: c_int, m: mode_t) -> c_i
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub unsafe extern "C" fn openat_shim(dfd: c_int, p: *const c_char, f: c_int, m: mode_t) -> c_int {
+pub unsafe extern "C" fn openat_inception(
+    dfd: c_int,
+    p: *const c_char,
+    f: c_int,
+    m: mode_t,
+) -> c_int {
     // Route through C bridge for early-init safety
     extern "C" {
         fn c_openat_bridge(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
@@ -245,7 +250,7 @@ pub unsafe extern "C" fn openat_shim(dfd: c_int, p: *const c_char, f: c_int, m: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn open_shim_c_impl(p: *const c_char, f: c_int, m: mode_t) -> c_int {
+pub unsafe extern "C" fn open_inception_c_impl(p: *const c_char, f: c_int, m: mode_t) -> c_int {
     #[inline(always)]
     unsafe fn raw_open_internal(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -279,11 +284,11 @@ pub unsafe extern "C" fn open_shim_c_impl(p: *const c_char, f: c_int, m: mode_t)
     if CIRCUIT_TRIPPED.load(Ordering::Relaxed) {
         return raw_open_internal(p, f, m);
     }
-    if !is_vfs_ready() && ShimState::get().is_none() {
+    if !is_vfs_ready() && InceptionLayerState::get().is_none() {
         return raw_open_internal(p, f, m);
     }
 
-    let state = match ShimState::get() {
+    let state = match InceptionLayerState::get() {
         Some(s) => s,
         None => return raw_open_internal(p, f, m),
     };
@@ -295,7 +300,7 @@ pub unsafe extern "C" fn open_shim_c_impl(p: *const c_char, f: c_int, m: mode_t)
         let path_str = unsafe { CStr::from_ptr(p).to_string_lossy() };
         let vpath = state.resolve_path(&path_str);
         if vpath.is_none() {
-            vfs_record!(EventType::OpenMiss, 0, 0);
+            inception_record!(EventType::OpenMiss, 0, 0);
             let fd = raw_open_internal(p, f, m);
             if fd >= 0 {
                 crate::syscalls::io::OPEN_FD_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -303,7 +308,7 @@ pub unsafe extern "C" fn open_shim_c_impl(p: *const c_char, f: c_int, m: mode_t)
             return fd;
         }
 
-        let _guard = match ShimGuard::enter() {
+        let _guard = match InceptionLayerGuard::enter() {
             Some(g) => g,
             None => return raw_open_internal(p, f, m),
         };
@@ -363,11 +368,11 @@ pub unsafe extern "C" fn velo_openat_impl(
     if CIRCUIT_TRIPPED.load(Ordering::Relaxed) {
         return raw_openat_internal(dirfd, p, f, m);
     }
-    if !is_vfs_ready() && ShimState::get().is_none() {
+    if !is_vfs_ready() && InceptionLayerState::get().is_none() {
         return raw_openat_internal(dirfd, p, f, m);
     }
 
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => return raw_openat_internal(dirfd, p, f, m),
     };
@@ -384,7 +389,7 @@ pub struct open_how {
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
-pub unsafe extern "C" fn openat2_shim(
+pub unsafe extern "C" fn openat2_inception(
     dirfd: c_int,
     p: *const c_char,
     how: *const open_how,
@@ -418,8 +423,8 @@ pub unsafe extern "C" fn openat2_shim(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn creat_shim(path: *const c_char, mode: mode_t) -> c_int {
+pub unsafe extern "C" fn creat_inception(path: *const c_char, mode: mode_t) -> c_int {
     let flags = libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC;
-    // Route through open_shim_c_impl (platform-generic entry point)
-    open_shim_c_impl(path, flags, mode)
+    // Route through open_inception_c_impl (platform-generic entry point)
+    open_inception_c_impl(path, flags, mode)
 }

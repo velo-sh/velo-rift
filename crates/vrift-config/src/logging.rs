@@ -17,7 +17,7 @@ pub struct Component;
 impl Component {
     pub const DAEMON: &'static str = "DAEMON";
     pub const CLI: &'static str = "CLI";
-    pub const SHIM: &'static str = "SHIM";
+    pub const INCEPTION: &'static str = "INCEPTION";
     pub const INGEST: &'static str = "INGEST";
     pub const VFS: &'static str = "VFS";
     pub const IPC: &'static str = "IPC";
@@ -149,6 +149,6 @@ mod tests {
     fn test_component_constants() {
         assert_eq!(Component::DAEMON, "DAEMON");
         assert_eq!(Component::CLI, "CLI");
-        assert_eq!(Component::SHIM, "SHIM");
+        assert_eq!(Component::INCEPTION, "INCEPTION");
     }
 }

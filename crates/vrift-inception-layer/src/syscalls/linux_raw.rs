@@ -1453,7 +1453,7 @@ pub unsafe fn raw_munmap(addr: *mut c_void, len: size_t) -> c_int {
 }
 
 // =============================================================================
-// Path Operations (for P2 Linux shim parity)
+// Path Operations (for P2 Linux inception layer parity)
 // =============================================================================
 
 /// Raw readlink syscall

@@ -26,18 +26,19 @@ use crate::ipc::*;
 // 2. TLS_READY starts at false - set to true only after pthread TLS is
 //    confirmed working (also in SET_READY)
 //
-// 3. All shim entry points MUST check these flags BEFORE using any Rust
+// 3. All inception layer entry points MUST check these flags BEFORE using any Rust
 //    features that might trigger TLS (String, HashMap, Mutex, etc.)
 //
-// 4. ShimState::init() uses ONLY libc primitives (malloc, memcpy) to avoid
+// 4. InceptionLayerState::init() uses ONLY libc primitives (malloc, memcpy) to avoid
 //    touching Rust allocator which may trigger TLS
 //
 // Violation of these invariants will cause process deadlock on macOS ARM64.
-// See docs/SHIM_SAFETY_GUIDE.md for details.
+// See docs/INCEPTION_LAYER_SAFETY_GUIDE.md for details.
 // ============================================================================
 
-pub(crate) static SHIM_STATE: AtomicPtr<ShimState> = AtomicPtr::new(ptr::null_mut());
-// Flag to indicate shim is still initializing. All syscalls passthrough during this phase.
+pub(crate) static INCEPTION_LAYER_STATE: AtomicPtr<InceptionLayerState> =
+    AtomicPtr::new(ptr::null_mut());
+// Flag to indicate inception layer is still initializing. All syscalls passthrough during this phase.
 extern "C" {
     pub static INITIALIZING: std::sync::atomic::AtomicU8;
 }
@@ -422,11 +423,11 @@ pub(crate) fn get_recursion_key() -> libc::pthread_key_t {
     }
 }
 
-pub(crate) struct ShimGuard(bool); // bool: true = has active TLS guard
-impl ShimGuard {
+pub(crate) struct InceptionLayerGuard(bool); // bool: true = has active TLS guard
+impl InceptionLayerGuard {
     pub(crate) fn enter() -> Option<Self> {
         // RFC-0050: Only return None when actively initializing (state 3), not for early-init (2) or ready (1)
-        // States 1 and 2 should be allowed to proceed so that velo_open_impl can trigger ShimState::get()
+        // States 1 and 2 should be allowed to proceed so that velo_open_impl can trigger InceptionLayerState::get()
         if (unsafe { INITIALIZING.load(Ordering::Relaxed) }) == 3
             || BOOTSTRAPPING.load(Ordering::Relaxed)
         {
@@ -434,12 +435,12 @@ impl ShimGuard {
         }
 
         // RFC-0049: Lazy TLS initialization.
-        // If SHIM_STATE is null, we are in the middle of (or about to start) initialization.
+        // If INCEPTION_LAYER_STATE is null, we are in the middle of (or about to start) initialization.
         // During this phase, we don't use the TLS recursion guard yet. We rely on the
-        // INITIALIZING flag which is set by ShimState::get() to prevent recursion.
+        // INITIALIZING flag which is set by InceptionLayerState::get() to prevent recursion.
         // This avoids calling pthread_key_create() too early during dyld's initialization.
-        if SHIM_STATE.load(Ordering::Acquire).is_null() {
-            return Some(ShimGuard(false));
+        if INCEPTION_LAYER_STATE.load(Ordering::Acquire).is_null() {
+            return Some(InceptionLayerGuard(false));
         }
 
         // Set BOOTSTRAPPING true while accessing TLS
@@ -451,15 +452,15 @@ impl ShimGuard {
             let key = get_recursion_key();
             if key == 0 {
                 // TLS key creation failed - allow proceed without recursion guard
-                // This is safe because at this point SHIM_STATE is initialized
-                return Some(ShimGuard(false));
+                // This is safe because at this point INCEPTION_LAYER_STATE is initialized
+                return Some(InceptionLayerGuard(false));
             }
             let val = unsafe { libc::pthread_getspecific(key) };
             if !val.is_null() {
-                None // Already in shim - recursion detected
+                None // Already in inception layer - recursion detected
             } else {
                 unsafe { libc::pthread_setspecific(key, std::ptr::dangling::<c_void>()) };
-                Some(ShimGuard(true))
+                Some(InceptionLayerGuard(true))
             }
         })();
 
@@ -467,7 +468,7 @@ impl ShimGuard {
         res
     }
 }
-impl Drop for ShimGuard {
+impl Drop for InceptionLayerGuard {
     fn drop(&mut self) {
         if self.0 {
             let key = get_recursion_key();
@@ -528,7 +529,7 @@ impl Logger {
     #[allow(dead_code)]
     pub(crate) fn dump_to_file(&self) {
         let pid = unsafe { libc::getpid() };
-        let path = format!("/tmp/vrift-shim-{}.log", pid);
+        let path = format!("/tmp/vrift-inception-layer-{}.log", pid);
         if let Ok(mut f) = std::fs::File::create(&path) {
             use std::io::Write;
             let head = self.head.load(Ordering::SeqCst);
@@ -554,7 +555,7 @@ impl Logger {
 
 pub static LOGGER: Logger = Logger::new();
 
-pub(crate) unsafe fn shim_log(msg: &str) {
+pub(crate) unsafe fn inception_log(msg: &str) {
     LOGGER.log(msg);
     if DEBUG_ENABLED.load(Ordering::Relaxed) {
         #[cfg(target_os = "macos")]
@@ -638,7 +639,7 @@ pub(crate) static SYNTHETIC_DIR_COUNTER: std::sync::atomic::AtomicUsize =
 
 /// Open mmap'd manifest file for O(1) stat lookup.
 /// Returns (ptr, size) or (null, 0) if unavailable.
-/// Uses raw libc to avoid recursion through shim.
+/// Uses raw libc to avoid recursion through inception layer.
 pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
     // Check if mmap is explicitly disabled
     unsafe {
@@ -855,7 +856,7 @@ pub(crate) fn mmap_dir_lookup(
     None
 }
 
-pub(crate) struct ShimState {
+pub(crate) struct InceptionLayerState {
     // pub cas: std::sync::Mutex<Option<CasStore>>, // Lazy init to avoid fs calls during dylib load
     pub cas_root: std::borrow::Cow<'static, str>,
     pub vfs_prefix: std::borrow::Cow<'static, str>,
@@ -881,7 +882,7 @@ pub(crate) struct ShimState {
     pub tasks: &'static crate::sync::RingBuffer,
 }
 
-impl ShimState {
+impl InceptionLayerState {
     pub(crate) unsafe fn init_logger() {
         let debug_ptr = libc::getenv(c"VRIFT_DEBUG".as_ptr());
         if !debug_ptr.is_null() {
@@ -961,8 +962,8 @@ impl ShimState {
 
             // UX: Explicit guidance if hard limit is dangerously low
             if hard_cap < 4096 {
-                let msg = "[vrift] ⚠️  WARNING: System FD hard limit is extremely low. This will likely cause build failures.\n\
-                     [vrift] 👉 Action: Run 'ulimit -Hn 65536' or check /etc/security/limits.conf\n";
+                let msg = "[vrift-inception] ⚠️  WARNING: System FD hard limit is extremely low. This will likely cause build failures.\n\
+                     [vrift-inception] 👉 Action: Run 'ulimit -Hn 65536' or check /etc/security/limits.conf\n";
                 unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len()) };
             }
 
@@ -974,7 +975,7 @@ impl ShimState {
                 rl.rlim_cur = target;
                 if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rl) } == 0 {
                     let msg = format!(
-                        "[vrift] 🚀 Optimized FD limit: {} -> {} (target: 80% of system cap)\n",
+                        "[vrift-inception] 🚀 Optimized FD limit: {} -> {} (target: 80% of system cap)\n",
                         old_cur, rl.rlim_cur
                     );
                     unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len()) };
@@ -1001,7 +1002,7 @@ impl ShimState {
 
         let prefix_ptr = unsafe { libc::getenv(c"VRIFT_VFS_PREFIX".as_ptr()) };
         // RFC-0050: Default to empty string to disable VFS when not explicitly configured
-        // This prevents hang when shim is loaded but no VFS environment is set up
+        // This prevents hang when inception layer is loaded but no VFS environment is set up
         let vfs_prefix: std::borrow::Cow<'static, str> = if prefix_ptr.is_null() {
             std::borrow::Cow::Borrowed("")
         } else {
@@ -1042,7 +1043,7 @@ impl ShimState {
             String::new()
         };
 
-        let state = Box::new(ShimState {
+        let state = Box::new(InceptionLayerState {
             // cas: std::sync::Mutex::new(None),
             cas_root,
             vfs_prefix: vfs_prefix.clone(),
@@ -1146,7 +1147,7 @@ impl ShimState {
                 }
             }
             crate::sync::Task::Reingest { vpath, temp_path } => {
-                if let Some(state) = ShimState::get() {
+                if let Some(state) = InceptionLayerState::get() {
                     unsafe {
                         crate::ipc::sync_ipc_manifest_reingest(
                             &state.socket_path,
@@ -1163,7 +1164,7 @@ impl ShimState {
     }
 
     pub(crate) fn get() -> Option<&'static Self> {
-        let ptr = SHIM_STATE.load(Ordering::Acquire);
+        let ptr = INCEPTION_LAYER_STATE.load(Ordering::Acquire);
         if !ptr.is_null() {
             return unsafe { Some(&*ptr) };
         }
@@ -1189,7 +1190,7 @@ impl ShimState {
         // Initialize state - reset INITIALIZING to 0 on success
         let ptr = match Self::init() {
             Some(p) => {
-                SHIM_STATE.store(p, Ordering::Release);
+                INCEPTION_LAYER_STATE.store(p, Ordering::Release);
                 unsafe { INITIALIZING.store(0, Ordering::SeqCst) };
                 p
             }
@@ -1200,7 +1201,7 @@ impl ShimState {
         };
 
         // RFC-0039 §82: Record initialization event
-        vfs_record!(EventType::VfsInit, 0, 0);
+        inception_record!(EventType::VfsInit, 0, 0);
 
         // BUG-004: setup_signal_handler and atexit are dangerous during dyld bootstrap.
         // These can trigger system-level deadlocks (Pattern 2682).
@@ -1266,8 +1267,8 @@ impl ShimState {
         self.path_resolver.resolve(path)
     }
 
-    /// Check if path is in VFS domain (Backwards compatibility shim)
-    pub(crate) fn psfs_applicable(&self, path: &str) -> bool {
+    /// Check if path is in VFS domain
+    pub(crate) fn inception_applicable(&self, path: &str) -> bool {
         self.resolve_path(path).is_some()
     }
 
@@ -1449,7 +1450,7 @@ impl ShimState {
                         "WARNING"
                     };
                     let msg = format!(
-                        "[vrift] {}: FD usage at {}% ({} of {}). Build may hang soon!\n",
+                        "[vrift-inception] {}: FD usage at {}% ({} of {}). Build may hang soon!\n",
                         level, usage_pct, count, soft
                     );
                     unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len()) };

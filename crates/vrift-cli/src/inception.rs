@@ -76,7 +76,7 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
     ensure_wrappers(&vrift_dir)?;
 
     // Find the shim library
-    let shim_path = find_shim_library(&project_root)?;
+    let inception_path = find_inception_library(&project_root)?;
 
     // Get VFS stats
     let (file_count, cas_size) = get_vfs_stats(&vrift_dir);
@@ -129,13 +129,13 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
     {
         cmd.env(
             "DYLD_INSERT_LIBRARIES",
-            shim_path.to_string_lossy().as_ref(),
+            inception_path.to_string_lossy().as_ref(),
         )
         .env("DYLD_FORCE_FLAT_NAMESPACE", "1");
     }
     #[cfg(target_os = "linux")]
     {
-        cmd.env("LD_PRELOAD", shim_path.to_string_lossy().as_ref());
+        cmd.env("LD_PRELOAD", inception_path.to_string_lossy().as_ref());
     }
 
     let status = cmd
@@ -192,7 +192,7 @@ pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
     let project_root_str = project_root.to_string_lossy();
 
     // Find the shim library
-    let shim_path = find_shim_library(&project_root)?;
+    let inception_path = find_inception_library(&project_root)?;
 
     // Ensure wrappers exist in .vrift/bin/
     ensure_wrappers(&vrift_dir)?;
@@ -231,13 +231,13 @@ pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
     {
         println!(
             "export DYLD_INSERT_LIBRARIES=\"{}\"",
-            shim_path.to_string_lossy()
+            inception_path.to_string_lossy()
         );
         println!("export DYLD_FORCE_FLAT_NAMESPACE=1");
     }
     #[cfg(target_os = "linux")]
     {
-        println!("export LD_PRELOAD=\"{}\"", shim_path.to_string_lossy());
+        println!("export LD_PRELOAD=\"{}\"", inception_path.to_string_lossy());
     }
     println!();
     println!("# Update prompt with totem");
@@ -478,30 +478,30 @@ fn get_vfs_stats(vrift_dir: &Path) -> (String, String) {
     (file_count, cas_size)
 }
 
-fn find_shim_library(project_root: &Path) -> Result<std::path::PathBuf> {
-    let shim_name = if cfg!(target_os = "macos") {
-        "libvrift_shim.dylib"
+fn find_inception_library(project_root: &Path) -> Result<std::path::PathBuf> {
+    let inception_name = if cfg!(target_os = "macos") {
+        "libvrift_inception_layer.dylib"
     } else {
-        "libvrift_shim.so"
+        "libvrift_inception_layer.so"
     };
 
     // Check local .vrift directory first
-    let local_shim = project_root.join(".vrift").join(shim_name);
-    if local_shim.exists() {
-        return Ok(local_shim);
+    let local_inception = project_root.join(".vrift").join(inception_name);
+    if local_inception.exists() {
+        return Ok(local_inception);
     }
 
     // Check relative to executable
     if let Ok(exe_path) = env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             // Same directory as vrift binary
-            let sibling = exe_dir.join(shim_name);
+            let sibling = exe_dir.join(inception_name);
             if sibling.exists() {
                 return Ok(sibling);
             }
 
             // ../lib/ relative to bin/
-            let lib_dir = exe_dir.parent().map(|p| p.join("lib").join(shim_name));
+            let lib_dir = exe_dir.parent().map(|p| p.join("lib").join(inception_name));
             if let Some(lib_path) = lib_dir {
                 if lib_path.exists() {
                     return Ok(lib_path);
@@ -511,19 +511,19 @@ fn find_shim_library(project_root: &Path) -> Result<std::path::PathBuf> {
     }
 
     // Check cargo target directory (development mode)
-    let target_debug = Path::new("target/debug").join(shim_name);
+    let target_debug = Path::new("target/debug").join(inception_name);
     if target_debug.exists() {
         return normalize_for_ipc(target_debug).context("resolve target path");
     }
 
-    let target_release = Path::new("target/release").join(shim_name);
+    let target_release = Path::new("target/release").join(inception_name);
     if target_release.exists() {
         return normalize_for_ipc(target_release).context("resolve target path");
     }
 
     anyhow::bail!(
-        "Could not find {}. Please run 'cargo build -p vrift-shim' first.",
-        shim_name
+        "Could not find {}. Please run 'cargo build -p vrift-inception-layer' first.",
+        inception_name
     )
 }
 

@@ -12,14 +12,14 @@ unsafe fn rename_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
         return None;
     }
 
-    let _guard = ShimGuard::enter()?;
-    let state = ShimState::get()?;
+    let _guard = InceptionLayerGuard::enter()?;
+    let state = InceptionLayerState::get()?;
 
     let old_str = CStr::from_ptr(old).to_str().ok()?;
     let new_str = CStr::from_ptr(new).to_str().ok()?;
 
-    let old_in_vfs = state.psfs_applicable(old_str);
-    let new_in_vfs = state.psfs_applicable(new_str);
+    let old_in_vfs = state.inception_applicable(old_str);
+    let new_in_vfs = state.inception_applicable(new_str);
 
     // RFC-0047: Cross-boundary rename is forbidden
     if old_in_vfs != new_in_vfs {
@@ -51,7 +51,7 @@ unsafe fn rename_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn rename_shim(old: *const c_char, new: *const c_char) -> c_int {
+pub unsafe extern "C" fn rename_inception(old: *const c_char, new: *const c_char) -> c_int {
     extern "C" {
         fn c_rename_bridge(old: *const c_char, new: *const c_char) -> c_int;
     }
@@ -74,10 +74,10 @@ pub unsafe extern "C" fn velo_rename_impl(old: *const c_char, new: *const c_char
     }
 }
 
-/// Linux-specific rename shim. Returns -2 if passthrough to real syscall is needed.
+/// Linux-specific rename inception call
 #[cfg(target_os = "linux")]
 #[no_mangle]
-pub unsafe extern "C" fn rename_shim_linux(old: *const c_char, new: *const c_char) -> c_int {
+pub unsafe extern "C" fn rename_inception_linux(old: *const c_char, new: *const c_char) -> c_int {
     if let Some(res) = rename_impl(old, new) {
         return res;
     }
@@ -86,7 +86,7 @@ pub unsafe extern "C" fn rename_shim_linux(old: *const c_char, new: *const c_cha
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
-pub unsafe extern "C" fn renameat_shim_linux(
+pub unsafe extern "C" fn renameat_inception_linux(
     oldfd: c_int,
     old: *const c_char,
     newfd: c_int,
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn renameat_shim_linux(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn renameat_shim(
+pub unsafe extern "C" fn renameat_inception(
     oldfd: c_int,
     old: *const c_char,
     newfd: c_int,
@@ -146,8 +146,8 @@ unsafe fn renameat_impl(old: *const c_char, new: *const c_char) -> Option<c_int>
         return None;
     }
 
-    let _guard = ShimGuard::enter()?;
-    let state = ShimState::get()?;
+    let _guard = InceptionLayerGuard::enter()?;
+    let state = InceptionLayerState::get()?;
 
     let old_str = CStr::from_ptr(old).to_str().ok()?;
     let new_str = CStr::from_ptr(new).to_str().ok()?;
@@ -171,8 +171,8 @@ unsafe fn renameat_impl(old: *const c_char, new: *const c_char) -> Option<c_int>
     let old_abs = resolve_path(old_str)?;
     let new_abs = resolve_path(new_str)?;
 
-    let old_in_vfs = state.psfs_applicable(&old_abs);
-    let new_in_vfs = state.psfs_applicable(&new_abs);
+    let old_in_vfs = state.inception_applicable(&old_abs);
+    let new_in_vfs = state.inception_applicable(&new_abs);
 
     // RFC-0047: Cross-boundary rename is forbidden
     if old_in_vfs != new_in_vfs {
@@ -185,8 +185,8 @@ unsafe fn renameat_impl(old: *const c_char, new: *const c_char) -> Option<c_int>
 
 /// Helper to block mutation on VFS-managed files via FD
 pub(crate) unsafe fn quick_block_vfs_fd_mutation(fd: c_int) -> Option<c_int> {
-    let _guard = ShimGuard::enter()?;
-    let state = ShimState::get()?;
+    let _guard = InceptionLayerGuard::enter()?;
+    let state = InceptionLayerState::get()?;
 
     // 1. Try to resolve FD to path (OS specific)
     #[cfg(target_os = "macos")]
@@ -195,7 +195,7 @@ pub(crate) unsafe fn quick_block_vfs_fd_mutation(fd: c_int) -> Option<c_int> {
         if libc::fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr()) == 0 {
             let path_cstr = CStr::from_ptr(path_buf.as_ptr());
             if let Ok(path_str) = path_cstr.to_str() {
-                if state.psfs_applicable(path_str) {
+                if state.inception_applicable(path_str) {
                     crate::set_errno(libc::EPERM);
                     return Some(-1);
                 }
@@ -213,7 +213,7 @@ pub(crate) unsafe fn quick_block_vfs_fd_mutation(fd: c_int) -> Option<c_int> {
         );
         if n > 0 && (n as usize) < path_buf.len() {
             if let Ok(path_str) = std::str::from_utf8(&path_buf[..n as usize]) {
-                if state.psfs_applicable(path_str) {
+                if state.inception_applicable(path_str) {
                     crate::set_errno(libc::EPERM);
                     return Some(-1);
                 }
@@ -232,7 +232,7 @@ pub(crate) unsafe fn quick_block_vfs_fd_mutation(fd: c_int) -> Option<c_int> {
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn futimes_shim(fd: c_int, times: *const libc::timeval) -> c_int {
+pub unsafe extern "C" fn futimes_inception(fd: c_int, times: *const libc::timeval) -> c_int {
     if let Some(err) = quick_block_vfs_fd_mutation(fd) {
         return err;
     }
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn futimes_shim(fd: c_int, times: *const libc::timeval) ->
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn futimes_shim(fd: c_int, times: *const libc::timeval) -> c_int {
+pub unsafe extern "C" fn futimes_inception(fd: c_int, times: *const libc::timeval) -> c_int {
     if let Some(err) = quick_block_vfs_fd_mutation(fd) {
         return err;
     }
@@ -251,7 +251,7 @@ pub unsafe extern "C" fn futimes_shim(fd: c_int, times: *const libc::timeval) ->
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn futimens_shim(fd: c_int, times: *const libc::timespec) -> c_int {
+pub unsafe extern "C" fn futimens_inception(fd: c_int, times: *const libc::timespec) -> c_int {
     if let Some(err) = quick_block_vfs_fd_mutation(fd) {
         return err;
     }
@@ -261,7 +261,7 @@ pub unsafe extern "C" fn futimens_shim(fd: c_int, times: *const libc::timespec) 
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn fchflags_shim(fd: c_int, flags: libc::c_uint) -> c_int {
+pub unsafe extern "C" fn fchflags_inception(fd: c_int, flags: libc::c_uint) -> c_int {
     if let Some(err) = quick_block_vfs_fd_mutation(fd) {
         return err;
     }
@@ -275,14 +275,14 @@ unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
         return None;
     }
 
-    let _guard = ShimGuard::enter()?;
-    let state = ShimState::get()?;
+    let _guard = InceptionLayerGuard::enter()?;
+    let state = InceptionLayerState::get()?;
 
     let old_str = CStr::from_ptr(old).to_str().ok()?;
     let new_str = CStr::from_ptr(new).to_str().ok()?;
 
-    let old_in_vfs = state.psfs_applicable(old_str);
-    let new_in_vfs = state.psfs_applicable(new_str);
+    let old_in_vfs = state.inception_applicable(old_str);
+    let new_in_vfs = state.inception_applicable(new_str);
 
     // RFC-0047: Cross-boundary hardlink is forbidden
     // Also block if source is in VFS (protects CAS blobs)
@@ -296,7 +296,7 @@ unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_int {
+pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) -> c_int {
     // RFC-0047: Cross-boundary hardlink ALWAYS returns EXDEV
     // This check must happen BEFORE any other logic, regardless of init state
     let old_in_vfs = quick_is_in_vfs(old);
@@ -313,7 +313,11 @@ pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_
     }
 
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+    if init_state != 0
+        || crate::state::INCEPTION_LAYER_STATE
+            .load(Ordering::Acquire)
+            .is_null()
+    {
         // Early init: just passthrough for non-VFS paths (already checked above)
         return crate::syscalls::macos_raw::raw_link(old, new);
     }
@@ -328,7 +332,7 @@ pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_int {
+pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) -> c_int {
     // RFC-0047: Cross-boundary hardlink ALWAYS returns EXDEV
     let old_in_vfs = quick_is_in_vfs(old);
     let new_in_vfs = quick_is_in_vfs(new);
@@ -342,7 +346,11 @@ pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_
     }
 
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+    if init_state != 0
+        || crate::state::INCEPTION_LAYER_STATE
+            .load(Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::linux_raw::raw_link(old, new);
     }
     if let Some(err) = link_impl(old, new) {
@@ -354,7 +362,7 @@ pub unsafe extern "C" fn link_shim(old: *const c_char, new: *const c_char) -> c_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn linkat_shim(
+pub unsafe extern "C" fn linkat_inception(
     olddirfd: c_int,
     oldpath: *const c_char,
     newdirfd: c_int,
@@ -362,7 +370,11 @@ pub unsafe extern "C" fn linkat_shim(
     flags: c_int,
 ) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+    if init_state != 0
+        || crate::state::INCEPTION_LAYER_STATE
+            .load(Ordering::Acquire)
+            .is_null()
+    {
         if let Some(err) =
             quick_block_vfs_mutation(oldpath).or_else(|| quick_block_vfs_mutation(path))
         {
@@ -394,10 +406,10 @@ pub unsafe extern "C" fn linkat_shim(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
+pub unsafe extern "C" fn unlink_inception(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -413,10 +425,10 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
+pub unsafe extern "C" fn unlink_inception(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -432,11 +444,19 @@ pub unsafe extern "C" fn unlink_shim(path: *const c_char) -> c_int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn unlinkat_shim(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+pub unsafe extern "C" fn unlinkat_inception(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+) -> c_int {
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
+        {
             if let Some(err) = quick_block_vfs_mutation(path) {
                 return err;
             }
@@ -448,7 +468,9 @@ pub unsafe extern "C" fn unlinkat_shim(dirfd: c_int, path: *const c_char, flags:
     #[cfg(target_os = "linux")]
     {
         if INITIALIZING.load(Ordering::Relaxed) >= 2
-            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
         {
             if let Some(err) = quick_block_vfs_mutation(path) {
                 return err;
@@ -462,7 +484,7 @@ pub unsafe extern "C" fn unlinkat_shim(dirfd: c_int, path: *const c_char, flags:
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mkdirat_shim(
+pub unsafe extern "C" fn mkdirat_inception(
     dirfd: c_int,
     path: *const c_char,
     mode: libc::mode_t,
@@ -470,7 +492,11 @@ pub unsafe extern "C" fn mkdirat_shim(
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
+        {
             // RFC-0039: During early init, allow mkdirat passthrough
             return crate::syscalls::macos_raw::raw_mkdirat(dirfd, path, mode);
         }
@@ -481,7 +507,9 @@ pub unsafe extern "C" fn mkdirat_shim(
     #[cfg(target_os = "linux")]
     {
         if INITIALIZING.load(Ordering::Relaxed) >= 2
-            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
         {
             // RFC-0039: During early init, allow mkdirat passthrough
             return crate::syscalls::linux_raw::raw_mkdirat(dirfd, path, mode);
@@ -493,7 +521,7 @@ pub unsafe extern "C" fn mkdirat_shim(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn symlinkat_shim(
+pub unsafe extern "C" fn symlinkat_inception(
     p1: *const c_char,
     dirfd: c_int,
     p2: *const c_char,
@@ -501,7 +529,11 @@ pub unsafe extern "C" fn symlinkat_shim(
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
+        {
             if let Some(err) = quick_block_vfs_mutation(p1).or_else(|| quick_block_vfs_mutation(p2))
             {
                 return err;
@@ -519,7 +551,7 @@ pub unsafe extern "C" fn symlinkat_shim(
 
         // RFC-0039 Live Ingest: Notify daemon of successful symlink
         if result == 0 {
-            if let Some(state) = crate::state::ShimState::get() {
+            if let Some(state) = crate::state::InceptionLayerState::get() {
                 let target_str = CStr::from_ptr(p1).to_string_lossy();
                 let link_str = CStr::from_ptr(p2).to_string_lossy();
                 if let Some(vpath) = state.resolve_path(&link_str) {
@@ -533,7 +565,9 @@ pub unsafe extern "C" fn symlinkat_shim(
     #[cfg(target_os = "linux")]
     {
         if INITIALIZING.load(Ordering::Relaxed) >= 2
-            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
         {
             if let Some(err) = quick_block_vfs_mutation(p1).or_else(|| quick_block_vfs_mutation(p2))
             {
@@ -552,7 +586,7 @@ pub unsafe extern "C" fn symlinkat_shim(
 
         // RFC-0039 Live Ingest: Notify daemon of successful symlink
         if result == 0 {
-            if let Some(state) = crate::state::ShimState::get() {
+            if let Some(state) = crate::state::InceptionLayerState::get() {
                 let target_str = CStr::from_ptr(p1).to_string_lossy();
                 let link_str = CStr::from_ptr(p2).to_string_lossy();
                 if let Some(vpath) = state.resolve_path(&link_str) {
@@ -567,10 +601,10 @@ pub unsafe extern "C" fn symlinkat_shim(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
+pub unsafe extern "C" fn rmdir_inception(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -586,10 +620,10 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
+pub unsafe extern "C" fn rmdir_inception(path: *const c_char) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -603,10 +637,10 @@ pub unsafe extern "C" fn rmdir_shim(path: *const c_char) -> c_int {
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
+pub unsafe extern "C" fn mkdir_inception(path: *const c_char, mode: libc::mode_t) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -624,7 +658,7 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
 
     // RFC-0039 Live Ingest: Notify daemon of successful mkdir
     if result == 0 {
-        if let Some(state) = crate::state::ShimState::get() {
+        if let Some(state) = crate::state::InceptionLayerState::get() {
             let path_str = CStr::from_ptr(path).to_string_lossy();
             if let Some(vpath) = state.resolve_path(&path_str) {
                 // Fire-and-forget IPC to register new dir in manifest
@@ -638,10 +672,10 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
 
 #[no_mangle]
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
+pub unsafe extern "C" fn mkdir_inception(path: *const c_char, mode: libc::mode_t) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -659,7 +693,7 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
 
     // RFC-0039 Live Ingest: Notify daemon of successful mkdir
     if result == 0 {
-        if let Some(state) = crate::state::ShimState::get() {
+        if let Some(state) = crate::state::InceptionLayerState::get() {
             let path_str = CStr::from_ptr(path).to_string_lossy();
             if let Some(vpath) = state.resolve_path(&path_str) {
                 let _ = state.manifest_mkdir(&vpath.manifest_key, mode);
@@ -671,10 +705,13 @@ pub unsafe extern "C" fn mkdir_shim(path: *const c_char, mode: libc::mode_t) -> 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::timeval) -> c_int {
+pub unsafe extern "C" fn utimes_inception(
+    path: *const c_char,
+    times: *const libc::timeval,
+) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -695,7 +732,7 @@ pub unsafe extern "C" fn utimes_shim(path: *const c_char, times: *const libc::ti
 }
 
 #[cfg(target_os = "linux")]
-pub unsafe extern "C" fn utime_shim(path: *const c_char, times: *const libc::c_void) -> c_int {
+pub unsafe extern "C" fn utime_inception(path: *const c_char, times: *const libc::c_void) -> c_int {
     // utime(path, utimbuf) is legacy but used by some tools
     // utimbuf has 2 longs (actime, modtime)
     // We treat it generically and block if in VFS
@@ -714,15 +751,15 @@ pub unsafe extern "C" fn utime_shim(path: *const c_char, times: *const libc::c_v
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn getattrlist_shim(
+pub unsafe extern "C" fn getattrlist_inception(
     path: *const c_char,
     attrlist: *mut libc::c_void,
     attrbuf: *mut libc::c_void,
     attrbufsize: libc::size_t,
     options: libc::c_ulong,
 ) -> c_int {
-    vfs_log!(
-        "getattrlist_shim called for path: {:?}",
+    inception_log!(
+        "getattrlist_inception called for path: {:?}",
         CStr::from_ptr(path)
     );
     if let Some(res) = block_vfs_mutation(path) {
@@ -733,15 +770,15 @@ pub unsafe extern "C" fn getattrlist_shim(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn setattrlist_shim(
+pub unsafe extern "C" fn setattrlist_inception(
     path: *const c_char,
     attrlist: *mut libc::c_void,
     attrbuf: *mut libc::c_void,
     attrbufsize: libc::size_t,
     options: libc::c_ulong,
 ) -> c_int {
-    vfs_log!(
-        "setattrlist_shim called for path: {:?}",
+    inception_log!(
+        "setattrlist_inception called for path: {:?}",
         CStr::from_ptr(path)
     );
     if let Some(err) = quick_block_vfs_mutation(path) {
@@ -769,12 +806,12 @@ pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
 
     let path_str = CStr::from_ptr(path).to_str().ok()?;
 
-    // First try: Full shim state check (daemon connected)
-    if let Some(_guard) = ShimGuard::enter() {
-        if let Some(state) = ShimState::get() {
+    // First try: Full inception layer state check (daemon connected)
+    if let Some(_guard) = InceptionLayerGuard::enter() {
+        if let Some(state) = InceptionLayerState::get() {
             if let Some(vpath) = state.resolve_path(path_str) {
                 // RFC-0047: Block all mutations in VFS territory to ensure integrity
-                vfs_log!(
+                inception_log!(
                     "blocking mutation on VFS territory path: '{}'",
                     vpath.absolute
                 );
@@ -785,7 +822,7 @@ pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
     }
 
     if quick_is_in_vfs(path) {
-        vfs_log!(
+        inception_log!(
             "blocking mutation (quick-check) on VFS path: '{}'",
             path_str
         );
@@ -805,13 +842,13 @@ pub(crate) unsafe fn block_existing_vfs_entry(path: *const c_char) -> Option<c_i
 
     let path_str = CStr::from_ptr(path).to_str().ok()?;
 
-    // Full shim state check: only block if manifest HIT
-    if let Some(_guard) = ShimGuard::enter() {
-        if let Some(state) = ShimState::get() {
+    // Full inception layer state check: only block if manifest HIT
+    if let Some(_guard) = InceptionLayerGuard::enter() {
+        if let Some(state) = InceptionLayerState::get() {
             if let Some(vpath) = state.resolve_path(path_str) {
                 // Check if this path exists in manifest
                 if state.query_manifest_ipc(&vpath).is_some() {
-                    vfs_log!(
+                    inception_log!(
                         "blocking creation on EXISTING VFS entry: '{}'",
                         vpath.absolute
                     );
@@ -819,7 +856,7 @@ pub(crate) unsafe fn block_existing_vfs_entry(path: *const c_char) -> Option<c_i
                     return Some(-1);
                 }
                 // Manifest MISS: Allow creation (passthrough)
-                vfs_log!(
+                inception_log!(
                     "allowing creation in VFS territory (manifest MISS): '{}'",
                     vpath.absolute
                 );
@@ -853,7 +890,7 @@ pub(crate) unsafe fn quick_is_in_vfs(path: *const c_char) -> bool {
     false
 }
 
-/// Lightweight VFS check for raw syscall path - avoids TLS/ShimGuard
+/// Lightweight VFS check for raw syscall path - avoids TLS/InceptionLayerGuard
 /// Only checks VRIFT_VFS_PREFIX env var, safe to call during early init
 #[inline]
 pub(crate) unsafe fn quick_block_vfs_mutation(path: *const c_char) -> Option<c_int> {
@@ -867,7 +904,7 @@ pub(crate) unsafe fn quick_block_vfs_mutation(path: *const c_char) -> Option<c_i
         if let Ok(vfs_prefix) = CStr::from_ptr(vfs_prefix_ptr).to_str() {
             let matches = path_str.starts_with(vfs_prefix);
             if matches {
-                vfs_log!(
+                inception_log!(
                     "blocking mutation (quick-block) on VFS path: '{}'",
                     path_str
                 );
@@ -882,12 +919,12 @@ pub(crate) unsafe fn quick_block_vfs_mutation(path: *const c_char) -> Option<c_i
 // --- chmod/fchmod ---
 
 #[no_mangle]
-pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> c_int {
-    // BUG-007: Use raw syscall during early init OR when shim not fully ready
+pub unsafe extern "C" fn chmod_inception(path: *const c_char, mode: libc::mode_t) -> c_int {
+    // BUG-007: Use raw syscall during early init OR when inception layer not fully ready
     // to avoid dlsym recursion and TLS pthread deadlock
     let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -911,7 +948,7 @@ pub unsafe extern "C" fn chmod_shim(path: *const c_char, mode: libc::mode_t) -> 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fchmodat_shim(
+pub unsafe extern "C" fn fchmodat_inception(
     dirfd: c_int,
     path: *const c_char,
     mode: libc::mode_t,
@@ -919,7 +956,7 @@ pub unsafe extern "C" fn fchmodat_shim(
 ) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -941,16 +978,20 @@ pub unsafe extern "C" fn fchmodat_shim(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
+pub unsafe extern "C" fn fchmod_inception(fd: c_int, mode: libc::mode_t) -> c_int {
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
+        {
             return crate::syscalls::macos_raw::raw_fchmod(fd, mode);
         }
 
         // RFC-OPT-001: Recursion protection
-        let _guard = match ShimGuard::enter() {
+        let _guard = match InceptionLayerGuard::enter() {
             Some(g) => g,
             None => return crate::syscalls::macos_raw::raw_fchmod(fd, mode),
         };
@@ -961,8 +1002,8 @@ pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
         if unsafe { libc::fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr()) } == 0 {
             let path_cstr = unsafe { CStr::from_ptr(path_buf.as_ptr()) };
             if let Ok(path_str) = path_cstr.to_str() {
-                if let Some(state) = ShimState::get() {
-                    if state.psfs_applicable(path_str) {
+                if let Some(state) = InceptionLayerState::get() {
+                    if state.inception_applicable(path_str) {
                         crate::set_errno(libc::EPERM);
                         return -1;
                     }
@@ -984,12 +1025,14 @@ pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
     #[cfg(target_os = "linux")]
     {
         if INITIALIZING.load(Ordering::Relaxed) >= 2
-            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
         {
             return crate::syscalls::linux_raw::raw_fchmod(fd, mode);
         }
 
-        let _guard = match ShimGuard::enter() {
+        let _guard = match InceptionLayerGuard::enter() {
             Some(g) => g,
             None => return crate::syscalls::linux_raw::raw_fchmod(fd, mode),
         };
@@ -1006,8 +1049,8 @@ pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
         };
         if n > 0 && (n as usize) < path_buf.len() {
             if let Ok(path_str) = std::str::from_utf8(&path_buf[..n as usize]) {
-                if let Some(state) = ShimState::get() {
-                    if state.psfs_applicable(path_str) {
+                if let Some(state) = InceptionLayerState::get() {
+                    if state.inception_applicable(path_str) {
                         crate::set_errno(libc::EPERM);
                         return -1;
                     }
@@ -1028,21 +1071,29 @@ pub unsafe extern "C" fn fchmod_shim(fd: c_int, mode: libc::mode_t) -> c_int {
 }
 
 // P0-P1 Gap Fix: fchown/fchownat - Block ownership changes on VFS files via FD
-// Pattern: Same as fchmod_shim - resolve FD to path, check VFS
+// Pattern: Same as fchmod_inception - resolve FD to path, check VFS
 
-/// fchown_shim: Block ownership changes on VFS files via FD
+/// fchown_inception: Block ownership changes on VFS files via FD
 /// Uses F_GETPATH (macOS) or /proc/self/fd (Linux) to resolve FD to path
 #[no_mangle]
-pub unsafe extern "C" fn fchown_shim(fd: c_int, owner: libc::uid_t, group: libc::gid_t) -> c_int {
+pub unsafe extern "C" fn fchown_inception(
+    fd: c_int,
+    owner: libc::uid_t,
+    group: libc::gid_t,
+) -> c_int {
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
+        {
             return crate::syscalls::macos_raw::raw_fchown(fd, owner, group);
         }
 
         // RFC-OPT-001: Recursion protection
-        let _guard = match ShimGuard::enter() {
+        let _guard = match InceptionLayerGuard::enter() {
             Some(g) => g,
             None => return crate::syscalls::macos_raw::raw_fchown(fd, owner, group),
         };
@@ -1053,8 +1104,8 @@ pub unsafe extern "C" fn fchown_shim(fd: c_int, owner: libc::uid_t, group: libc:
         if libc::fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr()) == 0 {
             let path_cstr = CStr::from_ptr(path_buf.as_ptr());
             if let Ok(path_str) = path_cstr.to_str() {
-                if let Some(state) = ShimState::get() {
-                    if state.psfs_applicable(path_str) {
+                if let Some(state) = InceptionLayerState::get() {
+                    if state.inception_applicable(path_str) {
                         crate::set_errno(libc::EPERM);
                         return -1;
                     }
@@ -1076,12 +1127,14 @@ pub unsafe extern "C" fn fchown_shim(fd: c_int, owner: libc::uid_t, group: libc:
     #[cfg(target_os = "linux")]
     {
         if INITIALIZING.load(Ordering::Relaxed) >= 2
-            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
         {
             return crate::syscalls::linux_raw::raw_fchown(fd, owner, group);
         }
 
-        let _guard = match ShimGuard::enter() {
+        let _guard = match InceptionLayerGuard::enter() {
             Some(g) => g,
             None => return crate::syscalls::linux_raw::raw_fchown(fd, owner, group),
         };
@@ -1096,8 +1149,8 @@ pub unsafe extern "C" fn fchown_shim(fd: c_int, owner: libc::uid_t, group: libc:
         );
         if n > 0 && (n as usize) < path_buf.len() {
             if let Ok(path_str) = std::str::from_utf8(&path_buf[..n as usize]) {
-                if let Some(state) = ShimState::get() {
-                    if state.psfs_applicable(path_str) {
+                if let Some(state) = InceptionLayerState::get() {
+                    if state.inception_applicable(path_str) {
                         crate::set_errno(libc::EPERM);
                         return -1;
                     }
@@ -1117,9 +1170,9 @@ pub unsafe extern "C" fn fchown_shim(fd: c_int, owner: libc::uid_t, group: libc:
     }
 }
 
-/// fchownat_shim: Block ownership changes on VFS files via dirfd + path
+/// fchownat_inception: Block ownership changes on VFS files via dirfd + path
 #[no_mangle]
-pub unsafe extern "C" fn fchownat_shim(
+pub unsafe extern "C" fn fchownat_inception(
     dirfd: c_int,
     path: *const c_char,
     owner: libc::uid_t,
@@ -1129,7 +1182,11 @@ pub unsafe extern "C" fn fchownat_shim(
     #[cfg(target_os = "macos")]
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+        if init_state != 0
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
+        {
             if let Some(err) = quick_block_vfs_mutation(path) {
                 return err;
             }
@@ -1143,7 +1200,9 @@ pub unsafe extern "C" fn fchownat_shim(
     #[cfg(target_os = "linux")]
     {
         if INITIALIZING.load(Ordering::Relaxed) >= 2
-            || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null()
+            || crate::state::INCEPTION_LAYER_STATE
+                .load(Ordering::Acquire)
+                .is_null()
         {
             if let Some(err) = quick_block_vfs_mutation(path) {
                 return err;
@@ -1158,11 +1217,11 @@ pub unsafe extern "C" fn fchownat_shim(
 
 // P0-P1 Gap Fix: exchangedata - Block atomic file swaps involving VFS (macOS only)
 
-/// exchangedata_shim: Block atomic swaps if either path is in VFS
+/// exchangedata_inception: Block atomic file swaps involving VFS (macOS only)
 /// Returns EXDEV if any path is in VFS (cross-device semantics)
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn exchangedata_shim(
+pub unsafe extern "C" fn exchangedata_inception(
     path1: *const c_char,
     path2: *const c_char,
     options: libc::c_uint,
@@ -1177,21 +1236,25 @@ pub unsafe extern "C" fn exchangedata_shim(
     }
 
     let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0 || crate::state::SHIM_STATE.load(Ordering::Acquire).is_null() {
+    if init_state != 0
+        || crate::state::INCEPTION_LAYER_STATE
+            .load(Ordering::Acquire)
+            .is_null()
+    {
         return crate::syscalls::macos_raw::raw_exchangedata(path1, path2, options);
     }
 
-    let _guard = match ShimGuard::enter() {
+    let _guard = match InceptionLayerGuard::enter() {
         Some(g) => g,
         None => return crate::syscalls::macos_raw::raw_exchangedata(path1, path2, options),
     };
 
     // Full VFS check with state
-    if let Some(state) = ShimState::get() {
+    if let Some(state) = InceptionLayerState::get() {
         let p1_str = CStr::from_ptr(path1).to_str().ok();
         let p2_str = CStr::from_ptr(path2).to_str().ok();
         if let (Some(p1), Some(p2)) = (p1_str, p2_str) {
-            if state.psfs_applicable(p1) || state.psfs_applicable(p2) {
+            if state.inception_applicable(p1) || state.inception_applicable(p2) {
                 crate::set_errno(libc::EXDEV);
                 return -1;
             }
@@ -1204,10 +1267,10 @@ pub unsafe extern "C" fn exchangedata_shim(
 // --- truncate ---
 
 #[no_mangle]
-pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t) -> c_int {
+pub unsafe extern "C" fn truncate_inception(path: *const c_char, length: libc::off_t) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -1232,10 +1295,10 @@ pub unsafe extern "C" fn truncate_shim(path: *const c_char, length: libc::off_t)
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn chflags_shim(path: *const c_char, flags: libc::c_uint) -> c_int {
+pub unsafe extern "C" fn chflags_inception(path: *const c_char, flags: libc::c_uint) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -1252,7 +1315,7 @@ pub unsafe extern "C" fn chflags_shim(path: *const c_char, flags: libc::c_uint) 
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn setxattr_shim(
+pub unsafe extern "C" fn setxattr_inception(
     path: *const c_char,
     name: *const c_char,
     value: *const c_void,
@@ -1262,7 +1325,7 @@ pub unsafe extern "C" fn setxattr_shim(
 ) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -1281,14 +1344,14 @@ pub unsafe extern "C" fn setxattr_shim(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn removexattr_shim(
+pub unsafe extern "C" fn removexattr_inception(
     path: *const c_char,
     name: *const c_char,
     options: c_int,
 ) -> c_int {
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
-        || crate::state::SHIM_STATE
+        || crate::state::INCEPTION_LAYER_STATE
             .load(std::sync::atomic::Ordering::Acquire)
             .is_null()
     {
@@ -1304,11 +1367,11 @@ pub unsafe extern "C" fn removexattr_shim(
 
 // RFC-0047: Timestamp Modification Protection
 
-/// utimensat_shim: Block timestamp modifications on VFS files (at variant)
+/// utimensat_inception: Block timestamp modifications on VFS files (at variant)
 /// Note: macOS doesn't have a direct utimensat syscall - it uses getattrlist/setattrlist
 /// For safety, we keep using the dlsym path here since this is not interposed at boot time
 #[allow(unused_variables)]
-pub unsafe extern "C" fn utimensat_shim(
+pub unsafe extern "C" fn utimensat_inception(
     dirfd: c_int,
     path: *const c_char,
     times: *const libc::timespec,
@@ -1325,7 +1388,7 @@ pub unsafe extern "C" fn utimensat_shim(
 
         let init_state = INITIALIZING.load(Ordering::Relaxed);
         if init_state != 0
-            || crate::state::SHIM_STATE
+            || crate::state::INCEPTION_LAYER_STATE
                 .load(std::sync::atomic::Ordering::Acquire)
                 .is_null()
         {
@@ -1340,7 +1403,7 @@ pub unsafe extern "C" fn utimensat_shim(
     {
         let init_state = INITIALIZING.load(Ordering::Relaxed);
         if init_state != 0
-            || crate::state::SHIM_STATE
+            || crate::state::INCEPTION_LAYER_STATE
                 .load(std::sync::atomic::Ordering::Acquire)
                 .is_null()
         {
@@ -1354,7 +1417,7 @@ pub unsafe extern "C" fn utimensat_shim(
     }
 }
 #[no_mangle]
-pub unsafe extern "C" fn setrlimit_shim(resource: c_int, rlp: *const libc::rlimit) -> c_int {
+pub unsafe extern "C" fn setrlimit_inception(resource: c_int, rlp: *const libc::rlimit) -> c_int {
     #[cfg(target_os = "macos")]
     let ret = crate::syscalls::macos_raw::raw_setrlimit(resource, rlp);
     #[cfg(target_os = "linux")]
@@ -1367,7 +1430,7 @@ pub unsafe extern "C" fn setrlimit_shim(resource: c_int, rlp: *const libc::rlimi
     let is_nofile = resource == libc::RLIMIT_NOFILE;
 
     if ret == 0 && is_nofile && !rlp.is_null() {
-        if let Some(state) = ShimState::get() {
+        if let Some(state) = InceptionLayerState::get() {
             let new_soft = (*rlp).rlim_cur as usize;
             state.cached_soft_limit.store(new_soft, Ordering::Release);
         }
@@ -1380,18 +1443,18 @@ pub unsafe extern "C" fn setrlimit_shim(resource: c_int, rlp: *const libc::rlimi
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn flock_shim(fd: c_int, op: c_int) -> c_int {
+pub unsafe extern "C" fn flock_inception(fd: c_int, op: c_int) -> c_int {
     libc::flock(fd, op)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn symlink_shim(p1: *const c_char, p2: *const c_char) -> c_int {
+pub unsafe extern "C" fn symlink_inception(p1: *const c_char, p2: *const c_char) -> c_int {
     block_vfs_mutation(p2).unwrap_or_else(|| libc::symlink(p1, p2))
 }
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn execve_shim(
+pub unsafe extern "C" fn execve_inception(
     path: *const c_char,
     argv: *const *const c_char,
     envp: *const *const c_char,
@@ -1401,7 +1464,7 @@ pub unsafe extern "C" fn execve_shim(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn posix_spawn_shim(
+pub unsafe extern "C" fn posix_spawn_inception(
     pid: *mut libc::pid_t,
     path: *const c_char,
     fa: *const c_void,
@@ -1421,7 +1484,7 @@ pub unsafe extern "C" fn posix_spawn_shim(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn posix_spawnp_shim(
+pub unsafe extern "C" fn posix_spawnp_inception(
     pid: *mut libc::pid_t,
     file: *const c_char,
     fa: *const c_void,
@@ -1441,7 +1504,7 @@ pub unsafe extern "C" fn posix_spawnp_shim(
 
 #[no_mangle]
 #[cfg(target_os = "macos")]
-pub unsafe extern "C" fn faccessat_shim(
+pub unsafe extern "C" fn faccessat_inception(
     dirfd: c_int,
     path: *const c_char,
     mode: c_int,
@@ -1450,7 +1513,7 @@ pub unsafe extern "C" fn faccessat_shim(
     libc::faccessat(dirfd, path, mode, flags)
 }
 
-/// fcntl implementation called from C bridge (variadic_shim.c)
+/// fcntl implementation called from C bridge (variadic_inception.c)
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn velo_fcntl_impl(fd: c_int, cmd: c_int, arg: libc::c_long) -> c_int {

@@ -1,14 +1,14 @@
 [package]
-name = "vrift-shim"
-description = "LD_PRELOAD shim for Velo Rift virtual filesystem"
+name = "vrift-inception-layer"
+description = "Inception Layer (LD_PRELOAD) for Velo Rift virtual filesystem"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "vrift_shim"
+name = "vrift_inception_layer"
 crate-type = ["cdylib"]  # Shared library for LD_PRELOAD
-test = false  # cdylib shim causes hangs when tested (INIT constructor)
+test = false  # Inception layer constructor causes hangs when tested
 doctest = false  # Also disable doctests to prevent any test harness loading
 
 [dependencies]

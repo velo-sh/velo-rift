@@ -6,7 +6,7 @@ members = [
     "crates/vrift-manifest",
     "crates/vrift-pack",
     "crates/vrift-runtime",
-    "crates/vrift-shim",
+    "crates/vrift-inception-layer",
     "crates/vrift-fuse",
     "crates/vrift-lock",
     "crates/vrift-cli",
@@ -14,7 +14,7 @@ members = [
     "crates/vrift-ipc",
     "crates/vrift-vdird",
 ]
-# Exclude vrift-shim from default cargo commands (INIT constructor causes hangs)
+# Exclude vrift-inception-layer from default cargo commands
 default-members = [
     "crates/vrift-cas",
     "crates/vrift-config",
@@ -66,7 +66,7 @@ vrift-config = { path = "crates/vrift-config" }
 vrift-manifest = { path = "crates/vrift-manifest" }
 vrift-pack = { path = "crates/vrift-pack" }
 vrift-runtime = { path = "crates/vrift-runtime" }
-vrift-shim = { path = "crates/vrift-shim" }
+vrift-inception-layer = { path = "crates/vrift-inception-layer" }
 vrift-fuse = { path = "crates/vrift-fuse" }
 vrift-lock = { path = "crates/vrift-lock" }
 vrift-ipc = { path = "crates/vrift-ipc" }

@@ -1,6 +1,6 @@
 //! Path normalization utilities for IPC and cross-process communication.
 //!
-//! All paths crossing process boundaries (CLI → Daemon, Shim → Daemon) should
+//! All paths crossing process boundaries (CLI → Daemon, Inception Layer → Daemon) should
 //! be normalized through these functions to ensure consistent path resolution.
 
 use anyhow::{Context, Result};

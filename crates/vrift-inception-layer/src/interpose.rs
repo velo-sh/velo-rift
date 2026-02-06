@@ -3,11 +3,13 @@
 #![allow(clippy::missing_safety_doc)]
 
 #[cfg(target_os = "macos")]
-use crate::syscalls::dir::{chdir_shim, closedir_shim, getcwd_shim, opendir_shim, readdir_shim};
+use crate::syscalls::dir::{
+    chdir_inception, closedir_inception, getcwd_inception, opendir_inception, readdir_inception,
+};
 #[cfg(target_os = "macos")]
 use crate::syscalls::io::{
-    close_shim, dup2_shim, dup_shim, fchdir_shim, ftruncate_shim, lseek_shim, read_shim,
-    sendfile_shim, write_shim,
+    close_inception, dup2_inception, dup_inception, fchdir_inception, ftruncate_inception,
+    lseek_inception, read_inception, sendfile_inception, write_inception,
 };
 #[cfg(target_os = "macos")]
 extern "C" {
@@ -29,17 +31,19 @@ extern "C" {
 }
 #[cfg(target_os = "macos")]
 use crate::syscalls::misc::{
-    chflags_shim, chmod_shim, exchangedata_shim, execve_shim, faccessat_shim, fchflags_shim,
-    fchmod_shim, fchmodat_shim, fchown_shim, fchownat_shim, flock_shim, futimes_shim, link_shim,
-    linkat_shim, mkdir_shim, mkdirat_shim, posix_spawn_shim, posix_spawnp_shim, removexattr_shim,
-    rmdir_shim, setrlimit_shim, setxattr_shim, symlink_shim, symlinkat_shim, truncate_shim,
-    unlink_shim, unlinkat_shim, utimensat_shim, utimes_shim,
+    chflags_inception, chmod_inception, exchangedata_inception, execve_inception,
+    faccessat_inception, fchflags_inception, fchmod_inception, fchmodat_inception,
+    fchown_inception, fchownat_inception, flock_inception, futimes_inception, link_inception,
+    linkat_inception, mkdir_inception, mkdirat_inception, posix_spawn_inception,
+    posix_spawnp_inception, removexattr_inception, rmdir_inception, setrlimit_inception,
+    setxattr_inception, symlink_inception, symlinkat_inception, truncate_inception,
+    unlink_inception, unlinkat_inception, utimensat_inception, utimes_inception,
 };
 
 #[cfg(target_os = "macos")]
-use crate::syscalls::mmap::{mmap_shim, munmap_shim};
+use crate::syscalls::mmap::{mmap_inception, munmap_inception};
 #[cfg(target_os = "macos")]
-use crate::syscalls::path::realpath_shim;
+use crate::syscalls::path::realpath_inception;
 
 use libc::{c_char, c_int, c_void, mode_t};
 
@@ -277,7 +281,7 @@ extern "C" {
     fn c_readlink_bridge(path: *const c_char, buf: *mut c_char, bufsiz: size_t) -> ssize_t;
     fn c_rename_bridge(old: *const c_char, new: *const c_char) -> c_int;
     fn c_renameat_bridge(fd1: c_int, p1: *const c_char, fd2: c_int, p2: *const c_char) -> c_int;
-    fn fcntl_shim_c_impl(fd: c_int, cmd: c_int, arg: c_long) -> c_int;
+    fn fcntl_inception_c_impl(fd: c_int, cmd: c_int, arg: c_long) -> c_int;
 }
 
 // Active Interpositions (Group 1 + Core)
@@ -377,7 +381,7 @@ pub static IT_RENAMEAT: Interpose = Interpose {
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_FCNTL: Interpose = Interpose {
-    new_func: fcntl_shim_c_impl as _,
+    new_func: fcntl_inception_c_impl as _,
     old_func: real_fcntl as _,
 };
 
@@ -385,14 +389,14 @@ pub static IT_FCNTL: Interpose = Interpose {
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_MMAP: Interpose = Interpose {
-    new_func: mmap_shim as _,
+    new_func: mmap_inception as _,
     old_func: real_mmap as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_MUNMAP: Interpose = Interpose {
-    new_func: munmap_shim as _,
+    new_func: munmap_inception as _,
     old_func: real_munmap as _,
 };
 
@@ -401,147 +405,147 @@ pub static IT_MUNMAP: Interpose = Interpose {
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_WRITE: Interpose = Interpose {
-    new_func: write_shim as _,
+    new_func: write_inception as _,
     old_func: real_write as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_READ: Interpose = Interpose {
-    new_func: read_shim as _,
+    new_func: read_inception as _,
     old_func: real_read as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_CLOSE: Interpose = Interpose {
-    new_func: close_shim as _,
+    new_func: close_inception as _,
     old_func: real_close as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_OPENDIR: Interpose = Interpose {
-    new_func: opendir_shim as _,
+    new_func: opendir_inception as _,
     old_func: real_opendir as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_READDIR: Interpose = Interpose {
-    new_func: readdir_shim as _,
+    new_func: readdir_inception as _,
     old_func: real_readdir as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_CLOSEDIR: Interpose = Interpose {
-    new_func: closedir_shim as _,
+    new_func: closedir_inception as _,
     old_func: real_closedir as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_REALPATH: Interpose = Interpose {
-    new_func: realpath_shim as _,
+    new_func: realpath_inception as _,
     old_func: real_realpath as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_REALPATH_DARWIN: Interpose = Interpose {
-    new_func: realpath_shim as _,
+    new_func: realpath_inception as _,
     old_func: real_realpath_darwin as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_GETCWD: Interpose = Interpose {
-    new_func: getcwd_shim as _,
+    new_func: getcwd_inception as _,
     old_func: real_getcwd as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_CHDIR: Interpose = Interpose {
-    new_func: chdir_shim as _,
+    new_func: chdir_inception as _,
     old_func: real_chdir as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_UNLINK: Interpose = Interpose {
-    new_func: unlink_shim as _,
+    new_func: unlink_inception as _,
     old_func: real_unlink as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_RMDIR: Interpose = Interpose {
-    new_func: rmdir_shim as _,
+    new_func: rmdir_inception as _,
     old_func: real_rmdir as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_UTIMENSAT: Interpose = Interpose {
-    new_func: utimensat_shim as _,
+    new_func: utimensat_inception as _,
     old_func: real_utimensat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_MKDIR: Interpose = Interpose {
-    new_func: mkdir_shim as _,
+    new_func: mkdir_inception as _,
     old_func: real_mkdir as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_SYMLINK: Interpose = Interpose {
-    new_func: symlink_shim as _,
+    new_func: symlink_inception as _,
     old_func: real_symlink as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_FLOCK: Interpose = Interpose {
-    new_func: flock_shim as _,
+    new_func: flock_inception as _,
     old_func: real_flock as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_LINK: Interpose = Interpose {
-    new_func: link_shim as _,
+    new_func: link_inception as _,
     old_func: real_link as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_LINKAT: Interpose = Interpose {
-    new_func: linkat_shim as _,
+    new_func: linkat_inception as _,
     old_func: real_linkat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_EXECVE: Interpose = Interpose {
-    new_func: execve_shim as _,
+    new_func: execve_inception as _,
     old_func: real_execve as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_POSIX_SPAWN: Interpose = Interpose {
-    new_func: posix_spawn_shim as _,
+    new_func: posix_spawn_inception as _,
     old_func: real_posix_spawn as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_POSIX_SPAWNP: Interpose = Interpose {
-    new_func: posix_spawnp_shim as _,
+    new_func: posix_spawnp_inception as _,
     old_func: real_posix_spawnp as _,
 };
 #[cfg(target_os = "macos")]
@@ -562,147 +566,147 @@ pub static IT_DLSYM: Interpose = Interpose {
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_FACCESSAT: Interpose = Interpose {
-    new_func: faccessat_shim as _,
+    new_func: faccessat_inception as _,
     old_func: real_faccessat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_CHMOD: Interpose = Interpose {
-    new_func: chmod_shim as _,
+    new_func: chmod_inception as _,
     old_func: real_chmod as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FCHMODAT: Interpose = Interpose {
-    new_func: fchmodat_shim as _,
+    new_func: fchmodat_inception as _,
     old_func: real_fchmodat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_TRUNCATE: Interpose = Interpose {
-    new_func: truncate_shim as _,
+    new_func: truncate_inception as _,
     old_func: real_truncate as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_CHFLAGS: Interpose = Interpose {
-    new_func: chflags_shim as _,
+    new_func: chflags_inception as _,
     old_func: real_chflags as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_SETXATTR: Interpose = Interpose {
-    new_func: setxattr_shim as _,
+    new_func: setxattr_inception as _,
     old_func: real_setxattr as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_REMOVEXATTR: Interpose = Interpose {
-    new_func: removexattr_shim as _,
+    new_func: removexattr_inception as _,
     old_func: real_removexattr as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_UTIMES: Interpose = Interpose {
-    new_func: utimes_shim as _,
+    new_func: utimes_inception as _,
     old_func: real_utimes as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_DUP: Interpose = Interpose {
-    new_func: dup_shim as _,
+    new_func: dup_inception as _,
     old_func: real_dup as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_DUP2: Interpose = Interpose {
-    new_func: dup2_shim as _,
+    new_func: dup2_inception as _,
     old_func: real_dup2 as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_FCHDIR: Interpose = Interpose {
-    new_func: fchdir_shim as _,
+    new_func: fchdir_inception as _,
     old_func: real_fchdir as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_LSEEK: Interpose = Interpose {
-    new_func: lseek_shim as _,
+    new_func: lseek_inception as _,
     old_func: real_lseek as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FTRUNCATE: Interpose = Interpose {
-    new_func: ftruncate_shim as _,
+    new_func: ftruncate_inception as _,
     old_func: real_ftruncate as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_UNLINKAT: Interpose = Interpose {
-    new_func: unlinkat_shim as _,
+    new_func: unlinkat_inception as _,
     old_func: real_unlinkat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_MKDIRAT: Interpose = Interpose {
-    new_func: mkdirat_shim as _,
+    new_func: mkdirat_inception as _,
     old_func: real_mkdirat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_SYMLINKAT: Interpose = Interpose {
-    new_func: symlinkat_shim as _,
+    new_func: symlinkat_inception as _,
     old_func: real_symlinkat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FUTIMES: Interpose = Interpose {
-    new_func: futimes_shim as _,
+    new_func: futimes_inception as _,
     old_func: real_futimes as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FCHFLAGS: Interpose = Interpose {
-    new_func: fchflags_shim as _,
+    new_func: fchflags_inception as _,
     old_func: real_fchflags as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_SENDFILE: Interpose = Interpose {
-    new_func: sendfile_shim as _,
+    new_func: sendfile_inception as _,
     old_func: real_sendfile as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FCHMOD: Interpose = Interpose {
-    new_func: fchmod_shim as _,
+    new_func: fchmod_inception as _,
     old_func: real_fchmod as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_SETRLIMIT: Interpose = Interpose {
-    new_func: setrlimit_shim as _,
+    new_func: setrlimit_inception as _,
     old_func: real_setrlimit as _,
 };
 
@@ -711,21 +715,21 @@ pub static IT_SETRLIMIT: Interpose = Interpose {
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FCHOWN: Interpose = Interpose {
-    new_func: fchown_shim as _,
+    new_func: fchown_inception as _,
     old_func: real_fchown as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_FCHOWNAT: Interpose = Interpose {
-    new_func: fchownat_shim as _,
+    new_func: fchownat_inception as _,
     old_func: real_fchownat as _,
 };
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_EXCHANGEDATA: Interpose = Interpose {
-    new_func: exchangedata_shim as _,
+    new_func: exchangedata_inception as _,
     old_func: real_exchangedata as _,
 };
 
@@ -738,13 +742,13 @@ pub static IT_EXCHANGEDATA: Interpose = Interpose {
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
-    crate::syscalls::open::open_shim_c_impl(path, flags, mode)
+    crate::syscalls::open::open_inception_c_impl(path, flags, mode)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
-    crate::syscalls::open::open_shim_c_impl(path, flags, mode)
+    crate::syscalls::open::open_inception_c_impl(path, flags, mode)
 }
 
 #[cfg(target_os = "linux")]
@@ -773,7 +777,7 @@ pub unsafe extern "C" fn openat64(
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn chmod(path: *const c_char, mode: mode_t) -> c_int {
-    crate::syscalls::misc::chmod_shim(path, mode)
+    crate::syscalls::misc::chmod_inception(path, mode)
 }
 
 #[cfg(target_os = "linux")]
@@ -784,26 +788,26 @@ pub unsafe extern "C" fn fchmodat(
     mode: mode_t,
     flags: c_int,
 ) -> c_int {
-    crate::syscalls::misc::fchmodat_shim(dirfd, path, mode, flags)
+    crate::syscalls::misc::fchmodat_inception(dirfd, path, mode, flags)
 }
 
 // Linux unlink/rm interception - blocks VFS mutations
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
-    crate::syscalls::misc::unlink_shim(path)
+    crate::syscalls::misc::unlink_inception(path)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
-    crate::syscalls::misc::unlinkat_shim(dirfd, path, flags)
+    crate::syscalls::misc::unlinkat_inception(dirfd, path, flags)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn symlink(oldpath: *const c_char, newpath: *const c_char) -> c_int {
-    crate::syscalls::misc::symlink_shim(oldpath, newpath)
+    crate::syscalls::misc::symlink_inception(oldpath, newpath)
 }
 
 #[cfg(target_os = "linux")]
@@ -813,31 +817,31 @@ pub unsafe extern "C" fn symlinkat(
     newdirfd: c_int,
     newpath: *const c_char,
 ) -> c_int {
-    crate::syscalls::misc::symlinkat_shim(oldpath, newdirfd, newpath)
+    crate::syscalls::misc::symlinkat_inception(oldpath, newdirfd, newpath)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn mkdir(path: *const c_char, mode: mode_t) -> c_int {
-    crate::syscalls::misc::mkdir_shim(path, mode)
+    crate::syscalls::misc::mkdir_inception(path, mode)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn mkdirat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int {
-    crate::syscalls::misc::mkdirat_shim(dirfd, path, mode)
+    crate::syscalls::misc::mkdirat_inception(dirfd, path, mode)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn rmdir(path: *const c_char) -> c_int {
-    crate::syscalls::misc::rmdir_shim(path)
+    crate::syscalls::misc::rmdir_inception(path)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
-    crate::syscalls::stat::access_shim(path, mode)
+    crate::syscalls::stat::access_inception(path, mode)
 }
 
 // Linux utimensat/touch interception
@@ -849,34 +853,34 @@ pub unsafe extern "C" fn utimensat(
     times: *const libc::timespec,
     flags: c_int,
 ) -> c_int {
-    crate::syscalls::misc::utimensat_shim(dirfd, path, times, flags)
+    crate::syscalls::misc::utimensat_inception(dirfd, path, times, flags)
 }
 
 // Linux utimes interception (for touch command)
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn utimes(path: *const c_char, times: *const libc::timeval) -> c_int {
-    crate::syscalls::misc::utimes_shim(path, times)
+    crate::syscalls::misc::utimes_inception(path, times)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn utime(path: *const c_char, times: *const libc::c_void) -> c_int {
-    crate::syscalls::misc::utime_shim(path, times)
+    crate::syscalls::misc::utime_inception(path, times)
 }
 
 // Linux futimes interception (FD-based timestamp mutation)
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn futimes(fd: c_int, times: *const libc::timeval) -> c_int {
-    crate::syscalls::misc::futimes_shim(fd, times)
+    crate::syscalls::misc::futimes_inception(fd, times)
 }
 
 // P0-P1 Gap Fix: Linux fchown/fchownat exports
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn fchown(fd: c_int, owner: libc::uid_t, group: libc::gid_t) -> c_int {
-    crate::syscalls::misc::fchown_shim(fd, owner, group)
+    crate::syscalls::misc::fchown_inception(fd, owner, group)
 }
 
 #[cfg(target_os = "linux")]
@@ -888,25 +892,25 @@ pub unsafe extern "C" fn fchownat(
     group: libc::gid_t,
     flags: c_int,
 ) -> c_int {
-    crate::syscalls::misc::fchownat_shim(dirfd, path, owner, group, flags)
+    crate::syscalls::misc::fchownat_inception(dirfd, path, owner, group, flags)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn truncate(path: *const c_char, length: libc::off_t) -> c_int {
-    crate::syscalls::misc::truncate_shim(path, length)
+    crate::syscalls::misc::truncate_inception(path, length)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn ftruncate(fd: c_int, length: libc::off_t) -> c_int {
-    crate::syscalls::io::ftruncate_shim(fd, length)
+    crate::syscalls::io::ftruncate_inception(fd, length)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn rename(old: *const c_char, new: *const c_char) -> c_int {
-    crate::syscalls::misc::rename_shim_linux(old, new)
+    crate::syscalls::misc::rename_inception_linux(old, new)
 }
 
 #[cfg(target_os = "linux")]
@@ -917,13 +921,13 @@ pub unsafe extern "C" fn renameat(
     newfd: c_int,
     new: *const c_char,
 ) -> c_int {
-    crate::syscalls::misc::renameat_shim_linux(oldfd, old, newfd, new)
+    crate::syscalls::misc::renameat_inception_linux(oldfd, old, newfd, new)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn link(oldpath: *const c_char, newpath: *const c_char) -> c_int {
-    crate::syscalls::misc::link_shim(oldpath, newpath)
+    crate::syscalls::misc::link_inception(oldpath, newpath)
 }
 
 #[cfg(target_os = "linux")]
@@ -935,13 +939,13 @@ pub unsafe extern "C" fn linkat(
     newpath: *const c_char,
     flags: c_int,
 ) -> c_int {
-    crate::syscalls::misc::linkat_shim(olddirfd, oldpath, newdirfd, newpath, flags)
+    crate::syscalls::misc::linkat_inception(olddirfd, oldpath, newdirfd, newpath, flags)
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn futimens(fd: c_int, times: *const libc::timespec) -> c_int {
-    crate::syscalls::misc::futimens_shim(fd, times)
+    crate::syscalls::misc::futimens_inception(fd, times)
 }
 
 #[cfg(target_os = "linux")]
@@ -952,7 +956,7 @@ pub unsafe extern "C" fn sendfile(
     offset: *mut libc::off_t,
     count: libc::size_t,
 ) -> libc::ssize_t {
-    crate::syscalls::io::sendfile_shim(out_fd, in_fd, offset, count)
+    crate::syscalls::io::sendfile_inception(out_fd, in_fd, offset, count)
 }
 
 #[cfg(target_os = "linux")]
@@ -965,7 +969,7 @@ pub unsafe extern "C" fn copy_file_range(
     len: libc::size_t,
     flags: libc::c_uint,
 ) -> libc::ssize_t {
-    crate::syscalls::io::copy_file_range_shim(fd_in, off_in, fd_out, off_out, len, flags)
+    crate::syscalls::io::copy_file_range_inception(fd_in, off_in, fd_out, off_out, len, flags)
 }
 
 #[cfg(target_os = "linux")]
@@ -976,12 +980,12 @@ pub unsafe extern "C" fn openat2(
     how: *const c_void,
     size: libc::size_t,
 ) -> c_int {
-    crate::syscalls::open::openat2_shim(dirfd, p, how as _, size)
+    crate::syscalls::open::openat2_inception(dirfd, p, how as _, size)
 }
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub unsafe extern "C" fn creat(path: *const c_char, mode: mode_t) -> c_int {
-    crate::syscalls::open::creat_shim(path, mode)
+    crate::syscalls::open::creat_inception(path, mode)
 }
 
 #[cfg(target_os = "macos")]

@@ -1,9 +1,9 @@
-/// Pattern 2648/2649: Passthrough guard for shim initialization safety.
-/// Use this at the start of every shim function to bypass VFS logic during dyld bootstrap.
+/// Pattern 2648/2649: Passthrough guard for inception layer initialization safety.
+/// Use this at the start of every inception layer function to bypass VFS logic during dyld bootstrap.
 ///
 /// # INITIALIZING State Machine:
 /// - State 2: Early-Init (dyld loading) - TLS unsafe, MUST passthrough
-/// - State 3: Busy (ShimState initializing) - TLS unsafe, MUST passthrough  
+/// - State 3: Busy (InceptionLayerState initializing) - TLS unsafe, MUST passthrough  
 /// - State 1: C constructor ran - TLS safe, can run Rust
 /// - State 0: Fully initialized - TLS safe, can run Rust
 ///
@@ -48,25 +48,25 @@ macro_rules! safe_early_passthrough {
 }
 
 #[macro_export]
-macro_rules! shim_log {
+macro_rules! inception_log_raw {
     ($msg:expr) => {
         $crate::LOGGER.log($msg)
     };
 }
 
 #[macro_export]
-macro_rules! vfs_log_at_level {
+macro_rules! inception_log_at_level {
     ($level:expr, $tag:expr, $($arg:tt)*) => {
         {
             if $crate::state::LOG_LEVEL.load(std::sync::atomic::Ordering::Relaxed) <= ($level as u8) {
                 // Stack-based formatting to avoid heap allocation
                 // Use a local buffer and recursion guard
-                if let Some(_guard) = $crate::state::ShimGuard::enter() {
+                if let Some(_guard) = $crate::state::InceptionLayerGuard::enter() {
                     use std::fmt::Write;
                     let mut buf = [0u8; 512];
                     let mut wrapper = $crate::macros::StackWriter::new(&mut buf);
                     let pid = unsafe { libc::getpid() };
-                    let _ = write!(wrapper, "[VFS][{}][{}] ", pid, $tag);
+                    let _ = write!(wrapper, "[VR-INCEPTION][{}][{}] ", pid, $tag);
                     let _ = write!(wrapper, $($arg)*);
                     let _ = writeln!(wrapper);
 
@@ -85,26 +85,26 @@ macro_rules! vfs_log_at_level {
 
 // Zero-allocation structured event recording (Flight Recorder)
 #[macro_export]
-macro_rules! vfs_record {
+macro_rules! inception_record {
     ($event:expr, $file_id:expr, $result:expr) => {{
         $crate::state::FLIGHT_RECORDER.record($event, $file_id, $result as i32);
     }};
 }
 
 #[macro_export]
-macro_rules! vfs_trace { ($($arg:tt)*) => { $crate::vfs_log_at_level!($crate::state::LogLevel::Trace, "TRACE", $($arg)*) }; }
+macro_rules! inception_trace { ($($arg:tt)*) => { $crate::inception_log_at_level!($crate::state::LogLevel::Trace, "TRACE", $($arg)*) }; }
 #[macro_export]
-macro_rules! vfs_debug { ($($arg:tt)*) => { $crate::vfs_log_at_level!($crate::state::LogLevel::Debug, "DEBUG", $($arg)*) }; }
+macro_rules! inception_debug { ($($arg:tt)*) => { $crate::inception_log_at_level!($crate::state::LogLevel::Debug, "DEBUG", $($arg)*) }; }
 #[macro_export]
-macro_rules! vfs_info { ($($arg:tt)*) => { $crate::vfs_log_at_level!($crate::state::LogLevel::Info, "INFO", $($arg)*) }; }
+macro_rules! inception_info { ($($arg:tt)*) => { $crate::inception_log_at_level!($crate::state::LogLevel::Info, "INFO", $($arg)*) }; }
 #[macro_export]
-macro_rules! vfs_warn { ($($arg:tt)*) => { $crate::vfs_log_at_level!($crate::state::LogLevel::Warn, "WARN", $($arg)*) }; }
+macro_rules! inception_warn { ($($arg:tt)*) => { $crate::inception_log_at_level!($crate::state::LogLevel::Warn, "WARN", $($arg)*) }; }
 #[macro_export]
-macro_rules! vfs_error { ($($arg:tt)*) => { $crate::vfs_log_at_level!($crate::state::LogLevel::Error, "ERROR", $($arg)*) }; }
+macro_rules! inception_error { ($($arg:tt)*) => { $crate::inception_log_at_level!($crate::state::LogLevel::Error, "ERROR", $($arg)*) }; }
 
-// Compatibility shim for existing code
+// Compatibility inception layer for existing code
 #[macro_export]
-macro_rules! vfs_log { ($($arg:tt)*) => { $crate::vfs_info!($($arg)*) }; }
+macro_rules! inception_log { ($($arg:tt)*) => { $crate::inception_info!($($arg)*) }; }
 
 #[macro_export]
 macro_rules! get_real {
@@ -125,7 +125,7 @@ macro_rules! get_real {
 }
 
 #[macro_export]
-macro_rules! get_real_shim {
+macro_rules! get_real_inception {
     ($storage:ident, $name:literal, $it:ident, $t:ty) => {{
         #[cfg(target_os = "macos")]
         {

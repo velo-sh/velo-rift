@@ -8,14 +8,14 @@
 
 #![allow(dead_code)]
 
-use crate::state::ShimState;
+use crate::state::InceptionLayerState;
 use libc::c_int;
 
 /// RFC-0047: unlink for VFS paths
 /// Sends ManifestRemove IPC to daemon instead of hitting real FS
-pub(crate) unsafe fn unlink_vfs(path: &str, state: &ShimState) -> Option<c_int> {
+pub(crate) unsafe fn unlink_vfs(path: &str, state: &InceptionLayerState) -> Option<c_int> {
     // Only handle VFS paths
-    if !state.psfs_applicable(path) {
+    if !state.inception_applicable(path) {
         return None;
     }
 
@@ -37,9 +37,9 @@ pub(crate) unsafe fn unlink_vfs(path: &str, state: &ShimState) -> Option<c_int> 
 
 /// RFC-0047: rmdir for VFS paths
 /// Sends ManifestRemove IPC to daemon for directory removal
-pub(crate) unsafe fn rmdir_vfs(path: &str, state: &ShimState) -> Option<c_int> {
+pub(crate) unsafe fn rmdir_vfs(path: &str, state: &InceptionLayerState) -> Option<c_int> {
     // Only handle VFS paths
-    if !state.psfs_applicable(path) {
+    if !state.inception_applicable(path) {
         return None;
     }
 
@@ -62,9 +62,13 @@ pub(crate) unsafe fn rmdir_vfs(path: &str, state: &ShimState) -> Option<c_int> {
 
 /// RFC-0047: mkdir for VFS paths
 /// Sends ManifestUpsert IPC to daemon to create directory entry
-pub(crate) unsafe fn mkdir_vfs(path: &str, mode: libc::mode_t, state: &ShimState) -> Option<c_int> {
+pub(crate) unsafe fn mkdir_vfs(
+    path: &str,
+    mode: libc::mode_t,
+    state: &InceptionLayerState,
+) -> Option<c_int> {
     // Only handle VFS paths
-    if !state.psfs_applicable(path) {
+    if !state.inception_applicable(path) {
         return None;
     }
 
