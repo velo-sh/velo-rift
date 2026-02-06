@@ -18,6 +18,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
+use vrift_config::path::{normalize_for_ipc, normalize_or_original};
 use walkdir::WalkDir;
 
 mod active;
@@ -1324,12 +1325,8 @@ async fn cmd_ingest(
     }
 
     // Auto-register in global manifest registry (RFC-0041)
-    let output_abs = output
-        .canonicalize()
-        .unwrap_or_else(|_| output.to_path_buf());
-    let directory_abs = directory
-        .canonicalize()
-        .unwrap_or_else(|_| directory.to_path_buf());
+    let output_abs = normalize_or_original(output);
+    let directory_abs = normalize_or_original(directory);
 
     if let Ok(_lock) = registry::ManifestRegistry::acquire_lock() {
         if let Ok(mut reg) = registry::ManifestRegistry::load_or_create() {
@@ -1500,12 +1497,9 @@ fn cmd_run(
     // Find the shim library
     let shim_path = find_shim_library()?;
 
-    let manifest_abs = manifest
-        .canonicalize()
+    let manifest_abs = normalize_for_ipc(manifest)
         .with_context(|| format!("Failed to resolve manifest path: {}", manifest.display()))?;
-    let cas_abs = cas_root
-        .canonicalize()
-        .unwrap_or_else(|_| cas_root.to_path_buf());
+    let cas_abs = normalize_or_original(cas_root);
 
     println!("Running with Velo VFS:");
     println!("  Shim:     {}", shim_path.display());

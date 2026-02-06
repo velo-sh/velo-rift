@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
+use vrift_config::path::normalize_for_ipc;
 
 /// Session state persisted to `.vrift/session.json`
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,8 +168,7 @@ fn detect_node_version() -> Option<String> {
 
 /// Activate Velo projection for a project directory
 pub fn activate(project_root: &Path, mode: ProjectionMode) -> Result<Session> {
-    let project_root = project_root
-        .canonicalize()
+    let project_root = normalize_for_ipc(project_root)
         .with_context(|| format!("Invalid project path: {}", project_root.display()))?;
 
     let vrift = VriftDir::new(&project_root);

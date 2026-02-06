@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use console::{style, Emoji};
 use indicatif::{ProgressBar, ProgressStyle};
+use vrift_config::path::normalize_for_ipc;
 
 // Emojis for theatrical effect
 static TOTEM_SPIN: Emoji<'_, '_> = Emoji("🌀", "*");
@@ -55,7 +56,7 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
     let _session = crate::active::activate(project_dir, crate::active::ProjectionMode::Solid)?;
 
     let vrift_dir = project_dir.join(".vrift");
-    let project_root = project_dir.canonicalize().context("resolve project path")?;
+    let project_root = normalize_for_ipc(project_dir).context("resolve project path")?;
     let project_root_str = project_root.to_string_lossy();
     let project_name = project_root
         .file_name()
@@ -187,9 +188,7 @@ pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
         std::process::exit(0);
     }
 
-    let project_root = project_dir
-        .canonicalize()
-        .context("Failed to resolve project path")?;
+    let project_root = normalize_for_ipc(project_dir).context("Failed to resolve project path")?;
     let project_root_str = project_root.to_string_lossy();
 
     // Find the shim library
@@ -514,12 +513,12 @@ fn find_shim_library(project_root: &Path) -> Result<std::path::PathBuf> {
     // Check cargo target directory (development mode)
     let target_debug = Path::new("target/debug").join(shim_name);
     if target_debug.exists() {
-        return target_debug.canonicalize().context("resolve target path");
+        return normalize_for_ipc(target_debug).context("resolve target path");
     }
 
     let target_release = Path::new("target/release").join(shim_name);
     if target_release.exists() {
-        return target_release.canonicalize().context("resolve target path");
+        return normalize_for_ipc(target_release).context("resolve target path");
     }
 
     anyhow::bail!(

@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 use vrift_cas::Blake3Hash;
+use vrift_config::path::normalize_or_original;
 use vrift_manifest::{LmdbManifest, Manifest};
 
 /// Default lock timeout in seconds
@@ -197,12 +198,8 @@ impl ManifestRegistry {
         manifest_path: &Path,
         project_root: &Path,
     ) -> Result<String> {
-        let canonical_manifest = manifest_path
-            .canonicalize()
-            .unwrap_or_else(|_| manifest_path.to_path_buf());
-        let canonical_root = project_root
-            .canonicalize()
-            .unwrap_or_else(|_| project_root.to_path_buf());
+        let canonical_manifest = normalize_or_original(manifest_path);
+        let canonical_root = normalize_or_original(project_root);
 
         // Check if already registered by source path
         for (uuid, entry) in &self.manifests {
