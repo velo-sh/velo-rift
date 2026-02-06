@@ -68,7 +68,32 @@ async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandle
 
         let header = IpcHeader::from_bytes(&header_buf);
         if !header.is_valid() {
-            warn!("Invalid IPC magic, dropping client");
+            if header.magic != vrift_ipc::IPC_MAGIC {
+                warn!("Invalid IPC magic, dropping client");
+            } else if header.version() != vrift_ipc::PROTOCOL_VERSION as u8 {
+                warn!(
+                    expected = vrift_ipc::PROTOCOL_VERSION,
+                    got = header.version(),
+                    "IPC protocol version mismatch, dropping client"
+                );
+            } else {
+                warn!("Invalid IPC frame type, dropping client");
+            }
+            return Ok(());
+        }
+
+        // RFC-0053: Handle heartbeats - log and skip
+        if header.frame_type() == Some(vrift_ipc::FrameType::Heartbeat) {
+            debug!(seq_id = header.seq_id, "Received heartbeat");
+            continue;
+        }
+
+        // Ensure it's a request
+        if header.frame_type() != Some(vrift_ipc::FrameType::Request) {
+            warn!(
+                ?header,
+                "Expected request frame, but got instead. Dropping client."
+            );
             return Ok(());
         }
 
@@ -79,7 +104,9 @@ async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandle
 
         // Read payload
         let mut payload = vec![0u8; header.length as usize];
-        stream.read_exact(&mut payload).await?;
+        if !payload.is_empty() {
+            stream.read_exact(&mut payload).await?;
+        }
 
         // Deserialize request
         let request: VeloRequest =

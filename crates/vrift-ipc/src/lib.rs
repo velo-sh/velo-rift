@@ -221,9 +221,25 @@ pub mod frame_sync {
 
         let header = IpcHeader::from_bytes(&buf);
         if !header.is_valid() {
+            if header.magic != IPC_MAGIC {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid IPC magic",
+                ));
+            }
+            if header.version() != PROTOCOL_VERSION as u8 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "IPC protocol version mismatch: expected {}, got {}",
+                        PROTOCOL_VERSION,
+                        header.version()
+                    ),
+                ));
+            }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "invalid IPC magic",
+                "invalid IPC frame type",
             ));
         }
 
@@ -233,6 +249,13 @@ pub mod frame_sync {
     /// Read frame payload and deserialize as request
     pub fn read_request<R: Read>(reader: &mut R) -> std::io::Result<(IpcHeader, VeloRequest)> {
         let header = read_header(reader)?;
+
+        if header.frame_type() != Some(FrameType::Request) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("expected Request frame, got {:?}", header.frame_type()),
+            ));
+        }
 
         let mut payload = vec![0u8; header.length as usize];
         reader.read_exact(&mut payload)?;
@@ -247,6 +270,13 @@ pub mod frame_sync {
     /// Read frame payload and deserialize as response
     pub fn read_response<R: Read>(reader: &mut R) -> std::io::Result<(IpcHeader, VeloResponse)> {
         let header = read_header(reader)?;
+
+        if header.frame_type() != Some(FrameType::Response) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("expected Response frame, got {:?}", header.frame_type()),
+            ));
+        }
 
         let mut payload = vec![0u8; header.length as usize];
         reader.read_exact(&mut payload)?;
@@ -348,9 +378,25 @@ pub mod frame_async {
 
         let header = IpcHeader::from_bytes(&buf);
         if !header.is_valid() {
+            if header.magic != IPC_MAGIC {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid IPC magic",
+                ));
+            }
+            if header.version() != PROTOCOL_VERSION as u8 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "IPC protocol version mismatch: expected {}, got {}",
+                        PROTOCOL_VERSION,
+                        header.version()
+                    ),
+                ));
+            }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "invalid IPC magic",
+                "invalid IPC frame type",
             ));
         }
 
@@ -362,6 +408,13 @@ pub mod frame_async {
         reader: &mut R,
     ) -> std::io::Result<(IpcHeader, VeloRequest)> {
         let header = read_header(reader).await?;
+
+        if header.frame_type() != Some(FrameType::Request) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("expected Request frame, got {:?}", header.frame_type()),
+            ));
+        }
 
         let mut payload = vec![0u8; header.length as usize];
         reader.read_exact(&mut payload).await?;
@@ -378,6 +431,13 @@ pub mod frame_async {
         reader: &mut R,
     ) -> std::io::Result<(IpcHeader, VeloResponse)> {
         let header = read_header(reader).await?;
+
+        if header.frame_type() != Some(FrameType::Response) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("expected Response frame, got {:?}", header.frame_type()),
+            ));
+        }
 
         let mut payload = vec![0u8; header.length as usize];
         reader.read_exact(&mut payload).await?;
@@ -1419,6 +1479,55 @@ mod tests {
         assert_eq!(header.seq_id, 42);
         assert_eq!(header.frame_type(), Some(FrameType::Response));
         assert!(matches!(decoded, VeloResponse::StatusAck { .. }));
+    }
+
+    #[test]
+    fn test_ipc_hardening_validation() {
+        use crate::frame_sync;
+        use std::io::Cursor;
+
+        // 1. Invalid Version
+        let mut header = IpcHeader::new_request(0, 1);
+        header.type_ver = (header.type_ver & 0xF0) | 0x0E; // Version 14 (wrong)
+        let buf = header.to_bytes().to_vec();
+        let mut cursor = Cursor::new(&buf);
+        let res = frame_sync::read_header(&mut cursor);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("version mismatch"));
+
+        // 2. Heartbeat handled as Heartbeat
+        let mut buf = Vec::new();
+        frame_sync::send_heartbeat(&mut buf).unwrap();
+        let mut cursor = Cursor::new(&buf);
+        let header = frame_sync::read_header(&mut cursor).unwrap();
+        assert!(frame_sync::is_heartbeat(&header));
+
+        // 3. Heartbeat read as Request (should fail)
+        let mut cursor = Cursor::new(&buf);
+        let res = frame_sync::read_request(&mut cursor);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("expected Request frame"));
+
+        // 4. Response read as Request (should fail)
+        let mut buf = Vec::new();
+        frame_sync::send_response(
+            &mut buf,
+            &VeloResponse::StatusAck {
+                status: "OK".to_string(),
+            },
+            1,
+        )
+        .unwrap();
+        let mut cursor = Cursor::new(&buf);
+        let res = frame_sync::read_request(&mut cursor);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("expected Request frame"));
     }
 
     // =========================================================================
