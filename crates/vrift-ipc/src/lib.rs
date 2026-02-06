@@ -73,37 +73,30 @@ impl IpcHeader {
     /// Maximum payload length (64KB - 1)
     pub const MAX_LENGTH: usize = 65535;
 
-    /// Create a new request header
-    pub fn new_request(length: u16, seq_id: u16) -> Self {
+    /// Create a new header with specified frame type
+    pub fn new(frame_type: FrameType, length: u16, seq_id: u16) -> Self {
         Self {
             magic: IPC_MAGIC,
-            type_ver: ((FrameType::Request as u8) << 4) | (PROTOCOL_VERSION as u8 & 0x0F),
+            type_ver: ((frame_type as u8) << 4) | (PROTOCOL_VERSION as u8 & 0x0F),
             flags: 0,
             length,
             seq_id,
         }
+    }
+
+    /// Create a new request header
+    pub fn new_request(length: u16, seq_id: u16) -> Self {
+        Self::new(FrameType::Request, length, seq_id)
     }
 
     /// Create a new response header
     pub fn new_response(length: u16, seq_id: u16) -> Self {
-        Self {
-            magic: IPC_MAGIC,
-            type_ver: ((FrameType::Response as u8) << 4) | (PROTOCOL_VERSION as u8 & 0x0F),
-            flags: 0,
-            length,
-            seq_id,
-        }
+        Self::new(FrameType::Response, length, seq_id)
     }
 
     /// Create a heartbeat header
     pub fn new_heartbeat(seq_id: u16) -> Self {
-        Self {
-            magic: IPC_MAGIC,
-            type_ver: ((FrameType::Heartbeat as u8) << 4) | (PROTOCOL_VERSION as u8 & 0x0F),
-            flags: 0,
-            length: 0,
-            seq_id,
-        }
+        Self::new(FrameType::Heartbeat, 0, seq_id)
     }
 
     /// Validate the header magic
@@ -259,6 +252,22 @@ pub mod frame_sync {
 
         Ok((header, response))
     }
+
+    /// Send a heartbeat frame (zero-length payload)
+    pub fn send_heartbeat<W: Write>(writer: &mut W) -> std::io::Result<u16> {
+        let seq_id = next_seq_id();
+        let header = IpcHeader::new(FrameType::Heartbeat, 0, seq_id);
+
+        writer.write_all(&header.to_bytes())?;
+        writer.flush()?;
+
+        Ok(seq_id)
+    }
+
+    /// Check if received header is a heartbeat
+    pub fn is_heartbeat(header: &IpcHeader) -> bool {
+        header.frame_type() == Some(FrameType::Heartbeat)
+    }
 }
 
 /// Async frame IO (for daemon and CLI with tokio)
@@ -371,6 +380,73 @@ pub mod frame_async {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         Ok((header, response))
+    }
+
+    // ========================================================================
+    // Timeout Wrappers
+    // ========================================================================
+
+    /// Default read timeout (30 seconds)
+    pub const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// Default write timeout (10 seconds)
+    pub const DEFAULT_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Send request with timeout
+    pub async fn send_request_timeout<W: AsyncWriteExt + Unpin>(
+        writer: &mut W,
+        request: &VeloRequest,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<u16> {
+        tokio::time::timeout(timeout, send_request(writer, request))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "send request timeout")
+            })?
+    }
+
+    /// Read response with timeout
+    pub async fn read_response_timeout<R: AsyncReadExt + Unpin>(
+        reader: &mut R,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<(IpcHeader, VeloResponse)> {
+        tokio::time::timeout(timeout, read_response(reader))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "read response timeout")
+            })?
+    }
+
+    /// Read request with timeout (for daemon)
+    pub async fn read_request_timeout<R: AsyncReadExt + Unpin>(
+        reader: &mut R,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<(IpcHeader, VeloRequest)> {
+        tokio::time::timeout(timeout, read_request(reader))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "read request timeout")
+            })?
+    }
+
+    // ========================================================================
+    // Heartbeat
+    // ========================================================================
+
+    /// Send a heartbeat frame (zero-length payload)
+    pub async fn send_heartbeat<W: AsyncWriteExt + Unpin>(writer: &mut W) -> std::io::Result<u16> {
+        let seq_id = next_seq_id();
+        let header = IpcHeader::new(FrameType::Heartbeat, 0, seq_id);
+
+        writer.write_all(&header.to_bytes()).await?;
+        writer.flush().await?;
+
+        Ok(seq_id)
+    }
+
+    /// Check if received header is a heartbeat
+    pub fn is_heartbeat(header: &IpcHeader) -> bool {
+        header.frame_type() == Some(FrameType::Heartbeat)
     }
 }
 
