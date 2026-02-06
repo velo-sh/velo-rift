@@ -26,6 +26,7 @@ pub mod gc;
 mod inception;
 mod isolation;
 mod mount;
+mod preflight;
 pub mod registry;
 mod security_filter;
 

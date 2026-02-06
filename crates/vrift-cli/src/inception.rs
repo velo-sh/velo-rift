@@ -38,8 +38,18 @@ const BOX_V: &str = "│";
 ///
 /// This is the primary UX - no eval needed!
 pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
-    let _ = crate::daemon::connect_to_daemon(project_dir).await;
     use std::process::Command;
+
+    // =========================================================================
+    // Preflight Check: Fail-fast, fail-early (RFC: Inception Preflight)
+    // =========================================================================
+    let preflight = crate::preflight::run_preflight(project_dir);
+    if !preflight.can_activate {
+        crate::preflight::print_preflight_errors(&preflight);
+        std::process::exit(1);
+    }
+
+    let _ = crate::daemon::connect_to_daemon(project_dir).await;
 
     // RFC-0052: Manage session persistence
     let _session = crate::active::activate(project_dir, crate::active::ProjectionMode::Solid)?;
@@ -51,20 +61,6 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "project".to_string());
-
-    // Create .vrift if it doesn't exist (auto-init)
-    if !vrift_dir.exists() {
-        std::fs::create_dir_all(&vrift_dir)?;
-        std::fs::create_dir_all(vrift_dir.join("bin"))?;
-        let manifest_path = vrift_dir.join("manifest.lmdb");
-        std::fs::File::create(&manifest_path)?;
-
-        eprintln!(
-            "{} Initialized Velo Rift in {}",
-            style("📁").cyan(),
-            style(&project_name).green().bold()
-        );
-    }
 
     // Check if already in inception
     if env::var("VRIFT_INCEPTION").is_ok() {
@@ -164,6 +160,15 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
 
 /// Generate shell script for `eval "$(vrift inception)"`
 pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
+    // =========================================================================
+    // Preflight Check: Fail-fast, fail-early (RFC: Inception Preflight)
+    // =========================================================================
+    let preflight = crate::preflight::run_preflight(project_dir);
+    if !preflight.can_activate {
+        crate::preflight::print_preflight_errors(&preflight);
+        std::process::exit(1);
+    }
+
     // RFC-0052: Ensure daemon is running
     let _ = crate::daemon::connect_to_daemon(project_dir).await;
 
@@ -171,16 +176,6 @@ pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
     let _session = crate::active::activate(project_dir, crate::active::ProjectionMode::Solid)?;
 
     let vrift_dir = project_dir.join(".vrift");
-
-    // Check if this is a valid VFS project
-    if !vrift_dir.exists() {
-        eprintln!(
-            "{} {}",
-            style("Error:").red().bold(),
-            style("No .vrift directory found. Run 'vrift init' first.").red()
-        );
-        std::process::exit(1);
-    }
 
     // Check if already in inception
     if env::var("VRIFT_INCEPTION").is_ok() {
