@@ -86,7 +86,14 @@ pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
 pub(crate) unsafe fn raw_write_all(fd: c_int, data: &[u8]) -> bool {
     let mut written = 0;
     while written < data.len() {
-        let n = libc::write(
+        #[cfg(target_os = "macos")]
+        let n = crate::syscalls::macos_raw::raw_write(
+            fd,
+            data[written..].as_ptr() as *const libc::c_void,
+            data.len() - written,
+        );
+        #[cfg(target_os = "linux")]
+        let n = crate::syscalls::linux_raw::raw_write(
             fd,
             data[written..].as_ptr() as *const libc::c_void,
             data.len() - written,
@@ -99,11 +106,18 @@ pub(crate) unsafe fn raw_write_all(fd: c_int, data: &[u8]) -> bool {
     true
 }
 
-/// Raw read using libc (avoids recursion through shim)
+/// Raw read using syscall (avoids recursion through shim)
 pub(crate) unsafe fn raw_read_exact(fd: c_int, buf: &mut [u8]) -> bool {
     let mut read = 0;
     while read < buf.len() {
-        let n = libc::read(
+        #[cfg(target_os = "macos")]
+        let n = crate::syscalls::macos_raw::raw_read(
+            fd,
+            buf[read..].as_mut_ptr() as *mut libc::c_void,
+            buf.len() - read,
+        );
+        #[cfg(target_os = "linux")]
+        let n = crate::syscalls::linux_raw::raw_read(
             fd,
             buf[read..].as_mut_ptr() as *mut libc::c_void,
             buf.len() - read,

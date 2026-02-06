@@ -1,9 +1,11 @@
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
   if (argc < 2) {
     fprintf(stderr, "Usage: %s <file>\n", argv[0]);
     return 1;

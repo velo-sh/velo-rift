@@ -456,7 +456,6 @@ pub mod frame_async {
 }
 
 #[derive(Debug, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize)]
-#[rkyv(derive(Debug))]
 pub enum VeloRequest {
     Handshake {
         client_version: String,
@@ -552,7 +551,6 @@ pub enum VeloRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize)]
-#[rkyv(derive(Debug))]
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
@@ -570,11 +568,10 @@ pub use vrift_manifest::VnodeEntry;
     Serialize,
     Deserialize,
     Default,
-    Archive,
+    rkyv::Archive,
     rkyv::Serialize,
     rkyv::Deserialize,
 )]
-#[rkyv(derive(Debug))]
 pub struct VnodeEntry {
     pub content_hash: [u8; 32],
     pub size: u64,
@@ -610,7 +607,6 @@ impl VnodeEntry {
     rkyv::Serialize,
     rkyv::Deserialize,
 )]
-#[rkyv(derive(Debug))]
 pub enum VeloErrorKind {
     /// Resource not found (file, entry, workspace)
     NotFound,
@@ -632,7 +628,6 @@ pub enum VeloErrorKind {
 
 /// Structured error for IPC responses
 #[derive(Debug, Clone, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize)]
-#[rkyv(derive(Debug))]
 pub struct VeloError {
     /// Error category
     pub kind: VeloErrorKind,
@@ -737,7 +732,6 @@ impl std::fmt::Display for VeloError {
 impl std::error::Error for VeloError {}
 
 #[derive(Debug, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize)]
-#[rkyv(derive(Debug))]
 pub enum VeloResponse {
     HandshakeAck {
         server_version: String,

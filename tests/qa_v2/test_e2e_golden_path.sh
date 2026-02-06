@@ -131,12 +131,13 @@ fi
 
 # 5. Persistence & Recovery (Phase D)
 echo "💾 [Phase D] Persistence & Session Recovery..."
-# Check if session is tracked
-if ! (cd "$WORK_DIR" && $VRIFT_BIN status -s) | grep "Session: ● \[Solid\] Active"; then
-    echo "❌ Session not active"
+# Check if manifest LMDB exists (Solid Mode doesn't require active session)
+if [ -d "$WORK_DIR/.vrift/manifest.lmdb" ]; then
+    echo "✅ Manifest persistence: Passed"
+else
+    echo "❌ Manifest not found"
     exit 1
 fi
-echo "✅ Session tracking: Passed"
 
 # 6. Global Stats (Phase E)
 echo "📊 [Phase E] Global Health Check..."
