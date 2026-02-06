@@ -28,6 +28,7 @@ use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
+use rkyv::Archive;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -45,7 +46,7 @@ pub enum PackError {
     Io(#[from] io::Error),
 
     #[error("Serialization error: {0}")]
-    Bincode(#[from] bincode::Error),
+    Rkyv(String),
 
     #[error("Invalid packfile: {0}")]
     Invalid(String),
@@ -57,7 +58,8 @@ pub enum PackError {
 pub type Result<T> = std::result::Result<T, PackError>;
 
 /// Packfile header (fixed 32 bytes)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(derive(Debug))]
 struct PackHeader {
     magic: [u8; 8],
     version: u32,
@@ -92,7 +94,8 @@ impl PackHeader {
 }
 
 /// Index entry for a blob in the packfile
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(derive(Debug))]
 pub struct PackIndexEntry {
     /// BLAKE3 hash of the blob
     pub hash: Blake3Hash,
@@ -122,14 +125,17 @@ impl PackReader {
         }
 
         // Read header
-        let header: PackHeader = bincode::deserialize(&mmap[..32])?;
+        let header: PackHeader = rkyv::from_bytes::<PackHeader, rkyv::rancor::Error>(&mmap[..32])
+            .map_err(|e| PackError::Rkyv(e.to_string()))?;
         header.validate()?;
 
         // Read index
         let index_start = header.index_offset as usize;
         let index_end = header.data_offset as usize;
         let index_bytes = &mmap[index_start..index_end];
-        let entries: Vec<PackIndexEntry> = bincode::deserialize(index_bytes)?;
+        let entries: Vec<PackIndexEntry> =
+            rkyv::from_bytes::<Vec<PackIndexEntry>, rkyv::rancor::Error>(index_bytes)
+                .map_err(|e| PackError::Rkyv(e.to_string()))?;
 
         let index: HashMap<Blake3Hash, PackIndexEntry> =
             entries.into_iter().map(|e| (e.hash, e)).collect();
@@ -226,7 +232,8 @@ impl PackWriter {
 
         // Write index
         let index_offset = header_size;
-        let index_bytes = bincode::serialize(&self.entries)?;
+        let index_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&self.entries)
+            .map_err(|e| PackError::Rkyv(e.to_string()))?;
         writer.write_all(&index_bytes)?;
 
         // Write data
@@ -235,7 +242,8 @@ impl PackWriter {
 
         // Write header at beginning
         let header = PackHeader::new(self.entries.len() as u32, index_offset, data_offset);
-        let header_bytes = bincode::serialize(&header)?;
+        let header_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&header)
+            .map_err(|e| PackError::Rkyv(e.to_string()))?;
 
         writer.seek(SeekFrom::Start(0))?;
         writer.write_all(&header_bytes)?;
@@ -246,7 +254,8 @@ impl PackWriter {
 }
 
 /// Profile-guided packing: records access order for optimal packing
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(derive(Debug))]
 pub struct AccessProfile {
     /// Blobs in access order
     pub access_order: Vec<Blake3Hash>,
@@ -263,17 +272,22 @@ impl AccessProfile {
 
     /// Save profile to file
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let data = rkyv::to_bytes::<rkyv::rancor::Error>(self)
+            .map_err(|e| PackError::Rkyv(e.to_string()))?;
         let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        bincode::serialize_into(writer, self)?;
+        let mut writer = BufWriter::new(file);
+        std::io::Write::write_all(&mut writer, &data)?;
         Ok(())
     }
 
     /// Load profile from file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let profile = bincode::deserialize_from(reader)?;
+        let mut reader = BufReader::new(file);
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut data)?;
+        let profile = rkyv::from_bytes::<Self, rkyv::rancor::Error>(&data)
+            .map_err(|e| PackError::Rkyv(e.to_string()))?;
         Ok(profile)
     }
 }

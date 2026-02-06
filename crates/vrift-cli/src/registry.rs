@@ -301,7 +301,7 @@ impl ManifestRegistry {
                     hashes.insert(m_entry.vnode.content_hash);
                 }
             } else {
-                // Legacy bincode manifest
+                // In-memory manifest (rkyv format)
                 let manifest = Manifest::load(&entry.source_path)
                     .with_context(|| format!("Failed to load manifest: {:?}", entry.source_path))?;
                 for (_, vnode) in manifest.iter() {

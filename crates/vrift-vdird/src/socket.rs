@@ -1,4 +1,6 @@
 //! Unix Domain Socket listener for vdir_d
+//!
+//! Uses IpcHeader frame protocol for all IPC communication.
 
 use crate::commands::CommandHandler;
 use crate::vdir::VDir;
@@ -9,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
-use vrift_ipc::{VeloError, VeloRequest, VeloResponse};
+use vrift_ipc::{IpcHeader, VeloError, VeloRequest, VeloResponse};
 
 /// Run the UDS listener loop
 pub async fn run_listener(config: ProjectConfig, vdir: VDir) -> Result<()> {
@@ -40,14 +42,14 @@ pub async fn run_listener(config: ProjectConfig, vdir: VDir) -> Result<()> {
     }
 }
 
-/// Handle a single client connection
+/// Handle a single client connection using IpcHeader frame protocol
 async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandler>>) -> Result<()> {
     debug!("New client connected");
 
     loop {
-        // Read length prefix
-        let mut len_buf = [0u8; 4];
-        match stream.read_exact(&mut len_buf).await {
+        // Read IpcHeader (8 bytes)
+        let mut header_buf = [0u8; IpcHeader::SIZE];
+        match stream.read_exact(&mut header_buf).await {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 debug!("Client disconnected");
@@ -56,14 +58,19 @@ async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandle
             Err(e) => return Err(e.into()),
         }
 
-        let msg_len = u32::from_le_bytes(len_buf) as usize;
-        if msg_len > 1024 * 1024 {
-            warn!(len = msg_len, "Message too large, dropping client");
+        let header = IpcHeader::from_bytes(&header_buf);
+        if !header.is_valid() {
+            warn!("Invalid IPC magic, dropping client");
+            return Ok(());
+        }
+
+        if header.length as usize > IpcHeader::MAX_LENGTH {
+            warn!(len = header.length, "Message too large, dropping client");
             return Ok(());
         }
 
         // Read payload
-        let mut payload = vec![0u8; msg_len];
+        let mut payload = vec![0u8; header.length as usize];
         stream.read_exact(&mut payload).await?;
 
         // Deserialize request
@@ -76,7 +83,7 @@ async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandle
                         "Deserialize error: {}",
                         e
                     )));
-                    send_response(&mut stream, &response).await?;
+                    send_response(&mut stream, &response, header.seq_id).await?;
                     continue;
                 }
             };
@@ -89,17 +96,30 @@ async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandle
             h.handle_request(request).await
         };
 
-        // Send response
-        send_response(&mut stream, &response).await?;
+        // Send response with matching seq_id
+        send_response(&mut stream, &response, header.seq_id).await?;
     }
 }
 
-/// Send response with length prefix
-async fn send_response(stream: &mut UnixStream, response: &VeloResponse) -> Result<()> {
+/// Send response using IpcHeader frame protocol
+async fn send_response(
+    stream: &mut UnixStream,
+    response: &VeloResponse,
+    seq_id: u16,
+) -> Result<()> {
     let payload = rkyv::to_bytes::<rkyv::rancor::Error>(response)
         .map_err(|e| anyhow::anyhow!("Serialize error: {}", e))?;
-    let len = (payload.len() as u32).to_le_bytes();
-    stream.write_all(&len).await?;
+
+    if payload.len() > IpcHeader::MAX_LENGTH {
+        return Err(anyhow::anyhow!(
+            "Response too large: {} bytes",
+            payload.len()
+        ));
+    }
+
+    let header = IpcHeader::new_response(payload.len() as u16, seq_id);
+
+    stream.write_all(&header.to_bytes()).await?;
     stream.write_all(&payload).await?;
     Ok(())
 }

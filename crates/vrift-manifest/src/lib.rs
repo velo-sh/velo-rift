@@ -7,7 +7,7 @@
 //!
 //! ## Storage Backends
 //!
-//! - `Manifest`: In-memory HashMap with bincode file persistence (legacy)
+//! - `Manifest`: In-memory HashMap with rkyv file persistence
 //! - `LmdbManifest`: LMDB-backed with ACID transactions (RFC-0039)
 
 pub mod lmdb;
@@ -23,7 +23,7 @@ use std::path::Path;
 
 use rkyv::Archive;
 use serde::{Deserialize, Serialize};
-use thiserror::Error; // Added for bincode::Error
+use thiserror::Error;
 
 use vrift_cas::Blake3Hash;
 
@@ -34,7 +34,7 @@ pub enum ManifestError {
     Io(#[from] io::Error),
 
     #[error("Serialization error: {0}")]
-    Bincode(#[from] bincode::Error),
+    Rkyv(String),
 
     #[error("Path not found: {0}")]
     PathNotFound(String),
@@ -187,7 +187,10 @@ fn normalize_vfs_path(path: &str) -> String {
 }
 
 /// Manifest containing the path → VnodeEntry mapping
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Default, Serialize, Deserialize, Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+#[rkyv(derive(Debug))]
 pub struct Manifest {
     /// Version for compatibility
     pub version: u32,
@@ -261,19 +264,24 @@ impl Manifest {
         self.paths.values().map(|s| s.as_str())
     }
 
-    /// Save the manifest to a file using bincode
+    /// Save the manifest to a file using rkyv
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let data = rkyv::to_bytes::<rkyv::rancor::Error>(self)
+            .map_err(|e| ManifestError::Rkyv(e.to_string()))?;
         let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        bincode::serialize_into(writer, self)?;
+        let mut writer = BufWriter::new(file);
+        std::io::Write::write_all(&mut writer, &data)?;
         Ok(())
     }
 
     /// Load a manifest from a file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let manifest = bincode::deserialize_from(reader).map_err(io::Error::other)?;
+        let mut reader = BufReader::new(file);
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut data)?;
+        let manifest = rkyv::from_bytes::<Self, rkyv::rancor::Error>(&data)
+            .map_err(|e| ManifestError::Rkyv(e.to_string()))?;
         Ok(manifest)
     }
 

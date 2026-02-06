@@ -2131,7 +2131,6 @@ name = "vrift-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bincode",
  "chrono",
  "clap",
  "console",
@@ -2243,7 +2242,6 @@ dependencies = [
 name = "vrift-manifest"
 version = "0.1.0"
 dependencies = [
- "bincode",
  "blake3",
  "dashmap",
  "dirs 6.0.0",
@@ -2260,9 +2258,9 @@ dependencies = [
 name = "vrift-pack"
 version = "0.1.0"
 dependencies = [
- "bincode",
  "blake3",
  "memmap2",
+ "rkyv",
  "serde",
  "tempfile",
  "thiserror 1.0.69",

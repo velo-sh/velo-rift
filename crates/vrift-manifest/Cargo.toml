@@ -9,7 +9,6 @@ license.workspace = true
 blake3.workspace = true
 serde.workspace = true
 rkyv.workspace = true
-bincode.workspace = true
 thiserror.workspace = true
 vrift-cas.workspace = true
 heed = "0.20"

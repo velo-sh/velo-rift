@@ -1,13 +1,15 @@
 //! Integration tests for vrift-vdird
 //!
-//! These tests verify complete daemon lifecycle and client-server communication.
+//! These tests verify complete daemon lifecycle and client-server communication
+//! using the IpcHeader frame protocol.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 use tempfile::tempdir;
+use vrift_ipc::IpcHeader;
 
-/// Helper to send request and receive response using rkyv
+/// Helper to send request and receive response using IpcHeader frame protocol
 fn send_request(
     stream: &mut UnixStream,
     request: &vrift_ipc::VeloRequest,
@@ -15,16 +17,23 @@ fn send_request(
     // Ensure blocking mode for reliable read
     stream.set_nonblocking(false).ok();
 
+    // Serialize payload
     let payload = rkyv::to_bytes::<rkyv::rancor::Error>(request).unwrap();
-    let len = (payload.len() as u32).to_le_bytes();
-    stream.write_all(&len).unwrap();
+
+    // Create and send header
+    let seq_id = 1u16; // Simple seq for tests
+    let header = IpcHeader::new_request(payload.len() as u16, seq_id);
+    stream.write_all(&header.to_bytes()).unwrap();
     stream.write_all(&payload).unwrap();
 
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).unwrap();
-    let resp_len = u32::from_le_bytes(len_buf) as usize;
+    // Read response header
+    let mut header_buf = [0u8; IpcHeader::SIZE];
+    stream.read_exact(&mut header_buf).unwrap();
+    let resp_header = IpcHeader::from_bytes(&header_buf);
+    assert!(resp_header.is_valid(), "Invalid response header");
 
-    let mut resp_buf = vec![0u8; resp_len];
+    // Read response payload
+    let mut resp_buf = vec![0u8; resp_header.length as usize];
     stream.read_exact(&mut resp_buf).unwrap();
 
     rkyv::from_bytes::<vrift_ipc::VeloResponse, rkyv::rancor::Error>(&resp_buf).unwrap()
