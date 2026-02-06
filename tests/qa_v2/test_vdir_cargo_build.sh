@@ -31,6 +31,8 @@ VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
 SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 
 TEST_WORKSPACE="/tmp/vdir_cargo_test_$$"
+VRIFT_SOCKET_PATH="$TEST_WORKSPACE/vrift.sock"
+export VRIFT_SOCKET_PATH
 VR_THE_SOURCE="$TEST_WORKSPACE/.cas"
 export VR_THE_SOURCE
 
@@ -96,7 +98,7 @@ verify_not_exists() {
 cleanup() {
     [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
     pkill -f vriftd 2>/dev/null || true
-    rm -f /tmp/vrift.sock
+    rm -f "$VRIFT_SOCKET_PATH"
     
     if [ -d "$TEST_WORKSPACE" ]; then
         chflags -R nouchg "$TEST_WORKSPACE" 2>/dev/null || true
@@ -600,7 +602,7 @@ test_vfs_cargo() {
     
     # Wait for daemon with timeout (max 10s)
     local waited=0
-    while [ ! -S /tmp/vrift.sock ] && [ $waited -lt 10 ]; do
+    while [ ! -S "$VRIFT_SOCKET_PATH" ] && [ $waited -lt 10 ]; do
         sleep 1
         waited=$(($waited + 1))
     done

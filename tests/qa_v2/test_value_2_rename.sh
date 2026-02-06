@@ -293,7 +293,8 @@ else
 fi
 
 kill $DAEMON_PID 2>/dev/null || true
-rm -f /tmp/vrift.sock
+VRIFT_SOCKET_PATH="${WORK_DIR}/vrift.sock"
+rm -f "$VRIFT_SOCKET_PATH"
 
 echo "----------------------------------------------------------------"
 echo -e "${GREEN}🏆 VALUE PROOF 2: SUCCESSFUL${NC}"

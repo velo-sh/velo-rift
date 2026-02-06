@@ -32,6 +32,8 @@ else
 fi
 
 TEST_WORKSPACE="/tmp/vdir_compiler_test_$$"
+VRIFT_SOCKET_PATH="$TEST_WORKSPACE/vrift.sock"
+export VRIFT_SOCKET_PATH
 VR_THE_SOURCE="$TEST_WORKSPACE/.cas"
 
 PASS_COUNT=0
@@ -72,7 +74,7 @@ cleanup() {
     # Stop any running daemons
     pkill -f "vriftd.*$TEST_WORKSPACE" 2>/dev/null || true
     pkill -f vriftd 2>/dev/null || true
-    rm -f /tmp/vrift.sock
+    rm -f "$VRIFT_SOCKET_PATH"
     
     # Cleanup test workspace
     if [ -d "$TEST_WORKSPACE" ]; then

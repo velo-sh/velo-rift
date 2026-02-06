@@ -25,6 +25,8 @@ VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
 SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 
 TEST_WORKSPACE="/tmp/vdir_resilience_test_$$"
+VRIFT_SOCKET_PATH="$TEST_WORKSPACE/vrift.sock"
+export VRIFT_SOCKET_PATH
 VR_THE_SOURCE="$TEST_WORKSPACE/.cas"
 export VR_THE_SOURCE
 
@@ -68,7 +70,7 @@ cleanup() {
     [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
     pkill -9 -f "vriftd.*$TEST_WORKSPACE" 2>/dev/null || true
     pkill -f vriftd 2>/dev/null || true
-    rm -f /tmp/vrift.sock
+    rm -f "$VRIFT_SOCKET_PATH"
     
     # Cleanup
     if [ -d "$TEST_WORKSPACE" ]; then
