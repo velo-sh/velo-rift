@@ -889,17 +889,17 @@ pub fn is_version_compatible(client_version: u32) -> bool {
 
 /// Default socket path (internal fallback for DaemonClient)
 /// Prefer using vrift_config::config().socket_path() when available
+#[cfg(target_os = "linux")]
 pub const DEFAULT_SOCKET_PATH: &str = "/run/vrift/daemon.sock";
+#[cfg(not(target_os = "linux"))]
+pub const DEFAULT_SOCKET_PATH: &str = "/tmp/vrift.sock";
+
 /// Default CAS root path
 pub const DEFAULT_CAS_ROOT: &str = "~/.vrift/the_source";
 
-/// Get default socket path (with /tmp fallback if /run/vrift is missing)
+/// Get default socket path
 fn default_socket_path() -> String {
-    if std::path::Path::new("/run/vrift").exists() {
-        DEFAULT_SOCKET_PATH.to_string()
-    } else {
-        "/tmp/vrift.sock".to_string()
-    }
+    DEFAULT_SOCKET_PATH.to_string()
 }
 
 #[cfg(feature = "cas")]
