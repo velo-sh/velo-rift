@@ -211,10 +211,11 @@ impl RingBufferStore {
         }
     }
 
-    pub fn get(&self) -> &RingBuffer {
+    pub fn get(&self) -> Option<&RingBuffer> {
         if !self.initialized.load(Ordering::Acquire) {
             // Lazy init logic here (simplified)
+            return None; 
         }
-        unsafe { (&*self.inner.get()).as_ref().unwrap() }
+        unsafe { (&*self.inner.get()).as_ref() }
     }
 }

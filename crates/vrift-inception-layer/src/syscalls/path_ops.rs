@@ -59,7 +59,7 @@ unsafe fn break_link_linux(path_str: &str) -> Result<(), c_int> {
     const O_TMPFILE: c_int = 0o20200000;
 
     // Use CString literal for "." safely
-    let dot = CString::new(".").unwrap();
+    let dot = unsafe { CString::from_vec_unchecked(b".".to_vec()) };
     let tmp_fd = libc::openat(dir_fd, dot.as_ptr(), O_TMPFILE | libc::O_RDWR, 0o600);
     if tmp_fd < 0 {
         libc::close(dir_fd);

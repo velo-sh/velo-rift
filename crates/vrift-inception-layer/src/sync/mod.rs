@@ -36,8 +36,6 @@ pub(crate) unsafe fn mark_reactor_ready() {
 
 /// UNSAFE: Only call after Reactor is initialized (post-init phase)
 #[inline(always)]
-pub unsafe fn get_reactor_unchecked() -> &'static Reactor {
-    // Use get_reactor() even in unchecked to ensure we respect the initialization flag
-    // and avoid hitting unwrap_unchecked on None if possible.
-    get_reactor().expect("Reactor not initialized")
+pub unsafe fn get_reactor_unchecked() -> Option<&'static Reactor> {
+    get_reactor()
 }

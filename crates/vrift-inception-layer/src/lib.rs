@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+// #![deny(warnings)] // TODO: Enable strict mode eventually
 //! # velo-inception-layer
 //!
 //! LD_PRELOAD / DYLD_INSERT_LIBRARIES inception-layer for Velo Rift virtual filesystem.
