@@ -905,8 +905,8 @@ async fn handle_request(
 
             let duration = start.elapsed();
 
-            // 6. Write simple binary manifest
-            if let Err(e) = write_ingest_manifest(&manifest_out, &results) {
+            // 6. Write LMDB manifest (RFC-0039 compatible with shim)
+            if let Err(e) = write_ingest_manifest(&manifest_out, &source_path, &results, tier1) {
                 return VeloResponse::Error(format!("Failed to write manifest: {}", e));
             }
 
@@ -930,28 +930,62 @@ async fn handle_request(
     }
 }
 
-/// Write manifest file from ingest results
+/// Write manifest file from ingest results using LMDB format
+/// (RFC-0039: Compatible with cmd_ingest and shim)
 fn write_ingest_manifest(
     manifest_path: &Path,
+    source_root: &Path,
     results: &[Result<vrift_cas::IngestResult, vrift_cas::CasError>],
+    tier1: bool,
 ) -> Result<()> {
-    use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
+    use vrift_manifest::VnodeEntry;
 
-    // Simple binary manifest: count + entries
-    let entries: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+    // Open or create LMDB manifest
+    let manifest = LmdbManifest::open(manifest_path)?;
 
-    let mut file = std::fs::File::create(manifest_path)?;
+    // Determine asset tier
+    let asset_tier = if tier1 {
+        AssetTier::Tier1Immutable
+    } else {
+        AssetTier::Tier2Mutable
+    };
 
-    // Write count
-    let count = entries.len() as u32;
-    file.write_all(&count.to_le_bytes())?;
+    for result in results.iter().flatten() {
+        // Get file metadata for mtime and mode
+        let metadata = match std::fs::metadata(&result.source_path) {
+            Ok(m) => m,
+            Err(_) => {
+                // File might have been moved (phantom mode) - try symlink metadata
+                match std::fs::symlink_metadata(&result.source_path) {
+                    Ok(m) => m,
+                    Err(_) => continue, // Skip files we can't stat
+                }
+            }
+        };
 
-    // Write entries (hash + size)
-    for entry in entries {
-        file.write_all(&entry.hash)?;
-        file.write_all(&entry.size.to_le_bytes())?;
+        // Compute manifest path: relative to source_root with leading /
+        let relative_path = result
+            .source_path
+            .strip_prefix(source_root)
+            .unwrap_or(&result.source_path);
+        let manifest_key = format!("/{}", relative_path.display());
+
+        // Extract mtime and mode
+        let mtime = metadata.mtime() as u64;
+        let mode = metadata.mode();
+
+        // Create VnodeEntry
+        let vnode = VnodeEntry::new_file(result.hash, result.size, mtime, mode);
+
+        // Insert into LMDB manifest
+        manifest.insert(&manifest_key, vnode, asset_tier);
     }
 
+    // Commit delta layer to LMDB base layer (required for persistence!)
+    manifest.commit()?;
+
+    // LMDB syncs automatically after commit
     Ok(())
 }
 
