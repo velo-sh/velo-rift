@@ -99,7 +99,7 @@ echo "   - Total: 1000 fstat() calls after fork()"
 echo ""
 
 # Run with shim
-export DYLD_INSERT_LIBRARIES="$(find ../.. -name 'libvrift_shim.dylib' | head -1)"
+export DYLD_INSERT_LIBRARIES="$(find ../.. -name 'libvrift_inception_layer.dylib' | head -1)"
 export LD_PRELOAD="$(find ../.. -name 'libvrift_shim.so' | head -1)"
 
 if [ -n "$DYLD_INSERT_LIBRARIES" ] || [ -n "$LD_PRELOAD" ]; then
@@ -164,7 +164,7 @@ else
     ./fork_test
     echo ""
     echo "ℹ️  Test completed without shim (baseline)"
-    echo "   Build vrift-shim first to test with shim"
+    echo "   Build vrift-inception-layer first to test with shim"
 fi
 
 echo ""

@@ -18,7 +18,7 @@ mkdir -p "$TEST_DIR/subdir"
 echo "file in subdir" > "$TEST_DIR/subdir/test.txt"
 
 # Test fchdir with Python
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
 import os
 import sys
 
@@ -61,7 +61,7 @@ EOF
 
 export TEST_DIR="$TEST_DIR"
 
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
 import os
 import sys
 original = os.getcwd()

@@ -11,10 +11,10 @@ echo "=== Multi-File Compilation Benchmark ==="
 echo "Testing shim overhead on real-world multi-file compilation"
 echo ""
 
-SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 if [[ ! -f "$SHIM_PATH" ]]; then
     echo "Building shim..."
-    cargo build --release -p vrift-shim
+    cargo build --release -p vrift-inception-layer
     codesign -s - -f "$SHIM_PATH" 2>/dev/null || true
 fi
 

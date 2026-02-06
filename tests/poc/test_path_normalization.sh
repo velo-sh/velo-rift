@@ -10,9 +10,9 @@ echo "=== Path Normalization Security Test ==="
 
 # Build shim
 echo "Building shim..."
-cargo build -p vrift-shim --quiet 2>/dev/null || cargo build -p vrift-shim
+cargo build -p vrift-inception-layer --quiet 2>/dev/null || cargo build -p vrift-inception-layer
 
-SHIM_PATH="$PROJECT_ROOT/target/debug/libvrift_shim.dylib"
+SHIM_PATH="$PROJECT_ROOT/target/debug/libvrift_inception_layer.dylib"
 if [[ ! -f "$SHIM_PATH" ]]; then
     echo "SKIP: Shim not found (macOS only test)"
     exit 0

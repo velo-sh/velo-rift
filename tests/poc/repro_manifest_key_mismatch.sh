@@ -6,7 +6,7 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VELO_BIN="$PROJECT_ROOT/target/release/vrift"
 VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 
 TEST_DIR=$(mktemp -d)
 mkdir -p "$TEST_DIR/source"

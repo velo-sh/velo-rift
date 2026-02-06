@@ -32,7 +32,7 @@ log_fail() {
 # Ensure shim exists
 if [[ ! -f "$SHIM_PATH" ]]; then
     echo "❌ Shim not found: $SHIM_PATH"
-    echo "   Run: cargo build -p vrift-shim"
+    echo "   Run: cargo build -p vrift-inception-layer"
     exit 1
 fi
 

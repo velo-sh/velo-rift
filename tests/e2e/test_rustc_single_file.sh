@@ -1,7 +1,7 @@
 #!/bin/bash
 # test_rustc_single_file.sh
 # 
-# M5 E2E Test: Compile single .rs file under vrift-shim
+# M5 E2E Test: Compile single .rs file under vrift-inception-layer
 # Verifies: Output .o is written to staging and committed to CAS
 
 set -e

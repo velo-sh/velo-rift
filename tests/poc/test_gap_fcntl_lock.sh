@@ -18,7 +18,7 @@ trap cleanup EXIT
 echo "lock test content" > "$TEST_DIR/lockfile.txt"
 
 # Test fcntl locking with Python
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
 import os
 import sys
 import fcntl
@@ -61,7 +61,7 @@ EOF
 
 export TEST_FILE="$TEST_DIR/lockfile.txt"
 
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
 import os
 import fcntl
 import sys

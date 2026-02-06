@@ -12,7 +12,7 @@ echo "=== Test: Shell chmod Interception ==="
 
 # OS Detection
 if [ "$(uname -s)" == "Darwin" ]; then
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
     PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
     STAT_MODE_FLAG="-f %Lp"
 else

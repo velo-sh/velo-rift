@@ -33,7 +33,7 @@ if cc "$TEST_DIR/hello.c" -o "$TEST_DIR/hello" 2>/dev/null; then
 else
     echo "⚠️ INFO: Compilation failed (expected in pure VFS without headers)"
     echo "   Testing shim identity instead..."
-    SHIM_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)/target/debug/libvrift_shim.dylib"
+    SHIM_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)/target/debug/libvrift_inception_layer.dylib"
     if [[ -f "$SHIM_PATH" ]]; then
         echo "✅ PASS: Shim library exists"
         exit 0

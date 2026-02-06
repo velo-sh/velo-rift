@@ -3,7 +3,7 @@
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 MANIFEST="$PROJECT_ROOT/tests/poc/vrift.manifest"
 
 echo "=== Testing Lock-Free FD Usage Monitoring (70%/85% UX Rules) ==="

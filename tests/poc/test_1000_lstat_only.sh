@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-SHIM="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 
 TEST_DIR=$(mktemp -d)
 trap "rm -rf $TEST_DIR" EXIT

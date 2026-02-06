@@ -47,7 +47,7 @@ echo "fn main() {}" > "$VELO_PROJECT_ROOT/src/main.rs"
 echo "mod lib;" > "$VELO_PROJECT_ROOT/src/lib.rs"
 
 # Setup Shim and run test
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" \
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 VRIFT_SOCKET_PATH="/tmp/vrift.sock" \
 VRIFT_VFS_PREFIX="$VELO_PROJECT_ROOT" \

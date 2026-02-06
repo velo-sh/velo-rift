@@ -8,7 +8,7 @@ touch "$TEST_DIR/zero.txt"
 
 echo "=== Test: Zero-Byte File Behavior (Standalone) ==="
 
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" \
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 python3 << EOF
 import os

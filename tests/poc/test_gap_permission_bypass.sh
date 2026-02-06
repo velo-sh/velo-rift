@@ -41,7 +41,7 @@ chmod 444 "$VELO_PROJECT_ROOT/protected.txt"
 
 # Setup Shim
 if [[ "$(uname)" == "Darwin" ]]; then
-    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
     export DYLD_FORCE_FLAT_NAMESPACE=1
 else
     export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"

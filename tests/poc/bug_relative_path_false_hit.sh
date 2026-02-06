@@ -11,7 +11,7 @@ WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 VRIFT_BIN="$PROJECT_ROOT/target/release/vrift"
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 
 # 1. Setup Project
 mkdir -p "$WORK_DIR/project"

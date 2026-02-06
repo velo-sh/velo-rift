@@ -25,9 +25,9 @@ fi
 
 # Build
 echo "[1] Building components..."
-(cd "$PROJECT_ROOT" && cargo build -p vrift-shim -p vrift-cli -p vrift-daemon 2>/dev/null)
+(cd "$PROJECT_ROOT" && cargo build -p vrift-inception-layer -p vrift-cli -p vrift-daemon 2>/dev/null)
 
-SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
 CLI_PATH="${PROJECT_ROOT}/target/debug/vrift"
 DAEMON_PATH="${PROJECT_ROOT}/target/debug/vriftd"
 

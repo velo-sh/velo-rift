@@ -8,11 +8,11 @@ echo "=== Simplified Fork Safety Test ==="
 echo ""
 
 # Find shim library
-SHIM_LIB=$(find target/release -name 'libvrift_shim.dylib' -o -name 'libvrift_shim.so' 2>/dev/null | head -1)
+SHIM_LIB=$(find target/release -name 'libvrift_inception_layer.dylib' -o -name 'libvrift_shim.so' 2>/dev/null | head -1)
 
 if [ -z "$SHIM_LIB" ]; then
     echo "❌ Shim library not found!"
-    echo "   Run: cargo build -p vrift-shim --release"
+    echo "   Run: cargo build -p vrift-inception-layer --release"
     exit 1
 fi
 

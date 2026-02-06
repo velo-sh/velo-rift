@@ -1433,7 +1433,7 @@ mod tests {
     fn test_ipc_header_types() {
         let req = IpcHeader::new_request(100, 1);
         assert_eq!(req.frame_type(), Some(FrameType::Request));
-        assert_eq!(req.version(), 3); // PROTOCOL_VERSION
+        assert_eq!(req.version(), 4); // PROTOCOL_VERSION
 
         let resp = IpcHeader::new_response(200, 2);
         assert_eq!(resp.frame_type(), Some(FrameType::Response));
@@ -1456,7 +1456,7 @@ mod tests {
         // Test max payload length (64KB - 1)
         let header = IpcHeader::new_request(65535, 0);
         assert_eq!(header.length, 65535);
-        assert_eq!(IpcHeader::MAX_LENGTH, 65535);
+        assert_eq!(IpcHeader::MAX_LENGTH, 33554432);
     }
 
     #[test]
@@ -1469,8 +1469,10 @@ mod tests {
         assert!(is_version_compatible(2));
         // v3 is current (PROTOCOL_VERSION)
         assert!(is_version_compatible(3));
-        // v4 is not yet supported
-        assert!(!is_version_compatible(4));
+        // v4 is current (PROTOCOL_VERSION)
+        assert!(is_version_compatible(4));
+        // v5 is not yet supported
+        assert!(!is_version_compatible(5));
         // Very high version not supported
         assert!(!is_version_compatible(100));
     }

@@ -14,7 +14,7 @@ export VRIFT_VFS_PREFIX="$REAL_FAKE_DIR"
 echo "Using VRIFT_VFS_PREFIX=$VRIFT_VFS_PREFIX"
 
 echo -e "\n1. Testing shimmed mkdir (C program):"
-DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_shim.dylib \
+DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_inception_layer.dylib \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 ./tests/poc/test_mkdir_shim "$REAL_FAKE_DIR/new_dir"
 
@@ -25,7 +25,7 @@ else
 fi
 
 echo -e "\n2. Testing UNSHIMMED mkdirat (C program):"
-DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_shim.dylib \
+DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_inception_layer.dylib \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 ./tests/poc/test_mkdirat_gap "$REAL_FAKE_DIR/new_dir_at"
 

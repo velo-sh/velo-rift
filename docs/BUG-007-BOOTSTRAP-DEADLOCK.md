@@ -166,3 +166,10 @@ If you encounter similar hangs:
 - Apple ARM64 Calling Convention documentation
 - `crates/vrift-shim/src/syscalls/linux_raw.rs` — similar pattern for Linux
 - Pattern 2682: Raw Assembly Syscall Wrappers
+
+### Final Verification Results
+
+*   **`test_boot_safety.sh`**: ✅ **PASS** (Confirmed bootstrap-safe)
+*   **`test_e2e_gcc_compile.sh`**: ✅ **PASS** (Verified mutation interposition)
+*   **Regression Suite**: ✅ **PASS** (IPC v4 and legacy name issues fixed)
+*   **Current Status**: **RESOLVED & VERIFIED**. Fix confirmed via raw syscall allocation proxy.

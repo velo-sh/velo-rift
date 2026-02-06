@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TEST_DIR=$(mktemp -d)
 export TEST_DIR
-SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
 
 echo "=== P3 Gap Test: xattr Behavior ==="
 
@@ -21,7 +21,7 @@ mkdir -p "$TEST_DIR/workspace/.vrift"
 echo "test" > "$TEST_DIR/workspace/test.txt"
 
 # Use Python to test xattr (cross-platform)
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
 import os
 import sys
 
@@ -73,7 +73,7 @@ except Exception as e:
 EOF
 
 export TEST_FILE="$TEST_DIR/workspace/test.txt"
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'PYEOF'
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'PYEOF'
 import os
 import sys
 import subprocess

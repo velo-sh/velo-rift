@@ -17,7 +17,7 @@ cc tests/poc/test_sendfile_gap.c -o tests/poc/test_sendfile_gap
 
 OS=$(uname -s)
 if [ "$OS" == "Darwin" ]; then
-    SHIM_SO="$(pwd)/target/release/libvrift_shim.dylib"
+    SHIM_SO="$(pwd)/target/release/libvrift_inception_layer.dylib"
 else
     SHIM_SO="$(pwd)/target/release/libvrift_shim.so"
 fi

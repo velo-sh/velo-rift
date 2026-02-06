@@ -7,9 +7,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 if [[ ! -f "$SHIM_PATH" ]]; then
-    echo "❌ Shim not found. Run: cargo build --release -p vrift-shim"
+    echo "❌ Shim not found. Run: cargo build --release -p vrift-inception-layer"
     exit 1
 fi
 

@@ -20,10 +20,10 @@ export TEST_DIR="$TEST_DIR"
 
 # Test AT syscalls with Python
 if [[ "$(uname)" == "Darwin" ]]; then
-    if [[ -f "${PROJECT_ROOT}/target/release/libvrift_shim.dylib" ]]; then
-        export SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
+    if [[ -f "${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib" ]]; then
+        export SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
     else
-        export SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+        export SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
     fi
     export SHIM_INJECT_VAR="DYLD_INSERT_LIBRARIES"
     export DYLD_FORCE_FLAT_NAMESPACE=1

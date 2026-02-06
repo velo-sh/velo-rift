@@ -15,9 +15,9 @@ echo "=== INITIALIZING State Transition Test ==="
 
 # Build shim with release (debug build has issues with FLAT_NAMESPACE due to extra TLS code)
 echo "Building shim..."
-cargo build -p vrift-shim --release --quiet
+cargo build -p vrift-inception-layer --release --quiet
 
-SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 if [[ ! -f "$SHIM_PATH" ]]; then
     echo "FAIL: Shim not found at $SHIM_PATH"
     exit 1

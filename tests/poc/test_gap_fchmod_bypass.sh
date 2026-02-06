@@ -16,7 +16,7 @@ export VRIFT_VFS_PREFIX="$REAL_FAKE_DIR"
 echo "Using VRIFT_VFS_PREFIX=$VRIFT_VFS_PREFIX"
 
 echo -e "\n1. Testing shimmed chmod (path-based C program):"
-DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_shim.dylib \
+DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_inception_layer.dylib \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 ./tests/poc/test_chmod_shim "$REAL_FAKE_DIR/protected_file"
 
@@ -30,7 +30,7 @@ else
 fi
 
 echo -e "\n2. Testing UNSHIMMED fchmod (descriptor-based C program):"
-DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_shim.dylib \
+DYLD_INSERT_LIBRARIES=$(pwd)/target/debug/libvrift_inception_layer.dylib \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 ./tests/poc/test_fchmod_gap "$REAL_FAKE_DIR/protected_file"
 

@@ -77,10 +77,10 @@ echo -e "${BLUE}[Baseline] Direct LibC (no shim):${NC}"
 BASELINE_NS=$("$BENCH_BIN" | grep -oE '[0-9]+\.[0-9]+')
 
 # With shim: Using raw syscall during init check
-SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 if [[ ! -f "$SHIM_PATH" ]]; then
     echo "Building shim..."
-    cargo build --release -p vrift-shim --manifest-path "$PROJECT_ROOT/Cargo.toml"
+    cargo build --release -p vrift-inception-layer --manifest-path "$PROJECT_ROOT/Cargo.toml"
 fi
 
 codesign -f -s - "$BENCH_BIN" 2>/dev/null || true
