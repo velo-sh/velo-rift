@@ -1,4 +1,4 @@
-//! Syscall interposition table for macOS/Linux shim.
+//! Syscall interposition table for macOS/Linux inception layer.
 //! Safety: All extern "C" functions here are dangerous FFI and must be used correctly.
 #![allow(clippy::missing_safety_doc)]
 

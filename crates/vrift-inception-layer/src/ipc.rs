@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Raw Unix socket connect using libc syscalls (avoids recursion through shim)
+/// Raw Unix socket connect using libc syscalls (avoids recursion through inception layer)
 /// RFC-0053: Adds 5 second timeout to prevent UE process states from blocking IPC
 pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
     // Fast-fail: Check if socket file exists before attempting connect
@@ -82,7 +82,7 @@ pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
     fd
 }
 
-/// Raw write using libc (avoids recursion through shim)
+/// Raw write using libc (avoids recursion through inception layer)
 pub(crate) unsafe fn raw_write_all(fd: c_int, data: &[u8]) -> bool {
     let mut written = 0;
     while written < data.len() {
@@ -106,7 +106,7 @@ pub(crate) unsafe fn raw_write_all(fd: c_int, data: &[u8]) -> bool {
     true
 }
 
-/// Raw read using syscall (avoids recursion through shim)
+/// Raw read using syscall (avoids recursion through inception layer)
 pub(crate) unsafe fn raw_read_exact(fd: c_int, buf: &mut [u8]) -> bool {
     let mut read = 0;
     while read < buf.len() {

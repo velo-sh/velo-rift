@@ -1,4 +1,4 @@
-//! FD Tracking and I/O syscall shims
+//! FD Tracking and I/O syscall inception layers
 //!
 //! Provides file descriptor tracking for VFS files, enabling proper
 //! handling of dup/dup2, fchdir, lseek, ftruncate, etc.
@@ -108,7 +108,7 @@ pub fn is_vfs_fd(fd: c_int) -> bool {
 }
 
 // ============================================================================
-// dup/dup2 shims - copy FD tracking on duplicate
+// dup/dup2 inception layers - copy FD tracking on duplicate
 // ============================================================================
 
 #[no_mangle]
@@ -365,7 +365,7 @@ pub unsafe extern "C" fn close_inception(fd: c_int) -> c_int {
 }
 
 // ============================================================================
-// sendfile / copy_file_range shims - prevent VFS write bypass
+// sendfile / copy_file_range inception layers - prevent VFS write bypass
 // ============================================================================
 
 #[cfg(target_os = "macos")]

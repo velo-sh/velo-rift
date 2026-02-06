@@ -4,7 +4,7 @@
 //!
 //! ## Problem Discovery
 //!
-//! When using `DYLD_INSERT_LIBRARIES` to inject vrift-shim into a process,
+//! When using `DYLD_INSERT_LIBRARIES` to inject vrift-inception layer into a process,
 //! the process would hang during dyld bootstrap on macOS ARM64.
 //!
 //! Stack trace analysis using `sample` revealed:
@@ -26,7 +26,7 @@
 //!
 //! 4. **IT_FSTAT.old_func Trap**: We tried using the interpose table's `old_func`
 //!    pointer, but with `DYLD_FORCE_FLAT_NAMESPACE=1`, even this points back to
-//!    our shim, creating infinite recursion.
+//!    our inception layer, creating infinite recursion.
 //!
 //! 5. **RwLock Hazard**: Even if we bypass dlsym, calling `get_fd_entry()` uses
 //!    `RwLock::read()` which may internally call syscalls that get interposed.
@@ -43,9 +43,9 @@
 //!
 //! This approach has ZERO dependencies on libc, malloc, or any other library.
 //!
-//! ## Affected Shims
+//! ## Affected Inception Layers
 //!
-//! The following shims use raw syscalls during early init (`INITIALIZING >= 2`)
+//! The following inception layers use raw syscalls during early init (`INITIALIZING >= 2`)
 //! or when in recursion (InceptionLayerGuard fails):
 //!
 //! - `fstat_inception` → [`raw_fstat64`] (SYS_fstat64 = 339)

@@ -51,7 +51,7 @@ impl RealSymbol {
     }
 }
 
-// Global list of real symbols used by shims (primarily macOS)
+// Global list of real symbols used by inception layers (primarily macOS)
 pub static REAL_OPEN: RealSymbol = RealSymbol::new("open\0");
 pub static REAL_OPENAT: RealSymbol = RealSymbol::new("openat\0");
 pub static REAL_CLOSE: RealSymbol = RealSymbol::new("close\0");

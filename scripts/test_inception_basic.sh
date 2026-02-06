@@ -2,7 +2,7 @@
 # ============================================================================
 # VRift Functional Test: Basic Shim Interception
 # ============================================================================
-# Verifies that the shim correctly intercepts open/read for virtual paths
+# Verifies that the inception correctly intercepts open/read for virtual paths
 # via the daemon IPC.
 # ============================================================================
 
@@ -31,15 +31,15 @@ VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
 # Detect OS
 OS_TYPE=$(uname -s)
 if [ "$OS_TYPE" == "Darwin" ]; then
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
+    INCEPTION_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
     PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
 else
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.so"
+    INCEPTION_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.so"
     PRELOAD_VAR="LD_PRELOAD"
 fi
 
 # Ensure binaries exist
-if [ ! -f "$VELO_BIN" ] || [ ! -f "$VRIFTD_BIN" ] || [ ! -f "$SHIM_LIB" ]; then
+if [ ! -f "$VELO_BIN" ] || [ ! -f "$VRIFTD_BIN" ] || [ ! -f "$INCEPTION_LIB" ]; then
     echo "Building release binaries..."
     cargo build --release --workspace
     # Explicitly build inception layer cdylib (may not be built by --workspace alone)
@@ -130,15 +130,15 @@ int main() {
 CEOF
 gcc "$TEST_DIR/test.c" -o "$TEST_DIR/test"
 
-# 4. Run with shim
-echo "Running with shim..."
-SHIM_PATH="$(realpath "$SHIM_LIB")"
-if [ ! -f "$SHIM_PATH" ]; then
-    echo "❌ ERROR: Shim library not found at $SHIM_PATH"
+# 4. Run with inception
+echo "Running with inception..."
+INCEPTION_PATH="$(realpath "$INCEPTION_LIB")"
+if [ ! -f "$INCEPTION_PATH" ]; then
+    echo "❌ ERROR: Shim library not found at $INCEPTION_PATH"
     exit 1
 fi
 
-export "$PRELOAD_VAR"="$SHIM_PATH"
+export "$PRELOAD_VAR"="$INCEPTION_PATH"
 if [ "$OS_TYPE" == "Darwin" ]; then
     export DYLD_FORCE_FLAT_NAMESPACE=1
 fi
@@ -161,10 +161,10 @@ echo "Running with strace: $STRACE_CMD"
 set +e
 if [ -n "$STRACE_CMD" ]; then
     # Run with strace and capture its output to stderr (which we redirect anyway)
-    export "$PRELOAD_VAR"="$SHIM_PATH"
+    export "$PRELOAD_VAR"="$INCEPTION_PATH"
     $STRACE_CMD "$TEST_DIR/test" > "$TEST_DIR/test_output.log" 2>&1
 else
-    export "$PRELOAD_VAR"="$SHIM_PATH"
+    export "$PRELOAD_VAR"="$INCEPTION_PATH"
     "$TEST_DIR/test" > "$TEST_DIR/test_output.log" 2>&1
 fi
 set -e

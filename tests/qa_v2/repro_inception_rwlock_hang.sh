@@ -2,19 +2,19 @@
 # ============================================================================
 # Bug Reproduction: Shim Bootstrap Deadlock (Pattern 2648)
 # ============================================================================
-# This script reproduces the hang observed when using RwLock in the shim's 
+# This script reproduces the hang observed when using RwLock in the inception's 
 # global state (io.rs) during process bootstrap on macOS ARM64.
 #
 # Finding: RwLock in Rust's stdlib triggers TLS/Pthread features that are not
 # safe during dyld's interpose initialization.
 #
-# Required: Revert crates/vrift-shim/src/syscalls/io.rs to use RwLock.
+# Required: Revert crates/vrift-inception/src/syscalls/io.rs to use RwLock.
 
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VRIFT_BIN="$PROJECT_ROOT/target/release/vrift"
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+INCEPTION_LIB="$PROJECT_ROOT/target/release/libvrift_inception.dylib"
 MINI_READ="$PROJECT_ROOT/tests/qa_v2/mini_read"
 
 # Setup work dir (ignore errors from VFS-protected files in previous run)
@@ -43,7 +43,7 @@ $VRIFT_BIN ingest "$WORK_DIR/project" --mode solid >/dev/null 2>&1
 # Note: Daemon stays running for the test phase
 # VFS_ENV below will connect to this active daemon.
 
-VFS_ENV="DYLD_INSERT_LIBRARIES=$SHIM_LIB DYLD_FORCE_FLAT_NAMESPACE=1 VRIFT_MANIFEST=$WORK_DIR/project/.vrift/manifest.lmdb VRIFT_VFS_PREFIX=$WORK_DIR/project"
+VFS_ENV="DYLD_INSERT_LIBRARIES=$INCEPTION_LIB DYLD_FORCE_FLAT_NAMESPACE=1 VRIFT_MANIFEST=$WORK_DIR/project/.vrift/manifest.lmdb VRIFT_VFS_PREFIX=$WORK_DIR/project"
 
 # 2. Trigger Hang
 echo "🚀 Running test with 5s timeout (Expected to HANG if bug exists)..."

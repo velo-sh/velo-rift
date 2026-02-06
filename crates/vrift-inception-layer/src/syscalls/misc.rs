@@ -1439,7 +1439,7 @@ pub unsafe extern "C" fn setrlimit_inception(resource: c_int, rlp: *const libc::
     ret
 }
 
-// Passthrough shims for interpose table compatibility
+// Passthrough inception layers for interpose table compatibility
 
 #[no_mangle]
 #[cfg(target_os = "macos")]

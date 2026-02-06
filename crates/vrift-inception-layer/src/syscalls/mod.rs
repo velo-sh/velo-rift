@@ -15,7 +15,7 @@ pub mod process;
 pub mod stat;
 pub mod vfs_ops;
 
-// Re-export specific shims that need to be visible to interpose or extern C
+// Re-export specific inception layers that need to be visible to interpose or extern C
 #[cfg(target_os = "macos")]
 pub use dir::*;
 #[cfg(target_os = "macos")]

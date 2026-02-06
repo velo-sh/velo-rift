@@ -12,10 +12,10 @@ VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
 
 # OS Detection
 if [ "$(uname -s)" == "Darwin" ]; then
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
+    INCEPTION_LIB="${PROJECT_ROOT}/target/release/libvrift_inception.dylib"
     PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
 else
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.so"
+    INCEPTION_LIB="${PROJECT_ROOT}/target/release/libvrift_inception.so"
     PRELOAD_VAR="LD_PRELOAD"
 fi
 
@@ -30,7 +30,7 @@ safe_rm() {
         if [ "$(uname -s)" == "Darwin" ]; then
             chflags -R nouchg "$target" 2>/dev/null || true
         fi
-        # Ignore permission errors - shim may be protecting files
+        # Ignore permission errors - inception may be protecting files
         rm -rf "$target" 2>/dev/null || true
     fi
 }
@@ -74,13 +74,13 @@ int main(int argc, char** argv) {
 EOF
 gcc "$TEST_DIR/tiny_cat.c" -o "$TEST_DIR/cat"
 codesign -s - -f "$TEST_DIR/cat" || true
-codesign -s - -f "$SHIM_LIB" || true
+codesign -s - -f "$INCEPTION_LIB" || true
 
 echo "--- Proof Analysis ---"
 set +e
 # We expect success now because the race/deadlock is fixed.
 # If it fails with "No such file", it means interception is NOT working.
-env "$PRELOAD_VAR"="$SHIM_LIB" \
+env "$PRELOAD_VAR"="$INCEPTION_LIB" \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 VRIFT_SOCKET_PATH="$TEST_DIR/vrift.sock" \
 VRIFT_VFS_PREFIX="/vrift" \

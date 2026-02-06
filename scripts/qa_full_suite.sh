@@ -45,7 +45,7 @@ run_test() {
     echo -n -e "${BLUE}[$category]${NC} $name ... "
     
     # Skip known problematic tests
-    if [[ "$script" == *"test_shim_init_hang"* ]]; then
+    if [[ "$script" == *"test_inception_init_hang"* ]]; then
         echo -e "${YELLOW}SKIP${NC} (known hang)"
         SKIPPED=$((SKIPPED+1))
         RESULTS+=("| $category | $name | ⏭️ SKIP | Known hang issue |")

@@ -1,7 +1,7 @@
 /**
- * Multi-Platform Variadic Shim Implementation
+ * Multi-Platform Variadic Inception Layer Implementation
  *
- * Provides clean, fixed-argument entry points for Rust shims
+ * Provides clean, fixed-argument entry points for Rust inception layers
  * to solve the Variadic ABI hazard on macOS ARM64.
  */
 
@@ -137,10 +137,10 @@ static inline long raw_syscall(long number, long arg1, long arg2, long arg3,
 }
 #endif
 
-/* --- Implementation Functions (called by Rust proxies or direct shims) --- */
+/* --- Implementation Functions (called by Rust proxies or direct inception layers) --- */
 
-// Linux interception is handled in interpose.rs using Rust shims to ensure
-// reliable symbol export. macOS shimming uses this C bridge to handle variadic
+// Linux interception is handled in interpose.rs using Rust inception layers to ensure
+// reliable symbol export. macOS inception layerming uses this C bridge to handle variadic
 // ABI.
 #include <fcntl.h>
 #include <stdarg.h>
