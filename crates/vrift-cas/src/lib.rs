@@ -128,44 +128,35 @@ impl CasStore {
         Some(hash)
     }
 
-    /// Get the path where a blob with the given hash would be stored.
+    /// Get the directory path for a blob's storage location.
     ///
-    /// Uses RFC-0039 §6 layout: `blake3/ab/cd/hash_size.ext`
-    /// The simple version without size/ext (for backwards compat during transition).
-    fn blob_path(&self, hash: &Blake3Hash) -> PathBuf {
+    /// Uses RFC-0039 §6 layout: `blake3/ab/cd/`
+    /// Returns the directory where the blob would be stored (not the full file path).
+    fn blob_dir(&self, hash: &Blake3Hash) -> PathBuf {
         let hex = Self::hash_to_hex(hash);
         let l1 = &hex[..2]; // First 2 chars
         let l2 = &hex[2..4]; // Next 2 chars
-        self.root.join("blake3").join(l1).join(l2).join(&hex)
+        self.root.join("blake3").join(l1).join(l2)
     }
 
-    /// Find the actual blob file path, supporting both old and new formats.
+    /// Find the actual blob file path using RFC-0039 format.
     ///
     /// Returns the path if found, None otherwise.
-    /// Handles both:
-    /// - Old format: `hash` (no suffix)
-    /// - New format: `hash_size.ext` (with size and optional extension)
+    /// Only supports new format: `hash_size.ext` (with size and optional extension)
     fn find_blob_path(&self, hash: &Blake3Hash) -> Option<PathBuf> {
-        let base_path = self.blob_path(hash);
-
-        // Try old format first
-        if base_path.exists() {
-            return Some(base_path);
+        let dir = self.blob_dir(hash);
+        if !dir.exists() {
+            return None;
         }
 
-        // Try new format: find matching file in the directory
-        if let Some(parent) = base_path.parent() {
-            if parent.exists() {
-                let hex = Self::hash_to_hex(hash);
-                if let Ok(entries) = fs::read_dir(parent) {
-                    for entry in entries.flatten() {
-                        let filename = entry.file_name();
-                        let filename_str = filename.to_string_lossy();
-                        // Match pattern: <hash>_* or exact <hash>
-                        if filename_str.starts_with(&format!("{}_", hex)) || filename_str == hex {
-                            return Some(entry.path());
-                        }
-                    }
+        let hex = Self::hash_to_hex(hash);
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let filename = entry.file_name();
+                let filename_str = filename.to_string_lossy();
+                // Match pattern: <hash>_* (RFC-0039 format only)
+                if filename_str.starts_with(&format!("{}_", hex)) {
+                    return Some(entry.path());
                 }
             }
         }
@@ -194,15 +185,19 @@ impl CasStore {
     ///
     /// If the content already exists, this is a no-op (deduplication).
     /// This method is thread-safe: uses unique temp file names to avoid race conditions.
+    /// Uses RFC-0039 format: `blake3/ab/cd/hash_size`
     #[instrument(skip(self, data), level = "debug")]
     pub fn store(&self, data: &[u8]) -> Result<Blake3Hash> {
         let hash = Self::compute_hash(data);
-        let path = self.blob_path(&hash);
+        let size = data.len() as u64;
 
-        // Deduplication: skip if already exists
-        if path.exists() {
+        // Deduplication: skip if already exists (check via find_blob_path)
+        if self.find_blob_path(&hash).is_some() {
             return Ok(hash);
         }
+
+        // RFC-0039 format: hash_size (no extension for raw bytes)
+        let path = self.blob_path_with_metadata(&hash, size, "");
 
         // Create prefix directory
         if let Some(parent) = path.parent() {
@@ -227,7 +222,7 @@ impl CasStore {
             // Clean up orphaned temp file if rename failed
             let _ = fs::remove_file(&temp_path);
             // If the target exists now (race), that's OK - dedup succeeded
-            if path.exists() {
+            if self.find_blob_path(&hash).is_some() {
                 return Ok(hash);
             }
             return Err(CasError::Io(e));
@@ -262,19 +257,22 @@ impl CasStore {
     /// This is a zero-copy operation if the source and CAS are on the same filesystem.
     /// If the content already exists, the source file is deleted (deduplication).
     /// This is the preferred method for reingesting CoW temp files.
+    /// Uses RFC-0039 format: `blake3/ab/cd/hash_size`
     #[instrument(skip(self, src_path), level = "info")]
     pub fn store_by_move<P: AsRef<Path>>(&self, src_path: P) -> Result<Blake3Hash> {
         let src = src_path.as_ref();
         let file = File::open(src)?;
-        let _size = file.metadata()?.len();
+        let size = file.metadata()?.len();
         let hash = Self::compute_hash_reader(file)?;
-        let path = self.blob_path(&hash);
 
         // Deduplication: if already exists, just remove the temp file
-        if path.exists() {
+        if self.find_blob_path(&hash).is_some() {
             let _ = fs::remove_file(src);
             return Ok(hash);
         }
+
+        // RFC-0039 format: hash_size (no extension)
+        let path = self.blob_path_with_metadata(&hash, size, "");
 
         // Create prefix directory
         if let Some(parent) = path.parent() {
@@ -625,7 +623,11 @@ impl CasStore {
         use std::os::unix::fs::symlink;
 
         let hash = self.store(data)?;
-        let cas_path = self.blob_path(&hash);
+        let cas_path = self
+            .find_blob_path(&hash)
+            .ok_or_else(|| CasError::NotFound {
+                hash: Self::hash_to_hex(&hash),
+            })?;
         let target = target_path.as_ref();
 
         // Remove existing file/symlink if present
@@ -665,7 +667,11 @@ impl CasStore {
         target_path: P,
     ) -> Result<Blake3Hash> {
         let hash = self.store(data)?;
-        let cas_path = self.blob_path(&hash);
+        let cas_path = self
+            .find_blob_path(&hash)
+            .ok_or_else(|| CasError::NotFound {
+                hash: Self::hash_to_hex(&hash),
+            })?;
         let target = target_path.as_ref();
 
         // Remove existing file if present
@@ -695,12 +701,11 @@ impl CasStore {
     pub fn link_immutable<P: AsRef<Path>>(&self, hash: &Blake3Hash, target_path: P) -> Result<()> {
         use std::os::unix::fs::symlink;
 
-        let cas_path = self.blob_path(hash);
-        if !cas_path.exists() {
-            return Err(CasError::NotFound {
+        let cas_path = self
+            .find_blob_path(hash)
+            .ok_or_else(|| CasError::NotFound {
                 hash: Self::hash_to_hex(hash),
-            });
-        }
+            })?;
 
         let target = target_path.as_ref();
 
@@ -720,12 +725,11 @@ impl CasStore {
     /// Create hardlink projection without storing (blob already in CAS).
     #[cfg(unix)]
     pub fn link_mutable<P: AsRef<Path>>(&self, hash: &Blake3Hash, target_path: P) -> Result<()> {
-        let cas_path = self.blob_path(hash);
-        if !cas_path.exists() {
-            return Err(CasError::NotFound {
+        let cas_path = self
+            .find_blob_path(hash)
+            .ok_or_else(|| CasError::NotFound {
                 hash: Self::hash_to_hex(hash),
-            });
-        }
+            })?;
 
         let target = target_path.as_ref();
 
@@ -1040,8 +1044,8 @@ mod tests {
 
     #[test]
     fn test_3level_sharding_path_format() {
-        // RFC-0039: CAS path layout should be blake3/ab/cd/hash
-        // Note: blob_path() returns hash-only, blob_path_with_metadata() includes size
+        // RFC-0039: CAS path layout is blake3/ab/cd/hash_size
+        // store() now uses blob_path_with_metadata() format internally
         let temp = TempDir::new().unwrap();
         let cas = CasStore::new(temp.path()).unwrap();
 

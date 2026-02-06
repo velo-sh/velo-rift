@@ -64,8 +64,8 @@ get_cas_path() {
         fi
     fi
 
-    # Check common CAS locations
-    local roots=("$HOME/.vrift/cas" "$HOME/.vrift/the_source" "/tmp/vrift/the_source" "/tmp/vrift/cas" "/tmp/vfs_behavior_test/.vrift/cas")
+    # Check common CAS locations (only the_source paths per RFC-0039)
+    local roots=("$HOME/.vrift/the_source" "/tmp/vrift/the_source")
     for root in "${roots[@]}"; do
         if [ -d "$root" ]; then
             local res=$(find "$root" -inum "$inode" 2>/dev/null | head -1)

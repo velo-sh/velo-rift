@@ -74,8 +74,8 @@ get_cas_path() {
         fi
     fi
 
-    # Fallback to common CAS locations
-    local roots=("$HOME/.vrift/cas" "$HOME/.vrift/the_source" "/tmp/vrift/the_source" "/tmp/vrift/cas")
+    # Fallback to common CAS locations (only the_source paths per RFC-0039)
+    local roots=("$HOME/.vrift/the_source" "/tmp/vrift/the_source")
     for root in "${roots[@]}"; do
         if [ -d "$root" ]; then
             local res=$(find "$root" -inum "$inode" 2>/dev/null | head -1)
@@ -113,8 +113,8 @@ setup() {
     
     # Clean test environment (need to remove uchg first)
     export TEST_DIR="/tmp/vfs_cow_test"
-    chflags -R nouchg "$TEST_DIR" ~/.vrift/cas 2>/dev/null || true
-    rm -rf "$TEST_DIR" ~/.vrift/cas
+    chflags -R nouchg "$TEST_DIR" ~/.vrift/the_source 2>/dev/null || true
+    rm -rf "$TEST_DIR" ~/.vrift/the_source
     mkdir -p "$TEST_DIR/deps"
     cd "$TEST_DIR"
     

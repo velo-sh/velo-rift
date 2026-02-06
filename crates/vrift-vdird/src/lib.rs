@@ -72,7 +72,7 @@ impl ProjectConfig {
                 .join("sockets")
                 .join(format!("{}.sock", &project_id[..16])),
             staging_base: project_root.join(".vrift").join("staging"),
-            cas_path: vrift_home.join("cas"),
+            cas_path: vrift_home.join("the_source"),
         }
     }
 

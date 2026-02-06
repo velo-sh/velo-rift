@@ -43,7 +43,7 @@ async fn test_daemon_lifecycle_handshake() {
         vdir_path: temp.path().join("test.vdir"),
         socket_path: socket_path.clone(),
         staging_base: temp.path().join("staging"),
-        cas_path: temp.path().join("cas"),
+        cas_path: temp.path().join("the_source"),
     };
 
     // Create required directories
@@ -95,7 +95,7 @@ async fn test_daemon_manifest_operations_over_socket() {
         vdir_path: temp.path().join("test.vdir"),
         socket_path: socket_path.clone(),
         staging_base: temp.path().join("staging"),
-        cas_path: temp.path().join("cas"),
+        cas_path: temp.path().join("the_source"),
     };
 
     std::fs::create_dir_all(&config.staging_base).unwrap();
@@ -167,7 +167,7 @@ async fn test_daemon_multiple_clients() {
         vdir_path: temp.path().join("test.vdir"),
         socket_path: socket_path.clone(),
         staging_base: temp.path().join("staging"),
-        cas_path: temp.path().join("cas"),
+        cas_path: temp.path().join("the_source"),
     };
 
     std::fs::create_dir_all(&config.staging_base).unwrap();
