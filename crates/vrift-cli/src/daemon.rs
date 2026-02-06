@@ -249,13 +249,28 @@ pub async fn ingest_via_daemon(
     let abs_cas = cas_root
         .canonicalize()
         .unwrap_or_else(|_| cas_root.to_path_buf());
+    // CRITICAL: manifest_path must also be absolute for daemon write
+    // Manifest may not exist yet, so we canonicalize parent + append filename
+    let abs_manifest = manifest_path
+        .canonicalize()
+        .or_else(|_| {
+            manifest_path
+                .parent()
+                .and_then(|p| {
+                    p.canonicalize()
+                        .ok()
+                        .map(|cp| cp.join(manifest_path.file_name().unwrap_or_default()))
+                })
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no parent"))
+        })
+        .unwrap_or_else(|_| manifest_path.to_path_buf());
 
     // Use simple connection - IngestFullScan doesn't need workspace context
     let mut stream = connect_simple().await?;
 
     let req = VeloRequest::IngestFullScan {
         path: abs_path.to_string_lossy().to_string(),
-        manifest_path: manifest_path.to_string_lossy().to_string(),
+        manifest_path: abs_manifest.to_string_lossy().to_string(),
         cas_root: abs_cas.to_string_lossy().to_string(),
         threads,
         phantom,
