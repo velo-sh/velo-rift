@@ -44,6 +44,8 @@ pub struct ProjectConfig {
     pub staging_base: PathBuf,
     /// Path to CAS storage
     pub cas_path: PathBuf,
+    /// Path to LMDB manifest
+    pub manifest_path: PathBuf,
 }
 
 impl ProjectConfig {
@@ -76,15 +78,14 @@ impl ProjectConfig {
             cas_path: std::env::var("VR_THE_SOURCE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| vrift_home.join("the_source")),
+            manifest_path: vrift_config::path::get_manifest_db_path(&project_id)
+                .unwrap_or_else(|| project_root.join(".vrift").join("manifest.lmdb")),
         }
     }
 
-    /// Generate project ID from path (FNV-1a hash)
+    /// Generate project ID from path (BLAKE3 hash via vrift-config)
     fn hash_path(path: &PathBuf) -> String {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        path.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        vrift_config::path::compute_project_id(path)
     }
 }
 
@@ -145,10 +146,10 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
     info!(path = %journal_path.display(), pending = reingest_journal.len(), "Reingest journal initialized");
 
     // RFC-0039: Initialize LMDB manifest for Live Ingest
-    let manifest_path = config.project_root.join(".vrift").join("manifest.lmdb");
-    std::fs::create_dir_all(&manifest_path)?;
+    let manifest_path = &config.manifest_path;
+    std::fs::create_dir_all(manifest_path.parent().unwrap())?;
     let manifest = std::sync::Arc::new(
-        vrift_manifest::lmdb::LmdbManifest::open(&manifest_path)
+        vrift_manifest::lmdb::LmdbManifest::open(manifest_path)
             .map_err(|e| anyhow::anyhow!("Failed to open manifest: {}", e))?,
     );
     info!(path = %manifest_path.display(), "LMDB manifest initialized");

@@ -185,6 +185,38 @@ pub fn normalize_relative_to(path: impl AsRef<Path>, root: impl AsRef<Path>) -> 
     Ok(path.to_path_buf())
 }
 
+/// Generate a stable project ID from a project root path using BLAKE3.
+///
+/// This ensures consistent project identification across versions and platforms.
+pub fn compute_project_id(project_root: impl AsRef<Path>) -> String {
+    let path = project_root.as_ref();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Get the standardized LMDB manifest path for a given project ID.
+///
+/// Standard path: ~/.vrift/db/<project_id>.lmdb (using first 16 chars of ID)
+pub fn get_manifest_db_path(project_id: &str) -> Option<PathBuf> {
+    dirs::home_dir().map(|h| {
+        h.join(".vrift")
+            .join("db")
+            .join(format!("{}.lmdb", &project_id[..16]))
+    })
+}
+
+/// Get the standardized VDir mmap path for a given project ID.
+///
+/// Standard path: ~/.vrift/vdir/<project_id>.mmap (using first 16 chars of ID)
+pub fn get_vdir_mmap_path(project_id: &str) -> Option<PathBuf> {
+    dirs::home_dir().map(|h| {
+        h.join(".vrift")
+            .join("vdir")
+            .join(format!("{}.mmap", &project_id[..16]))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

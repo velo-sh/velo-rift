@@ -15,6 +15,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 tempfile = "3.14"
 vrift-ipc = { path = "../vrift-ipc" }
+blake3 = "1.5"
 
 [dev-dependencies]
 tempfile = "3.14"

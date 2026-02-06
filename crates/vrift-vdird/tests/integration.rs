@@ -53,6 +53,7 @@ async fn test_daemon_lifecycle_handshake() {
         socket_path: socket_path.clone(),
         staging_base: temp.path().join("staging"),
         cas_path: temp.path().join("the_source"),
+        manifest_path: temp.path().join("test.lmdb"),
     };
 
     // Create required directories
@@ -105,6 +106,7 @@ async fn test_daemon_manifest_operations_over_socket() {
         socket_path: socket_path.clone(),
         staging_base: temp.path().join("staging"),
         cas_path: temp.path().join("the_source"),
+        manifest_path: temp.path().join("test.lmdb"),
     };
 
     std::fs::create_dir_all(&config.staging_base).unwrap();
@@ -177,6 +179,7 @@ async fn test_daemon_multiple_clients() {
         socket_path: socket_path.clone(),
         staging_base: temp.path().join("staging"),
         cas_path: temp.path().join("the_source"),
+        manifest_path: temp.path().join("test.lmdb"),
     };
 
     std::fs::create_dir_all(&config.staging_base).unwrap();

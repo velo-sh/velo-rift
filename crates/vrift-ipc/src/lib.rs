@@ -889,13 +889,17 @@ pub fn is_version_compatible(client_version: u32) -> bool {
 
 /// Default socket path (internal fallback for DaemonClient)
 /// Prefer using vrift_config::config().socket_path() when available
-pub const DEFAULT_SOCKET_PATH: &str = "/tmp/vrift.sock";
+pub const DEFAULT_SOCKET_PATH: &str = "/run/vrift/daemon.sock";
 /// Default CAS root path
 pub const DEFAULT_CAS_ROOT: &str = "~/.vrift/the_source";
 
-/// Get default socket path (for internal use only)
-fn default_socket_path() -> &'static str {
-    DEFAULT_SOCKET_PATH
+/// Get default socket path (with /tmp fallback if /run/vrift is missing)
+fn default_socket_path() -> String {
+    if std::path::Path::new("/run/vrift").exists() {
+        DEFAULT_SOCKET_PATH.to_string()
+    } else {
+        "/tmp/vrift.sock".to_string()
+    }
 }
 
 #[cfg(feature = "cas")]
@@ -1295,7 +1299,7 @@ impl ManifestMmapBuilder {
 
 /// Check if daemon is running (socket exists and connectable)
 pub fn is_daemon_running() -> bool {
-    std::path::Path::new(default_socket_path()).exists()
+    std::path::Path::new(&default_socket_path()).exists()
 }
 
 /// IPC Client for communicating with vrift-daemon
@@ -1312,7 +1316,7 @@ pub mod client {
     impl DaemonClient {
         /// Connect to daemon at default socket path
         pub async fn connect() -> anyhow::Result<Self> {
-            Self::connect_to(default_socket_path()).await
+            Self::connect_to(&default_socket_path()).await
         }
 
         /// Connect to daemon at custom socket path

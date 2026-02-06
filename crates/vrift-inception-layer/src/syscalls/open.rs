@@ -104,8 +104,12 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
             let mut writer = crate::macros::StackWriter::new(&mut buf);
             let _ = write!(
                 writer,
-                "/tmp/vrift_cow_{}_{}_{}_{}.tmp",
-                pid, timestamp, tid_addr, attempts
+                "{}/.vrift/staging/vrift_cow_{}_{}_{}_{}.tmp\0",
+                state.project_root.as_str(),
+                pid,
+                timestamp,
+                tid_addr,
+                attempts
             );
             temp_path_fs.set(writer.as_str());
 

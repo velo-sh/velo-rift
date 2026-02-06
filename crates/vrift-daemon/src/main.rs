@@ -319,15 +319,19 @@ fn export_mmap_cache(manifest: &LmdbManifest, project_root: &Path) {
 
     let mut builder = ManifestMmapBuilder::new();
 
-    // Mmap path in project's .vrift directory for consistent shim lookup
-    let vrift_dir = project_root.join(".vrift");
-    if !vrift_dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(&vrift_dir) {
-            tracing::warn!("Failed to create .vrift dir for mmap: {}", e);
-            return;
+    // RFC-0044: Use standardized VDir mmap path managed by daemon
+    let project_id = vrift_config::path::compute_project_id(project_root);
+    let mmap_path = vrift_config::path::get_vdir_mmap_path(&project_id)
+        .unwrap_or_else(|| project_root.join(".vrift").join("manifest.mmap"));
+
+    if let Some(parent) = mmap_path.parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!("Failed to create parent dir for mmap: {}", e);
+                return;
+            }
         }
     }
-    let mmap_path = vrift_dir.join("manifest.mmap");
     let mmap_path_str = mmap_path.to_string_lossy();
 
     // Iterate all manifest entries and add to builder

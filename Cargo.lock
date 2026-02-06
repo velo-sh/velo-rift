@@ -2165,6 +2165,7 @@ name = "vrift-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "dirs 5.0.1",
  "once_cell",
  "serde",
@@ -2220,6 +2221,7 @@ dependencies = [
  "cc",
  "libc",
  "rkyv",
+ "vrift-config",
  "vrift-ipc",
 ]
 

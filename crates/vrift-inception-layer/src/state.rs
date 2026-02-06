@@ -3,7 +3,7 @@ use crate::sync::RecursiveMutex;
 use libc::{c_int, c_void};
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
@@ -828,8 +828,13 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
     };
 
     let root_str = std::str::from_utf8(&root_bytes[..final_root_len]).unwrap_or("");
-    let _ = write!(writer, "{}/.vrift/manifest.mmap\0", root_str);
 
+    // RFC-0044: Use standardized VDir mmap path managed by daemon
+    let project_id = vrift_config::path::compute_project_id(root_str);
+    let mmap_path = vrift_config::path::get_vdir_mmap_path(&project_id)
+        .unwrap_or_else(|| PathBuf::from(format!("{}/.vrift/manifest.mmap", root_str)));
+
+    let _ = write!(writer, "{}\0", mmap_path.display());
     let mmap_path_ptr = path_buf.as_ptr() as *const libc::c_char;
 
     #[cfg(target_os = "macos")]

@@ -400,17 +400,17 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             let is_phantom = mode.to_lowercase() == "phantom";
             let is_tier1 = tier.to_lowercase() == "tier1";
 
-            // RFC-0039: Use .vrift/manifest.lmdb as default output for initialized projects
-            // The default CLI arg "vrift.manifest" is legacy; daemon mode requires LMDB format
+            // RFC-0039: Use standardized manifest path for initialized projects
             let output = if output.to_string_lossy() == "vrift.manifest" {
-                // Check if project has .vrift directory (was initialized with `vrift init`)
+                // Check if project has .vrift directory
                 let vrift_dir = directory.join(".vrift");
                 if vrift_dir.exists() {
-                    vrift_dir.join("manifest.lmdb")
+                    let project_id = vrift_config::path::compute_project_id(&directory);
+                    vrift_config::path::get_manifest_db_path(&project_id)
+                        .unwrap_or_else(|| vrift_dir.join("manifest.lmdb"))
                 } else {
-                    // Create .vrift directory and use LMDB manifest
-                    std::fs::create_dir_all(&vrift_dir).ok();
-                    vrift_dir.join("manifest.lmdb")
+                    // Legacy fallback
+                    output
                 }
             } else {
                 output
@@ -577,9 +577,15 @@ async fn cmd_init(directory: &Path) -> Result<()> {
     fs::create_dir_all(vrift_dir.join("bin"))?;
 
     // Create manifest.lmdb directory and initialize LMDB database
-    let manifest_path = vrift_dir.join("manifest.lmdb");
-    // Use LmdbManifest::open which creates the directory AND initializes LMDB files
-    // This prevents "unexpected end of file" errors on subsequent ingest operations
+    let project_id = vrift_config::path::compute_project_id(directory);
+    let manifest_path = vrift_config::path::get_manifest_db_path(&project_id)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine manifest path"))?;
+
+    // Create parent directory for manifest
+    if let Some(parent) = manifest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     let _ = vrift_manifest::LmdbManifest::open(&manifest_path)
         .map_err(|e| anyhow::anyhow!("Failed to initialize manifest LMDB: {}", e))?;
 
@@ -595,9 +601,9 @@ async fn cmd_init(directory: &Path) -> Result<()> {
     eprintln!("   {} Created {}", CHECK, style(".vrift/").dim());
     eprintln!("   {} Created {}", CHECK, style(".vrift/bin/").dim());
     eprintln!(
-        "   {} Created {}",
+        "   {} Initialized {}",
         CHECK,
-        style(".vrift/manifest.lmdb").dim()
+        style(manifest_path.display()).dim()
     );
     eprintln!();
     eprintln!(
@@ -726,7 +732,9 @@ fn cmd_manifest(command: ManifestCommands) -> Result<()> {
     match command {
         ManifestCommands::Query { path, directory } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
-            let manifest_path = dir.join(".vrift").join("manifest.lmdb");
+            let project_id = vrift_config::path::compute_project_id(&dir);
+            let manifest_path = vrift_config::path::get_manifest_db_path(&project_id)
+                .ok_or_else(|| anyhow::anyhow!("Could not determine manifest path"))?;
 
             if !manifest_path.exists() {
                 anyhow::bail!(
@@ -765,7 +773,9 @@ fn cmd_manifest(command: ManifestCommands) -> Result<()> {
         }
         ManifestCommands::List { directory, limit } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
-            let manifest_path = dir.join(".vrift").join("manifest.lmdb");
+            let project_id = vrift_config::path::compute_project_id(&dir);
+            let manifest_path = vrift_config::path::get_manifest_db_path(&project_id)
+                .ok_or_else(|| anyhow::anyhow!("Could not determine manifest path"))?;
 
             if !manifest_path.exists() {
                 anyhow::bail!(
@@ -790,7 +800,9 @@ fn cmd_manifest(command: ManifestCommands) -> Result<()> {
         }
         ManifestCommands::Stats { directory } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
-            let manifest_path = dir.join(".vrift").join("manifest.lmdb");
+            let project_id = vrift_config::path::compute_project_id(&dir);
+            let manifest_path = vrift_config::path::get_manifest_db_path(&project_id)
+                .ok_or_else(|| anyhow::anyhow!("Could not determine manifest path"))?;
 
             if !manifest_path.exists() {
                 anyhow::bail!(
@@ -823,7 +835,10 @@ async fn cmd_sync(directory: &Path) -> Result<()> {
 
     println!("Synchronizing: {}", directory.display());
 
-    let manifest_path = directory.join(".vrift").join("manifest.lmdb");
+    let project_id = vrift_config::path::compute_project_id(directory);
+    let manifest_path = vrift_config::path::get_manifest_db_path(&project_id)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine manifest path"))?;
+
     if !manifest_path.exists() {
         anyhow::bail!(
             "Manifest not found at {}. Run 'vrift init' first.",

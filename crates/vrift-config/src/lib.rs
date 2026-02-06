@@ -387,7 +387,7 @@ mod tests {
 
         // Daemon defaults
         assert!(!config.daemon.enabled);
-        assert_eq!(config.daemon.socket, PathBuf::from("/tmp/vrift.sock"));
+        assert_eq!(config.daemon.socket, PathBuf::from(DEFAULT_SOCKET_PATH));
         assert_eq!(config.daemon.lock_timeout_secs, 30);
         assert!(!config.daemon.debug);
     }
