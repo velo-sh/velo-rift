@@ -1,11 +1,11 @@
 /// Pattern 2648/2649: Passthrough guard for inception layer initialization safety.
 /// Use this at the start of every inception layer function to bypass VFS logic during dyld bootstrap.
 ///
-/// # INITIALIZING State Machine:
-/// - State 2: Early-Init (dyld loading) - TLS unsafe, MUST passthrough
-/// - State 3: Busy (InceptionLayerState initializing) - TLS unsafe, MUST passthrough  
-/// - State 1: C constructor ran - TLS safe, can run Rust
-/// - State 0: Fully initialized - TLS safe, can run Rust
+/// # INITIALIZING State Machine (RFC-0050):
+/// - InceptionState::EarlyInit (2): dyld loading, TLS unsafe, MUST passthrough
+/// - InceptionState::Busy (3): InceptionLayerState initializing, TLS unsafe, MUST passthrough
+/// - InceptionState::RustInit (1): C constructor ran, TLS safe, can run Rust
+/// - InceptionState::Ready (0): Fully initialized, TLS safe, can run Rust
 ///
 /// # Usage:
 /// ```ignore
@@ -14,7 +14,8 @@
 #[macro_export]
 macro_rules! passthrough_if_init {
     ($real:expr $(, $arg:expr)*) => {
-        if $crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) >= 2
+        if $crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed)
+            >= $crate::state::InceptionState::EarlyInit as u8
             || $crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed)
         {
             return $real($($arg),*);
@@ -35,7 +36,8 @@ macro_rules! passthrough_if_init {
 #[macro_export]
 macro_rules! safe_early_passthrough {
     ($interpose:expr, fn($($ptype:ty),*) -> $rtype:ty $(, $arg:expr)*) => {
-        if $crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed) >= 2
+        if $crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed)
+            >= $crate::state::InceptionState::EarlyInit as u8
             || $crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed)
         {
             let real_fn = std::mem::transmute::<

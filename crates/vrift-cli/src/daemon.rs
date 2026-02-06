@@ -260,7 +260,6 @@ pub async fn ingest_via_daemon(
     let req = VeloRequest::IngestFullScan {
         path: abs_path.to_string_lossy().to_string(),
         manifest_path: abs_manifest.to_string_lossy().to_string(),
-        cas_root: abs_cas.to_string_lossy().to_string(),
         threads,
         phantom,
         tier1,

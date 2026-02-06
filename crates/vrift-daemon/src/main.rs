@@ -876,7 +876,6 @@ async fn handle_request(
         VeloRequest::IngestFullScan {
             path,
             manifest_path,
-            cas_root,
             threads,
             phantom,
             tier1,
@@ -890,7 +889,6 @@ async fn handle_request(
             tracing::info!(
                 path = %path,
                 manifest = %manifest_path,
-                cas_root = %cas_root,
                 threads = ?threads,
                 phantom = phantom,
                 tier1 = tier1,
@@ -908,8 +906,8 @@ async fn handle_request(
                 IngestMode::SolidTier2
             };
 
-            // Use CAS path from request
-            let cas_root_path = vrift_manifest::normalize_path(&cas_root);
+            // Use configured CAS path
+            let cas_root_path = state.cas.root().to_path_buf();
 
             // Run streaming ingest in blocking task
             let source_clone = source_path.clone();

@@ -59,20 +59,27 @@ extern long velo_readlink_impl(const char *path, char *buf, size_t bufsiz);
 extern int velo_fstat_impl(int fd, void *buf);
 extern int velo_fstatat_impl(int dirfd, const char *path, void *buf, int flags);
 
-/* RFC-0049: Global initialization state
- * 2: Early-Init (Hazardous), 1: Rust-Init (Safe TLS), 0: Ready
+/* RFC-0049: Global initialization state (synchronized with InceptionState enum)
+ * 0: Ready (Active)
+ * 1: RustInit (Safe for Rust, but not fully active)
+ * 2: EarlyInit (Hazardous, dyld bootstrap)
+ * 3: Busy (Rust initializing internal state)
  */
 volatile char INITIALIZING = 2;
 
 __attribute__((constructor(101))) void inception_init_constructor() {
   // RFC-0051: Ignore SIGPIPE to prevent IPC failures from killing processes
   signal(SIGPIPE, SIG_IGN);
-  INITIALIZING = 1;
+  INITIALIZING = 1; // Transition to RustInit
 }
 
 // Late constructor to signal dyld bootstrap is complete
-__attribute__((constructor(65535))) void vfs_late_init_constructor() {
-  INITIALIZING = 0;
+__attribute__((constructor(65535))) void inception_late_init_constructor() {
+  // Only set to Ready (0) if not already set by Rust (which might be Busy or
+  // Ready)
+  if (INITIALIZING == 1) {
+    INITIALIZING = 0;
+  }
 }
 
 /* --- Raw Syscall Implementation --- */
@@ -239,10 +246,12 @@ int c_renameat_bridge(int oldfd, const char *old, int newfd, const char *new) {
 /* --- Metadata Hardening Bridges --- */
 
 extern int creat_inception(const char *path, mode_t mode);
-extern int getattrlist_inception(const char *path, void *attrlist, void *attrbuf,
-                            size_t attrbufsize, unsigned long options);
-extern int setattrlist_inception(const char *path, void *attrlist, void *attrbuf,
-                            size_t attrbufsize, unsigned long options);
+extern int getattrlist_inception(const char *path, void *attrlist,
+                                 void *attrbuf, size_t attrbufsize,
+                                 unsigned long options);
+extern int setattrlist_inception(const char *path, void *attrlist,
+                                 void *attrbuf, size_t attrbufsize,
+                                 unsigned long options);
 
 int c_creat_bridge(const char *path, mode_t mode) {
   if (INITIALIZING != 0) {

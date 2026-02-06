@@ -91,8 +91,8 @@ cargo build --release --quiet 2>/dev/null || {
     echo -e "${RED}Build failed!${NC}"
     exit 1
 }
-# Ensure shim cdylib is built (may not be built by --workspace alone)
-cargo build --release -p vrift-shim --quiet 2>/dev/null || true
+# Ensure inception layer cdylib is built
+cargo build --release -p vrift-inception-layer --quiet 2>/dev/null || true
 echo -e "${GREEN}✓ Build complete${NC}"
 echo ""
 

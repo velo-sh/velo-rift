@@ -73,7 +73,9 @@ impl ProjectConfig {
                 .join("sockets")
                 .join(format!("{}.sock", &project_id[..16])),
             staging_base: project_root.join(".vrift").join("staging"),
-            cas_path: vrift_home.join("the_source"),
+            cas_path: std::env::var("VR_THE_SOURCE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| vrift_home.join("the_source")),
         }
     }
 
@@ -266,4 +268,29 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
     info!("Manifest committed on shutdown");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_respects_vr_the_source() {
+        let root = PathBuf::from("/tmp/test_project");
+
+        // Case 1: Default (unset)
+        // Ensure var is unset for this test
+        unsafe { std::env::remove_var("VR_THE_SOURCE") };
+        let config_default = ProjectConfig::from_project_root(root.clone());
+        assert!(config_default.cas_path.ends_with("the_source"));
+
+        // Case 2: Set VR_THE_SOURCE
+        let custom_path = "/tmp/custom_cas";
+        unsafe { std::env::set_var("VR_THE_SOURCE", custom_path) };
+        let config_custom = ProjectConfig::from_project_root(root);
+        assert_eq!(config_custom.cas_path, PathBuf::from(custom_path));
+
+        // Cleanup
+        unsafe { std::env::remove_var("VR_THE_SOURCE") };
+    }
 }
