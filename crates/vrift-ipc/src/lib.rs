@@ -43,14 +43,14 @@ impl TryFrom<u8> for FrameType {
     }
 }
 
-/// Compact IPC Frame Header (8 bytes)
+/// Compact IPC Frame Header (12 bytes)
 ///
 /// Wire format:
 /// ```text
 /// ┌──────────┬────────────┬─────────┬──────────┬──────────┐
-/// │Magic (2B)│Type+Ver(1B)│Flags(1B)│Length(2B)│ SeqID(2B)│
-/// │  "VR"    │ hi4=type   │reserved │ LE u16   │ LE u16   │
-/// │          │ lo4=version│         │ max 64KB │ 0-65535  │
+/// │Magic (2B)│Type+Ver(1B)│Flags(1B)│Length(4B)│ SeqID(4B)│
+/// │  "VR"    │ hi4=type   │reserved │ LE u32   │ LE u32   │
+/// │          │ lo4=version│         │ max 32MB │ 0-u32max │
 /// └──────────┴────────────┴─────────┴──────────┴──────────┘
 /// ```
 #[repr(C)]

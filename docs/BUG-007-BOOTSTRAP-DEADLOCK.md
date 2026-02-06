@@ -125,6 +125,31 @@ pub unsafe extern "C" fn fstat_shim(fd: c_int, buf: *mut stat) -> c_int {
 | `lseek_shim` | `raw_lseek` | 199 |
 | `ftruncate_shim` | `raw_ftruncate` | 201 |
 
+## Pattern 3136: Initialization Helper Recursion
+
+While direct interposition recursion was resolved (above), a secondary deadlock pattern was identified during verification of complex toolchains (e.g., Cargo/Rustc).
+
+### Problem
+
+Initialization helpers like `boost_fd_limit()` or `setup_logging()` are often called early in the shim's `init` phase. If these helpers call standard libc functions that are also shimmed, they trigger the same deadlock loop because the "initialized" state is not yet reached.
+
+Example:
+```text
+InceptionLayer Init
+  └── boost_fd_limit()
+       └── getrlimit()
+            └── [INTERPOSED] getrlimit_shim
+                 └── [WAITING FOR INIT LOCK] -> DEADLOCK
+```
+
+### Remediation: Total Zero-Dependency Initialization
+
+The Inception Layer has adopted a **Total Zero-Dependency Initialization** mandate. All internal state setup helpers must use raw assembly escapes or internal-only static logic:
+
+1. **Raw Assembly Wrappers**: Helpers like `getrlimit` must be replaced with `raw_getrlimit`.
+2. **Static Buffer Logging**: Initial logs are written to a fixed-size static buffer or via `raw_write`.
+3. **No Pthread/Malloc**: Helpers must not use any primitive that might trigger internal interposition.
+
 ### Additional Guard: SHIM_STATE Check
 
 For shims that call `block_vfs_mutation()` (chmod, unlink, rmdir, etc.), an extra check 

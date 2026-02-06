@@ -55,7 +55,7 @@ async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandle
     debug!("New client connected");
 
     loop {
-        // Read IpcHeader (8 bytes)
+        // Read IpcHeader (12 bytes)
         let mut header_buf = [0u8; IpcHeader::SIZE];
         match stream.read_exact(&mut header_buf).await {
             Ok(_) => {}

@@ -1,6 +1,6 @@
 # vrift IPC Protocol Specification
 
-This document defines the Inter-Process Communication protocol between InceptionLayer clients and `vriftd` daemon.
+This document defines the Inter-Process Communication protocol between InceptionLayer clients and `vdir_d` (VDir Daemon).
 
 ---
 
@@ -8,51 +8,75 @@ This document defines the Inter-Process Communication protocol between Inception
 
 ### Unix Domain Socket (UDS)
 
-**Default Socket Path**: `/tmp/vrift.sock`
+**Default Socket Path**: `~/.vrift/sockets/<project_name>.sock`
 
 **Properties**:
 - Stream-oriented (SOCK_STREAM)
-- Single daemon serves all projects (current implementation)
-- Persistent connections with length-prefixed messages
+- Per-project daemon architecture
+- Persistent connections with frame-based protocol
+- Zero-copy deserialization where applicable (planned)
 
 ---
 
-## 2. Wire Format
+## 2. Wire Format (Version 4)
 
-All messages use **bincode serialization** with length prefix:
+All messages utilize a 12-byte fixed header followed by a variable-length **rkyv-serialized** payload.
 
-```
-┌─────────────┬───────────────────────┐
-│ Length (u32)│ bincode(VeloRequest)  │
-│  LE bytes   │     or VeloResponse   │
-└─────────────┴───────────────────────┘
+### 2.1 IpcHeader (12 Bytes)
+
+| Field | Type | Offset | Description |
+| :--- | :--- | :--- | :--- |
+| `magic` | `[u8; 2]` | 0 | "VR" (Vrift) |
+| `type_ver` | `u8` | 2 | hi4=type, lo4=version (4) |
+| `flags` | `u8` | 3 | Reserved |
+| `length` | `u32` (LE) | 4 | Payload length (Max 32MB safety cap) |
+| `seq_id` | `u32` (LE) | 8 | Sequence ID for request-response matching |
+
+### 2.2 Frame Types
+
+- `Request` (0): Client to Server
+- `Response` (1): Server to Client
+- `Heartbeat` (2): Bidirectional keep-alive (RFC-0053)
+
+### 2.3 Implementation Details
+
+```rust
+// IpcHeader implementation in crates/vrift-ipc/src/lib.rs
+pub struct IpcHeader {
+    pub magic: [u8; 2],
+    pub type_ver: u8,
+    pub flags: u8,
+    pub length: u32,
+    pub seq_id: u32,
+}
 ```
 
 **Protocol Flow**:
-```rust
-// Send: length prefix + bincode payload
-let bytes = bincode::serialize(&request)?;
-stream.write_all(&(bytes.len() as u32).to_le_bytes())?;
-stream.write_all(&bytes)?;
-
-// Receive: read length, then payload
-let mut len_buf = [0u8; 4];
-stream.read_exact(&mut len_buf)?;
-let len = u32::from_le_bytes(len_buf) as usize;
-let mut payload = vec![0u8; len];
-stream.read_exact(&mut payload)?;
-let response: VeloResponse = bincode::deserialize(&payload)?;
-```
+1. Client sends 12-byte `IpcHeader` (type=Request).
+2. Client sends `rkyv` payload.
+3. Server reads 12-byte `IpcHeader`.
+4. Server reads `length` bytes of payload.
+5. Server sends 12-byte `IpcHeader` (type=Response, same `seq_id`).
+6. Server sends `rkyv` response payload.
 
 ---
 
-## 3. Request Types (VeloRequest)
+## 3. Communication Patterns
+
+### 3.1 Synchronous vs Async
+- **Inception Layer (Shim)**: Uses synchronous blocking I/O (via `crates/vrift-ipc/src/lib.rs::frame_sync`).
+- **Daemon (`vdir_d`)**: Uses asynchronous Tokio-based I/O (via `crates/vrift-ipc/src/lib.rs::frame_async`).
+
+### 3.2 Heartbeats (RFC-0053)
+Heartbeats are zero-length payload frames (`length = 0`) with `FrameType::Heartbeat`. They are used to prevent socket timeouts and verify connection liveness. Both sides should skip heartbeats during normal request processing.
+
+---
+
+## 4. Request Types (VeloRequest)
 
 ```rust
-#[derive(Debug, Serialize, Deserialize)]
 pub enum VeloRequest {
-    // Connection
-    Handshake { client_version: String },
+    Handshake { client_version: String, protocol_version: u32 },
     Status,
     RegisterWorkspace { project_root: String },
     
@@ -70,200 +94,42 @@ pub enum VeloRequest {
     CasGet { hash: [u8; 32] },
     CasSweep { bloom_filter: Vec<u8> },
     
-    // File Locking (RFC-0049)
-    FlockAcquire { path: String, operation: i32 },
-    FlockRelease { path: String },
-    
-    // Process Management
+    // Process/Safety
     Spawn { command: Vec<String>, env: Vec<(String, String)>, cwd: String },
     Protect { path: String, immutable: bool, owner: Option<String> },
+    
+    // RFC-0049: File Locking
+    FlockAcquire { path: String, operation: i32 },
+    FlockRelease { path: String },
 }
 ```
 
 ---
 
-## 4. Response Types (VeloResponse)
+## 5. Response Types (VeloResponse)
+
+Responses are wrapped in `VeloResponse` and may contain structured errors (`VeloError`).
 
 ```rust
-#[derive(Debug, Serialize, Deserialize)]
 pub enum VeloResponse {
-    // Acknowledgements
     HandshakeAck { server_version: String },
     StatusAck { status: String },
     RegisterAck { workspace_id: String },
     CasAck,
-    ProtectAck,
-    FlockAck,
-    
-    // Manifest Responses
     ManifestAck { entry: Option<VnodeEntry> },
     ManifestListAck { entries: Vec<DirEntry> },
-    
-    // CAS Responses
     CasFound { size: u64 },
     CasNotFound,
-    CasSweepAck { deleted_count: u32, reclaimed_bytes: u64 },
-    
-    // Process Responses
     SpawnAck { pid: u32 },
-    
-    // Error
-    Error(String),
+    Error(VeloError), // Phase 3: Structured Errors
 }
 ```
 
 ---
 
-## 5. Data Structures
+## 6. Error Handling
 
-### VnodeEntry (Manifest Entry)
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VnodeEntry {
-    pub content_hash: [u8; 32],  // BLAKE3 hash
-    pub size: u64,
-    pub mtime: u64,              // Unix timestamp (ns)
-    pub mode: u32,               // File mode (permissions)
-    pub flags: u16,              // 0x01 = dir, 0x02 = symlink
-}
-```
-
-### DirEntry (Directory Listing)
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DirEntry {
-    pub name: String,
-    pub is_dir: bool,
-}
-```
-
----
-
-## 6. Protocol Flow Examples
-
-### 6.1 Handshake + Status
-
-```
-Client                              Server
-   |                                   |
-   |--- Handshake { "0.1.0" } -------->|
-   |<-- HandshakeAck { "0.1.0" } ------|
-   |                                   |
-   |--- Status -------------------->|
-   |<-- StatusAck { "ready" } ---------|
-```
-
-### 6.2 Workspace Registration + Manifest Query
-
-```
-Client                              Server
-   |                                   |
-   |--- RegisterWorkspace { "/proj" }->|
-   |<-- RegisterAck { "a8f9..." } -----|
-   |                                   |
-   |--- ManifestGet { "src/main.rs" }->|
-   |<-- ManifestAck { Some(entry) } ---|
-```
-
-### 6.3 CoW Write Flow (ManifestReingest)
-
-```
-Client                              Server
-   |                                   |
-   | [write to temp file locally]      |
-   | [close triggers reingest]         |
-   |                                   |
-   |--- ManifestReingest { -------->|
-   |      vpath: "src/lib.rs",         |
-   |      temp_path: "/tmp/cow123"     |
-   |    }                              |
-   |                                   |
-   |                                   | [hash temp file]
-   |                                   | [insert to CAS]
-   |                                   | [update manifest]
-   |                                   |
-   |<-- ManifestAck { entry } ---------|
-```
-
----
-
-## 7. Shared Memory Fast Path (RFC-0044)
-
-For read-heavy operations, manifest data is also exported to shared memory:
-
-**File**: `/tmp/vrift-manifest.mmap`
-
-**Layout**:
-```
-┌──────────────────────────────────────────────────────────┐
-│ ManifestMmapHeader (40 bytes)                            │
-├──────────────────────────────────────────────────────────┤
-│ Bloom Filter (32KB) - path existence check               │
-├──────────────────────────────────────────────────────────┤
-│ Stat Hash Table (MmapStatEntry[]) - path → metadata      │
-├──────────────────────────────────────────────────────────┤
-│ Dir Index Table (MmapDirIndexEntry[]) - parent → children│
-├──────────────────────────────────────────────────────────┤
-│ Children Pool (MmapDirChild[]) - directory entries       │
-└──────────────────────────────────────────────────────────┘
-```
-
-**Header**:
-```rust
-pub struct ManifestMmapHeader {
-    pub magic: u32,           // 0x504D4D56 ("VMMP")
-    pub version: u32,         // Format version (1)
-    pub entry_count: u32,
-    pub bloom_offset: u32,
-    pub table_offset: u32,
-    pub table_capacity: u32,
-    pub dir_index_offset: u32,
-    pub dir_index_capacity: u32,
-    pub children_offset: u32,
-    pub children_count: u32,
-}
-```
-
-**Stat Entry**:
-```rust
-pub struct MmapStatEntry {
-    pub path_hash: u64,    // FNV-1a hash (0 = empty slot)
-    pub size: u64,
-    pub mtime: i64,
-    pub mtime_nsec: i64,
-    pub mode: u32,
-    pub flags: u32,        // 0x01 = dir, 0x02 = symlink
-}
-```
-
----
-
-## 8. Reconnection and Error Handling
-
-**Client Behavior**:
-- Connect on first VFS operation
-- Reconnect on socket error
-- Fall back to real FS if daemon unavailable
-
-**Timeout**:
-- Default connect timeout: 5 seconds
-- No per-request timeout (blocking I/O)
-
----
-
-## 9. Implementation Notes
-
-### Current vs. Future Architecture
-
-| Aspect | Current (v1) | Future (v3 Staging) |
-|--------|--------------|---------------------|
-| Daemon | Single `vriftd` | Per-project `vdir_d` |
-| Socket | `/tmp/vrift.sock` | `~/.vrift/sockets/<project>.sock` |
-| Write Model | ManifestReingest | Staging Area + Dirty Bit |
-
-> **Note**: The Staging Area model with Dirty Bit (documented in 02-vdir-synchronization.md and 06-write-path-ingestion.md) is the target architecture for Sprint 1.
+Structured errors use `VeloErrorKind` to allow the client to map IPC errors back to standard `errno` (e.g., `NotFound` -> `ENOENT`).
 
 ---
 
