@@ -2088,6 +2088,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "vrift-cas",

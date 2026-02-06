@@ -17,3 +17,6 @@ bincode = { workspace = true }
 tokio = { workspace = true, features = ["net", "io-util"], optional = true }
 vrift-manifest = { path = "../vrift-manifest", optional = true }
 vrift-cas = { path = "../vrift-cas", optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

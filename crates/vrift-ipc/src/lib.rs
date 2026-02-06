@@ -661,6 +661,34 @@ impl VeloError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(VeloErrorKind::Internal, message)
     }
+
+    /// Set path on an existing error (builder pattern)
+    pub fn set_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    /// Get CLI exit code for this error kind
+    ///
+    /// Uses standard Unix exit code conventions:
+    /// - 1: General error (Internal, IoError)
+    /// - 2: Not found (NotFound, WorkspaceNotRegistered)
+    /// - 22: Invalid argument (InvalidPath)
+    /// - 77: Permission denied (PermissionDenied)
+    /// - 78: Lock failure (LockFailed)
+    /// - 79: Ingest failure (IngestFailed)
+    pub fn exit_code(&self) -> i32 {
+        match self.kind {
+            VeloErrorKind::NotFound => 2,
+            VeloErrorKind::WorkspaceNotRegistered => 2,
+            VeloErrorKind::InvalidPath => 22,
+            VeloErrorKind::PermissionDenied => 77,
+            VeloErrorKind::LockFailed => 78,
+            VeloErrorKind::IngestFailed => 79,
+            VeloErrorKind::IoError => 1,
+            VeloErrorKind::Internal => 1,
+        }
+    }
 }
 
 impl std::fmt::Display for VeloError {
@@ -1357,5 +1385,90 @@ mod tests {
         assert_eq!(header.seq_id, 42);
         assert_eq!(header.frame_type(), Some(FrameType::Response));
         assert!(matches!(decoded, VeloResponse::StatusAck { .. }));
+    }
+
+    // =========================================================================
+    // VeloError Tests
+    // =========================================================================
+
+    #[test]
+    fn test_velo_error_serialization() {
+        let error = VeloError::not_found("Resource not found");
+        let json = serde_json::to_string(&error).unwrap();
+        let decoded: VeloError = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.kind, VeloErrorKind::NotFound);
+        assert_eq!(decoded.message, "Resource not found");
+        assert!(decoded.path.is_none());
+    }
+
+    #[test]
+    fn test_velo_error_with_path() {
+        let error = VeloError::with_path(
+            VeloErrorKind::NotFound,
+            "File not found",
+            "/path/to/file.txt",
+        );
+        let json = serde_json::to_string(&error).unwrap();
+        let decoded: VeloError = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.path, Some("/path/to/file.txt".to_string()));
+    }
+
+    #[test]
+    fn test_velo_error_set_path() {
+        let error = VeloError::not_found("File not found").set_path("/some/path.txt");
+
+        assert_eq!(error.path, Some("/some/path.txt".to_string()));
+    }
+
+    #[test]
+    fn test_velo_error_display() {
+        let error = VeloError::permission_denied("Access denied");
+        let display = format!("{}", error);
+
+        assert!(display.contains("PermissionDenied"));
+        assert!(display.contains("Access denied"));
+    }
+
+    #[test]
+    fn test_velo_error_display_with_path() {
+        let error =
+            VeloError::with_path(VeloErrorKind::InvalidPath, "Path traversal", "/etc/passwd");
+        let display = format!("{}", error);
+
+        assert!(display.contains("InvalidPath"));
+        assert!(display.contains("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_velo_error_exit_codes() {
+        assert_eq!(VeloError::not_found("").exit_code(), 2);
+        assert_eq!(VeloError::workspace_not_registered().exit_code(), 2);
+        assert_eq!(VeloError::invalid_path("").exit_code(), 22);
+        assert_eq!(VeloError::permission_denied("").exit_code(), 77);
+        assert_eq!(
+            VeloError::new(VeloErrorKind::LockFailed, "").exit_code(),
+            78
+        );
+        assert_eq!(
+            VeloError::new(VeloErrorKind::IngestFailed, "").exit_code(),
+            79
+        );
+        assert_eq!(VeloError::io_error("").exit_code(), 1);
+        assert_eq!(VeloError::internal("").exit_code(), 1);
+    }
+
+    #[test]
+    fn test_velo_error_response_serialization() {
+        let response = VeloResponse::Error(VeloError::not_found("Not found"));
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: VeloResponse = serde_json::from_str(&json).unwrap();
+
+        if let VeloResponse::Error(err) = decoded {
+            assert_eq!(err.kind, VeloErrorKind::NotFound);
+        } else {
+            panic!("Expected VeloResponse::Error");
+        }
     }
 }

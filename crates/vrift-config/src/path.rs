@@ -112,6 +112,79 @@ pub fn strip_prefix_safe(path: impl AsRef<Path>, prefix: impl AsRef<Path>) -> Op
     path.strip_prefix(prefix).ok().map(|p| p.to_path_buf())
 }
 
+/// Validate that path is within directory, returning Result for security checks.
+///
+/// Unlike `is_within_directory`, this returns a detailed error on failure.
+///
+/// # Example
+/// ```ignore
+/// let safe_path = ensure_within("/project/src/file.rs", "/project")?;
+/// // Returns PathBuf on success, Error with context on failure
+/// ```
+pub fn ensure_within(path: impl AsRef<Path>, dir: impl AsRef<Path>) -> Result<PathBuf> {
+    let path = path.as_ref();
+    let dir = dir.as_ref();
+
+    let canonical_path = path
+        .canonicalize()
+        .with_context(|| format!("Cannot resolve path: {}", path.display()))?;
+    let canonical_dir = dir
+        .canonicalize()
+        .with_context(|| format!("Cannot resolve directory: {}", dir.display()))?;
+
+    if canonical_path.starts_with(&canonical_dir) {
+        Ok(canonical_path)
+    } else {
+        anyhow::bail!(
+            "Path '{}' is outside directory '{}'",
+            path.display(),
+            dir.display()
+        )
+    }
+}
+
+/// Normalize a path relative to a project root.
+///
+/// If the path is absolute and within the root, returns the relative portion.
+/// If the path is relative, canonicalizes relative to root.
+///
+/// # Example
+/// ```ignore
+/// let rel = normalize_relative_to("/project/src/main.rs", "/project")?;
+/// assert_eq!(rel, PathBuf::from("src/main.rs"));
+/// ```
+pub fn normalize_relative_to(path: impl AsRef<Path>, root: impl AsRef<Path>) -> Result<PathBuf> {
+    let path = path.as_ref();
+    let root = root.as_ref();
+
+    // Canonicalize root
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("Cannot resolve root: {}", root.display()))?;
+
+    // Handle absolute paths
+    if path.is_absolute() {
+        if let Ok(canonical_path) = path.canonicalize() {
+            if let Ok(relative) = canonical_path.strip_prefix(&canonical_root) {
+                return Ok(relative.to_path_buf());
+            }
+        }
+        // Path not within root, return as-is
+        return Ok(path.to_path_buf());
+    }
+
+    // Handle relative paths - resolve relative to root
+    let full_path = canonical_root.join(path);
+    if let Ok(canonical) = full_path.canonicalize() {
+        if let Ok(relative) = canonical.strip_prefix(&canonical_root) {
+            return Ok(relative.to_path_buf());
+        }
+    }
+
+    // Fallback: return original path
+    Ok(path.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +270,53 @@ mod tests {
         // No match returns None
         let other_prefix = Path::new("/other");
         assert_eq!(strip_prefix_safe(path, other_prefix), None);
+    }
+
+    #[test]
+    fn test_ensure_within_valid() {
+        let temp = tempdir().unwrap();
+        let subdir = temp.path().join("subdir");
+        fs::create_dir(&subdir).unwrap();
+        let file = subdir.join("file.txt");
+        fs::write(&file, "test").unwrap();
+
+        // Valid: file is within temp
+        let result = ensure_within(&file, temp.path());
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_absolute());
+    }
+
+    #[test]
+    fn test_ensure_within_invalid() {
+        let temp1 = tempdir().unwrap();
+        let temp2 = tempdir().unwrap();
+        let file = temp1.path().join("file.txt");
+        fs::write(&file, "test").unwrap();
+
+        // Invalid: file in temp1 is not within temp2
+        let result = ensure_within(&file, temp2.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("outside"));
+    }
+
+    #[test]
+    fn test_normalize_relative_to_absolute() {
+        let temp = tempdir().unwrap();
+        let file = temp.path().join("src/main.rs");
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(&file, "test").unwrap();
+
+        let result = normalize_relative_to(&file, temp.path()).unwrap();
+        assert_eq!(result, PathBuf::from("src/main.rs"));
+    }
+
+    #[test]
+    fn test_normalize_relative_to_relative() {
+        let temp = tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(temp.path().join("src/main.rs"), "test").unwrap();
+
+        let result = normalize_relative_to("src/main.rs", temp.path()).unwrap();
+        assert_eq!(result, PathBuf::from("src/main.rs"));
     }
 }
