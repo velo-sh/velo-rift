@@ -231,7 +231,7 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
     });
     info!("Periodic commit task started (30s interval)");
 
-    let socket_handle = socket::run_listener(config, vdir);
+    let socket_handle = socket::run_listener(config, vdir, manifest.clone());
 
     // Wait for any task to complete, or signal for graceful shutdown
     tokio::select! {

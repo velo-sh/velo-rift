@@ -15,11 +15,20 @@ use vrift_ipc::{
 pub struct CommandHandler {
     config: ProjectConfig,
     vdir: VDir,
+    manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
 }
 
 impl CommandHandler {
-    pub fn new(config: ProjectConfig, vdir: VDir) -> Self {
-        Self { config, vdir }
+    pub fn new(
+        config: ProjectConfig,
+        vdir: VDir,
+        manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
+    ) -> Self {
+        Self {
+            config,
+            vdir,
+            manifest,
+        }
     }
 
     /// Handle incoming request
@@ -81,21 +90,39 @@ impl CommandHandler {
     }
 
     /// Handle ManifestGet
+    /// First checks VDir (runtime overlay for COW), then falls back to LMDB (persistent storage)
     fn handle_manifest_get(&self, path: &str) -> VeloResponse {
         let path_hash = fnv1a_hash(path);
-        match self.vdir.lookup(path_hash) {
-            Some(entry) => {
-                let vnode = VnodeEntry {
-                    content_hash: entry.cas_hash,
-                    size: entry.size,
-                    mtime: entry.mtime_sec as u64,
-                    mode: entry.mode,
-                    flags: entry.flags,
-                    _pad: 0,
-                };
-                VeloResponse::ManifestAck { entry: Some(vnode) }
+
+        // 1. First check VDir (runtime overlay for COW mutations)
+        if let Some(entry) = self.vdir.lookup(path_hash) {
+            let vnode = VnodeEntry {
+                content_hash: entry.cas_hash,
+                size: entry.size,
+                mtime: entry.mtime_sec as u64,
+                mode: entry.mode,
+                flags: entry.flags,
+                _pad: 0,
+            };
+            return VeloResponse::ManifestAck { entry: Some(vnode) };
+        }
+
+        // 2. Fallback to LMDB (persistent storage)
+        match self.manifest.get(path) {
+            Ok(Some(entry)) => {
+                debug!(path = %path, "ManifestGet: found in LMDB");
+                VeloResponse::ManifestAck {
+                    entry: Some(entry.vnode),
+                }
             }
-            None => VeloResponse::ManifestAck { entry: None },
+            Ok(None) => {
+                debug!(path = %path, "ManifestGet: not found in VDir or LMDB");
+                VeloResponse::ManifestAck { entry: None }
+            }
+            Err(e) => {
+                warn!(path = %path, error = %e, "ManifestGet: LMDB lookup failed");
+                VeloResponse::ManifestAck { entry: None }
+            }
         }
     }
 
@@ -393,7 +420,12 @@ mod tests {
         let vdir_path = temp.path().join("test.vdir");
         let vdir = VDir::create_or_open(&vdir_path).unwrap();
 
-        (CommandHandler::new(config, vdir), temp)
+        // Create LMDB manifest
+        let manifest_path = temp.path().join("manifest.lmdb");
+        let manifest =
+            std::sync::Arc::new(vrift_manifest::lmdb::LmdbManifest::open(&manifest_path).unwrap());
+
+        (CommandHandler::new(config, vdir, manifest), temp)
     }
 
     // ==================== Handshake Tests ====================

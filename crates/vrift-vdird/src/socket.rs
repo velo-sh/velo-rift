@@ -14,7 +14,11 @@ use tracing::{debug, error, info, warn};
 use vrift_ipc::{IpcHeader, VeloError, VeloRequest, VeloResponse};
 
 /// Run the UDS listener loop
-pub async fn run_listener(config: ProjectConfig, vdir: VDir) -> Result<()> {
+pub async fn run_listener(
+    config: ProjectConfig,
+    vdir: VDir,
+    manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
+) -> Result<()> {
     // Remove existing socket if present
     if config.socket_path.exists() {
         std::fs::remove_file(&config.socket_path)?;
@@ -23,7 +27,11 @@ pub async fn run_listener(config: ProjectConfig, vdir: VDir) -> Result<()> {
     let listener = UnixListener::bind(&config.socket_path)?;
     info!(socket = %config.socket_path.display(), "Listening for connections");
 
-    let handler = Arc::new(RwLock::new(CommandHandler::new(config.clone(), vdir)));
+    let handler = Arc::new(RwLock::new(CommandHandler::new(
+        config.clone(),
+        vdir,
+        manifest,
+    )));
 
     loop {
         match listener.accept().await {
