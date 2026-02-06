@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -64,6 +65,8 @@ extern int velo_fstatat_impl(int dirfd, const char *path, void *buf, int flags);
 volatile char INITIALIZING = 2;
 
 __attribute__((constructor(101))) void vfs_init_constructor() {
+  // RFC-0051: Ignore SIGPIPE to prevent IPC failures from killing processes
+  signal(SIGPIPE, SIG_IGN);
   INITIALIZING = 1;
 }
 
