@@ -454,8 +454,7 @@ pub mod frame_async {
 pub enum VeloRequest {
     Handshake {
         client_version: String,
-        /// Protocol version (v2+). Missing = v1
-        #[serde(default)]
+        /// Protocol version (required in v3+)
         protocol_version: u32,
     },
     Status,
@@ -579,10 +578,8 @@ pub enum VeloResponse {
     HandshakeAck {
         server_version: String,
         /// Server protocol version
-        #[serde(default)]
         protocol_version: u32,
         /// Whether client version is compatible
-        #[serde(default = "default_compatible")]
         compatible: bool,
     },
     StatusAck {
@@ -633,22 +630,9 @@ pub enum VeloResponse {
     Error(String),
 }
 
-/// Default value for compatible field (backwards compatibility)
-fn default_compatible() -> bool {
-    true
-}
-
 /// Check if a protocol version is compatible with this build
-/// Note: protocol_version=0 is treated as v1 for backwards compatibility
-/// (legacy clients without the protocol_version field default to 0 via serde)
 pub fn is_version_compatible(client_version: u32) -> bool {
-    // Treat 0 as v1 (legacy clients without protocol_version field)
-    let effective = if client_version == 0 {
-        1
-    } else {
-        client_version
-    };
-    (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&effective)
+    (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&client_version)
 }
 
 pub fn default_socket_path() -> &'static str {
@@ -1218,13 +1202,13 @@ mod tests {
 
     #[test]
     fn test_version_compatibility() {
-        // v0 should be treated as v1 (legacy)
-        assert!(is_version_compatible(0));
-        // v1 is supported
+        // v0 is NOT valid (legacy compat removed in v3)
+        assert!(!is_version_compatible(0));
+        // v1 is supported (MIN_PROTOCOL_VERSION)
         assert!(is_version_compatible(1));
         // v2 is supported
         assert!(is_version_compatible(2));
-        // v3 is current
+        // v3 is current (PROTOCOL_VERSION)
         assert!(is_version_compatible(3));
         // v4 is not yet supported
         assert!(!is_version_compatible(4));
