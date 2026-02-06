@@ -20,7 +20,7 @@ echo "Source content for sendfile test" > "$TEST_DIR/source.txt"
 touch "$TEST_DIR/dest.txt"
 
 # Test sendfile with Python (or copy_file_range on Linux)
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
 import os
 import sys
 
@@ -75,7 +75,7 @@ EOF
 export SRC_FILE="$TEST_DIR/source.txt"
 export DST_FILE="$TEST_DIR/dest.txt"
 
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
 import os
 import sys
 

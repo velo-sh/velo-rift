@@ -18,7 +18,7 @@ echo "Source content for copy test" > "$TEST_DIR/source.txt"
 touch "$TEST_DIR/dest.txt"
 
 # Test copy with Python
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 << 'EOF'
 import os
 import sys
 import shutil
@@ -68,7 +68,7 @@ EOF
 
 export TEST_DIR="$TEST_DIR"
 
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 -c "
 import shutil
 import sys
 shutil.copy('$TEST_DIR/source.txt', '$TEST_DIR/dest2.txt')

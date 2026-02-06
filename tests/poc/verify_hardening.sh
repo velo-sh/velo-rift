@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BIN_PATH="$SCRIPT_DIR/verify_hardening"
-SHIM_PATH="$REPO_ROOT/target/debug/libvrift_shim.dylib"
+SHIM_PATH="$REPO_ROOT/target/debug/libvrift_inception_layer.dylib"
 
 # 1. Build the POC
 echo "--- Building Hardening POC ---"
@@ -15,7 +15,7 @@ gcc -o "$BIN_PATH" "$SCRIPT_DIR/verify_hardening.c"
 
 # 2. Build the Shim
 echo "--- Building Velo Rift Shim ---"
-cargo build -p vrift-shim
+cargo build -p vrift-inception-layer
 
 # 3. Setup Test Environment
 export VRIFT_VFS_PREFIX="/Users/antigravity/vrift_vfs"

@@ -283,7 +283,7 @@ main() {
         echo ""
         echo "⚠️  Shim not found at $SHIM_LIB"
         echo "   Running cargo build..."
-        (cd "$PROJECT_ROOT" && cargo build -p vrift-shim --quiet)
+        (cd "$PROJECT_ROOT" && cargo build -p vrift-inception-layer --quiet)
     fi
     
     # Run all test layers

@@ -13,7 +13,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "=== P0 Gap Test: flock() Semantic Isolation ==="
 echo ""
 
-SHIM_SRC="${PROJECT_ROOT}/crates/vrift-shim/src/lib.rs"
+SHIM_SRC="${PROJECT_ROOT}/crates/vrift-inception-layer/src/lib.rs"
 
 echo "[1] Compiling test helper..."
 cat > flock_test.c << 'EOF'
@@ -127,7 +127,7 @@ sleep 1
 echo ""
 echo "[3] Running functional test..."
 if [[ "$(uname)" == "Darwin" ]]; then
-    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
     export DYLD_FORCE_FLAT_NAMESPACE=1
 else
     export LD_PRELOAD="${PROJECT_ROOT}/target/debug/libvrift_shim.so"

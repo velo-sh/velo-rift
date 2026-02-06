@@ -21,10 +21,10 @@ echo "Instances: $INSTANCES"
 echo "Timeout: ${TIMEOUT_SECS}s per instance"
 
 # Build shim if needed
-SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_PATH="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 if [[ ! -f "$SHIM_PATH" ]]; then
     echo "Building release shim..."
-    cargo build --release -p vrift-shim --manifest-path "$PROJECT_ROOT/Cargo.toml"
+    cargo build --release -p vrift-inception-layer --manifest-path "$PROJECT_ROOT/Cargo.toml"
 fi
 
 if [[ ! -f "$SHIM_PATH" ]]; then

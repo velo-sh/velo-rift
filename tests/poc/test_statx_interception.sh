@@ -9,7 +9,7 @@ set -e
 echo "=== Test: statx Interception Requirement ==="
 echo ""
 
-SHIM_PATH="${VRIFT_SHIM_PATH:-$(dirname "$0")/../../target/debug/libvrift_shim.dylib}"
+SHIM_PATH="${VRIFT_SHIM_PATH:-$(dirname "$0")/../../target/debug/libvrift_inception_layer.dylib}"
 
 echo "[1] Platform Check:"
 if [[ "$(uname)" == "Darwin" ]]; then

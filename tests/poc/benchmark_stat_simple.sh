@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Use release binaries
 VRIFT_BIN="${PROJECT_ROOT}/target/release/vrift"
 VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
-SHIM_PATH="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
+SHIM_PATH="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
 
 if [ ! -f "$VRIFT_BIN" ] || [ ! -f "$VRIFTD_BIN" ] || [ ! -f "$SHIM_PATH" ]; then
     echo "❌ Release binaries not found. Run: cargo build --release"

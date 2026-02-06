@@ -74,7 +74,7 @@ export VRIFT_DEBUG=1
 
 # Run Python in background with timeout
 (
-    DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 /vrift/project/main.py 2>&1
+    DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" DYLD_FORCE_FLAT_NAMESPACE=1 python3 /vrift/project/main.py 2>&1
 ) &
 PYTHON_PID=$!
 

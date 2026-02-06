@@ -85,7 +85,7 @@ codesign --force --sign - "$TEST_DIR/test_pkg"
 
 # 4. Run Test
 echo "🚀 Executing compatibility test..."
-export DYLD_INSERT_LIBRARIES="$PROJECT_ROOT/target/debug/libvrift_shim.dylib"
+export DYLD_INSERT_LIBRARIES="$PROJECT_ROOT/target/debug/libvrift_inception_layer.dylib"
 export DYLD_FORCE_FLAT_NAMESPACE=1
 export VRIFT_VFS_PREFIX="/vrift"
 export VRIFT_MANIFEST="$TEST_DIR/project/vrift.manifest"

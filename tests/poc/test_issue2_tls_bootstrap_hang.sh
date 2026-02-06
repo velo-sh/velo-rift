@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Determine OS and shim name
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    SHIM_NAME="libvrift_shim.dylib"
+    SHIM_NAME="libvrift_inception_layer.dylib"
     PRELOAD_VAR="DYLD_INSERT_LIBRARIES"
 else
     SHIM_NAME="libvrift_shim.so"

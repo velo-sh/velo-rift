@@ -4,7 +4,7 @@
 
 set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
 
 if [[ "$(uname)" != "Darwin" ]]; then
     SHIM_PATH="${PROJECT_ROOT}/target/debug/libvrift_shim.so"

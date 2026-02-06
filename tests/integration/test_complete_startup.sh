@@ -12,7 +12,7 @@ VDIRD_BIN="$PROJECT_ROOT/target/release/vrift-vdird"
 # Platform-specific shim detection
 OS=$(uname -s)
 if [ "$OS" == "Darwin" ]; then
-    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+    SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
     SHIM_ENV_NAME="DYLD_INSERT_LIBRARIES"
 else
     SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.so"

@@ -21,7 +21,7 @@ else
 fi
 
 case "$(uname -s)" in
-    Darwin) SHIM_LIB="$BUILD_DIR/libvrift_shim.dylib" ;;
+    Darwin) SHIM_LIB="$BUILD_DIR/libvrift_inception_layer.dylib" ;;
     Linux) SHIM_LIB="$BUILD_DIR/libvrift_shim.so" ;;
 esac
 

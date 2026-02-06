@@ -14,7 +14,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 
 # Colors
 RED='\033[0;31m'
@@ -33,7 +33,7 @@ fi
 # Build release shim if needed
 if [[ ! -f "$SHIM_LIB" ]]; then
     echo "Building release shim..."
-    cargo build --release -p vrift-shim 2>/dev/null
+    cargo build --release -p vrift-inception-layer 2>/dev/null
 fi
 
 if [[ ! -f "$SHIM_LIB" ]]; then

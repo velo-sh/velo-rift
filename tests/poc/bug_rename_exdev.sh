@@ -16,7 +16,7 @@ mkdir -p "$WORK_DIR/vfs_territory"
 echo "test data" > "$WORK_DIR/external/source.txt"
 
 # VRIFT Environment
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 if [ ! -f "$SHIM_LIB" ]; then
     echo "❌ Shim not found at $SHIM_LIB. Build it first."
     exit 1
@@ -26,7 +26,7 @@ fi
 gcc -o "$WORK_DIR/rename_test" "$SCRIPT_DIR/rename_test.c"
 
 # VRIFT Environment
-SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_shim.dylib"
+SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 if [ ! -f "$SHIM_LIB" ]; then
     echo "❌ Shim not found at $SHIM_LIB. Build it first."
     exit 1

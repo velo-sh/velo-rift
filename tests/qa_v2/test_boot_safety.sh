@@ -76,7 +76,7 @@ int main() {
 EOF
 clang "$WORK_DIR/main.c" -L"$WORK_DIR" -lhammer -o "$WORK_DIR/test_app"
 
-# 3. Create a manifest for vrift-shim (even if empty)
+# 3. Create a manifest for vrift-inception-layer (even if empty)
 export VRIFT_MANIFEST="$WORK_DIR/manifest.vdir"
 echo "{\"files\": []}" > "$VRIFT_MANIFEST"
 

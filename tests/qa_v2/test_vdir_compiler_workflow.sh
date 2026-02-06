@@ -361,7 +361,7 @@ main() {
     # Check prerequisites
     if [ ! -f "$SHIM_LIB" ]; then
         echo "❌ Shim not found: $SHIM_LIB"
-        echo "   Run: cargo build --release -p vrift-shim"
+        echo "   Run: cargo build --release -p vrift-inception-layer"
         exit 1
     fi
     

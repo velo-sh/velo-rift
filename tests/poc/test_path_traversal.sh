@@ -10,7 +10,7 @@ echo "secret" > "$TEST_DIR/secret.txt"
 echo "=== Test: Path Traversal Behavior (Standalone) ==="
 
 # We test with the shim loaded
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" \
+DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib" \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
 python3 << EOF
 import os

@@ -1,7 +1,7 @@
 #!/bin/bash
 # test_cargo_incremental.sh
 #
-# M5 E2E Test: Cargo incremental build under vrift-shim
+# M5 E2E Test: Cargo incremental build under vrift-inception-layer
 # Verifies: Dirty bit tracking works across incremental builds
 
 set -e

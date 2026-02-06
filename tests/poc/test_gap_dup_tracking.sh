@@ -73,8 +73,8 @@ cc -o /tmp/test_dup_gap "$TEST_DIR/test_dup.c" 2>/dev/null || clang -o /tmp/test
 
 # Resolve shim path
 if [[ "$(uname)" == "Darwin" ]]; then
-    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_shim.dylib"
-    [[ -f "$SHIM_LIB" ]] || SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib"
+    SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
+    [[ -f "$SHIM_LIB" ]] || SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
     export DYLD_INSERT_LIBRARIES="$SHIM_LIB"
     export DYLD_FORCE_FLAT_NAMESPACE=1
 else
