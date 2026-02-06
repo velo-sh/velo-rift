@@ -20,11 +20,11 @@ use crate::ipc::*;
 // This module manages initialization state during the hazardous dyld bootstrap
 // phase. The following invariants MUST be maintained:
 //
-// 1. INITIALIZING starts at 1 (passthrough mode) - set to 0 only after dyld
-//    completes loading all symbols (via SET_READY in lib.rs)
+// 1. INITIALIZING starts at EarlyInit (2) (passthrough mode) - set to Ready (0)
+//    only after dyld completes loading all symbols (via SET_READY in lib.rs)
 //
-// 2. TLS_READY starts at false - set to true only after pthread TLS is
-//    confirmed working (also in SET_READY)
+// 2. TLS_READY (RFC-0049) is implicitly handled by the transition from
+//    EarlyInit/RustInit to Ready.
 //
 // 3. All inception layer entry points MUST check these flags BEFORE using any Rust
 //    features that might trigger TLS (String, HashMap, Mutex, etc.)
@@ -40,7 +40,30 @@ pub(crate) static INCEPTION_LAYER_STATE: AtomicPtr<InceptionLayerState> =
     AtomicPtr::new(ptr::null_mut());
 // Flag to indicate inception layer is still initializing. All syscalls passthrough during this phase.
 extern "C" {
+    /// RFC-0050: Initialization state machine
+    /// 0: Ready (Active), 1: Rust-Init (Safe), 2: Early-Init (Hazardous), 3: Busy (Initializing)
     pub static INITIALIZING: std::sync::atomic::AtomicU8;
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InceptionState {
+    Ready = 0,
+    RustInit = 1,
+    EarlyInit = 2,
+    Busy = 3,
+}
+
+impl InceptionState {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::Ready,
+            1 => Self::RustInit,
+            2 => Self::EarlyInit,
+            3 => Self::Busy,
+            _ => Self::EarlyInit, // Default to safe-passthrough
+        }
+    }
 }
 
 /// Flag to prevent recursion during TLS key creation (bootstrap phase)
@@ -1065,7 +1088,27 @@ impl InceptionLayerState {
         // Calling dlsym here can still cause issues with some binaries.
         // The lazy AtomicPtr caching in reals.rs handles this safely.
 
+        // Perform proactive environment audit
+        unsafe { Self::audit_environment() };
+
         Some(Box::into_raw(state))
+    }
+
+    /// RFC-0050: Proactively detect hazardous environment variables
+    /// that might cause conflicts during dyld bootstrap.
+    unsafe fn audit_environment() {
+        #[cfg(target_os = "macos")]
+        let hazardous_vars = [c"DYLD_LIBRARY_PATH", c"DYLD_FALLBACK_LIBRARY_PATH"];
+        #[cfg(target_os = "linux")]
+        let hazardous_vars = [c"LD_LIBRARY_PATH", c"LD_PRELOAD"];
+
+        for &var in &hazardous_vars {
+            let val = libc::getenv(var.as_ptr());
+            if !val.is_null() {
+                let name = var.to_str().unwrap_or("UNKNOWN");
+                inception_warn!("Hazardous env var detected during bootstrap: {}", name);
+            }
+        }
     }
 
     fn init_reactor() -> &'static crate::sync::RingBuffer {
@@ -1170,32 +1213,36 @@ impl InceptionLayerState {
         }
 
         // RFC-0050: Tiered Readiness Model
-        // 2: Early-Init (Hazardous), 1: image init (Hazardous), 3: Busy, 0: Ready
         let current = unsafe { INITIALIZING.load(Ordering::Acquire) };
-        if current != 0 {
+        if current != InceptionState::Ready as u8 {
             // Still in hazardous dyld phase or already initializing, return None to fallback to raw syscalls
             return None;
         }
 
-        // Attempt to transition to 3 (Busy) only from 0 (Ready)
+        // Attempt to transition to Busy (3) only from Ready (0)
         let transitioned = unsafe {
             INITIALIZING
-                .compare_exchange(0, 3, Ordering::SeqCst, Ordering::Acquire)
+                .compare_exchange(
+                    InceptionState::Ready as u8,
+                    InceptionState::Busy as u8,
+                    Ordering::SeqCst,
+                    Ordering::Acquire,
+                )
                 .is_ok()
         };
         if !transitioned {
             return None;
         }
 
-        // Initialize state - reset INITIALIZING to 0 on success
+        // Initialize state - reset INITIALIZING to Ready (0) on success
         let ptr = match Self::init() {
             Some(p) => {
                 INCEPTION_LAYER_STATE.store(p, Ordering::Release);
-                unsafe { INITIALIZING.store(0, Ordering::SeqCst) };
+                unsafe { INITIALIZING.store(InceptionState::Ready as u8, Ordering::SeqCst) };
                 p
             }
             None => {
-                unsafe { INITIALIZING.store(0, Ordering::SeqCst) };
+                unsafe { INITIALIZING.store(InceptionState::Ready as u8, Ordering::SeqCst) };
                 return None;
             }
         };

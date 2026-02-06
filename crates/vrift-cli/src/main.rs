@@ -136,6 +136,10 @@ enum Commands {
         /// Project directory (default: current directory)
         #[arg(value_name = "DIR")]
         directory: Option<PathBuf>,
+
+        /// Show Inception Layer internal diagnostics
+        #[arg(long)]
+        inception: bool,
     },
 
     /// Mount the manifest as a FUSE filesystem
@@ -462,9 +466,10 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             manifest,
             session,
             directory,
+            inception,
         } => {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
-            cmd_status(&cas_root, manifest.as_deref(), session, &dir)
+            cmd_status(&cas_root, manifest.as_deref(), session, inception, &dir)
         }
         Commands::Mount(args) => mount::run(args, &cas_root),
         Commands::Gc(args) => gc::run(&cas_root, args).await,
@@ -1598,8 +1603,47 @@ fn cmd_status(
     cas_root: &Path,
     manifest: Option<&Path>,
     show_session: bool,
+    show_inception: bool,
     project_dir: &Path,
 ) -> Result<()> {
+    if show_inception {
+        println!("Velo Rift Inception Diagnostics");
+        println!("===============================");
+        // RFC-0050: Dynamic lookup of inception layer telemetry
+        // Using RTLD_DEFAULT to find symbol in global scope (injected via DYLD_INSERT_LIBRARIES)
+        unsafe {
+            let sym_name = if cfg!(target_os = "macos") {
+                // macOS prepends _ to C symbols, but dlsym handles it usually.
+                // However, Rust no_mangle exports exact name.
+                c"vrift_get_telemetry"
+            } else {
+                c"vrift_get_telemetry"
+            };
+
+            let sym = libc::dlsym(libc::RTLD_DEFAULT, sym_name.as_ptr());
+            if !sym.is_null() {
+                let get_telemetry: extern "C" fn(*mut libc::c_char, usize) -> libc::c_int =
+                    std::mem::transmute(sym);
+
+                let mut buf = [0u8; 8192];
+                let ret = get_telemetry(buf.as_mut_ptr() as *mut libc::c_char, buf.len());
+                if ret >= 0 {
+                    let s = std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char);
+                    println!("{}", s.to_string_lossy());
+                } else {
+                    println!("Error: Telemetry buffer too small or internal error.");
+                }
+            } else {
+                println!("Error: Inception Layer NOT detected in this process.");
+                println!("Run 'eval $(vrift inception)' and try again provided vrift is shimmed.");
+                println!(
+                    "Note: 'vrift' binary itself must be launched with the shim for this to work."
+                );
+            }
+        }
+        return Ok(());
+    }
+
     println!("Velo Rift Status");
     println!("================");
     println!();
