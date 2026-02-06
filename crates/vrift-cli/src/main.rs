@@ -95,13 +95,9 @@ enum Commands {
         show_excluded: bool,
 
         /// Use daemon for ingest (unified architecture: CLI is thin client)
-        /// This is now the DEFAULT behavior. Use --direct to bypass daemon.
+        /// This is the default and only behavior.
         #[arg(long, hide = true)]
         via_daemon: bool,
-
-        /// Bypass daemon and run ingest directly in CLI process (legacy mode)
-        #[arg(long)]
-        direct: bool,
     },
 
     /// Execute a command with VeloVFS virtualization
@@ -379,15 +375,14 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
         Commands::Ingest {
             directory,
             output,
-            prefix,
-            parallel,
+            prefix: _,
+            parallel: _,
             threads,
             mode,
             tier,
-            no_security_filter,
-            show_excluded,
-            via_daemon,
-            direct,
+            no_security_filter: _,
+            show_excluded: _,
+            via_daemon: _,
         } => {
             let (mode, tier) = {
                 let config = vrift_config::config();
@@ -397,60 +392,40 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                 )
             };
 
-            // Unified architecture: daemon is DEFAULT, --direct bypasses it
-            // via_daemon is kept for backwards compatibility but hidden
-            let use_daemon = !direct || via_daemon;
+            // Always use daemon (unified architecture)
+            let is_phantom = mode.to_lowercase() == "phantom";
+            let is_tier1 = tier.to_lowercase() == "tier1";
 
-            if use_daemon {
-                let is_phantom = mode.to_lowercase() == "phantom";
-                let is_tier1 = tier.to_lowercase() == "tier1";
+            match daemon::ingest_via_daemon(
+                &directory, &output, &cas_root, threads, is_phantom, is_tier1,
+            )
+            .await
+            {
+                Ok(result) => {
+                    let elapsed_secs = result.duration_ms as f64 / 1000.0;
+                    let files_per_sec = if elapsed_secs > 0.0 {
+                        result.files as f64 / elapsed_secs
+                    } else {
+                        0.0
+                    };
+                    let dedup_ratio = if result.files > 0 {
+                        100.0 * (1.0 - (result.blobs as f64 / result.files as f64))
+                    } else {
+                        0.0
+                    };
 
-                match daemon::ingest_via_daemon(
-                    &directory, &output, &cas_root, threads, is_phantom, is_tier1,
-                )
-                .await
-                {
-                    Ok(result) => {
-                        let elapsed_secs = result.duration_ms as f64 / 1000.0;
-                        let files_per_sec = if elapsed_secs > 0.0 {
-                            result.files as f64 / elapsed_secs
-                        } else {
-                            0.0
-                        };
-                        let dedup_ratio = if result.files > 0 {
-                            100.0 * (1.0 - (result.blobs as f64 / result.files as f64))
-                        } else {
-                            0.0
-                        };
-
-                        println!();
-                        println!("╔════════════════════════════════════════╗");
-                        println!("║  ✅ VRift Complete                     ║");
-                        println!("╚════════════════════════════════════════╝");
-                        println!();
-                        println!("   📁 {} files → {} blobs", result.files, result.blobs);
-                        println!("   📊 {:.1}% dedup", dedup_ratio);
-                        println!("   ⚡ {:.0} files/sec", files_per_sec);
-                        println!("   📄 Manifest: {}", result.manifest_path);
-                        Ok(())
-                    }
-                    Err(e) => Err(e),
+                    println!();
+                    println!("╔════════════════════════════════════════╗");
+                    println!("║  ✅ VRift Complete                     ║");
+                    println!("╚════════════════════════════════════════╝");
+                    println!();
+                    println!("   📁 {} files → {} blobs", result.files, result.blobs);
+                    println!("   📊 {:.1}% dedup", dedup_ratio);
+                    println!("   ⚡ {:.0} files/sec", files_per_sec);
+                    println!("   📄 Manifest: {}", result.manifest_path);
+                    Ok(())
                 }
-            } else {
-                // Legacy direct mode (--direct flag)
-                cmd_ingest(
-                    &cas_root,
-                    &directory,
-                    &output,
-                    prefix.as_deref(),
-                    parallel,
-                    threads,
-                    &mode,
-                    &tier,
-                    !no_security_filter,
-                    show_excluded,
-                )
-                .await
+                Err(e) => Err(e),
             }
         }
         Commands::Run {
@@ -557,9 +532,12 @@ async fn cmd_init(directory: &Path) -> Result<()> {
     fs::create_dir_all(&vrift_dir)?;
     fs::create_dir_all(vrift_dir.join("bin"))?;
 
-    // Create manifest.lmdb directory (LMDB needs a directory)
+    // Create manifest.lmdb directory and initialize LMDB database
     let manifest_path = vrift_dir.join("manifest.lmdb");
-    fs::create_dir_all(&manifest_path)?;
+    // Use LmdbManifest::open which creates the directory AND initializes LMDB files
+    // This prevents "unexpected end of file" errors on subsequent ingest operations
+    let _ = vrift_manifest::LmdbManifest::open(&manifest_path)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize manifest LMDB: {}", e))?;
 
     // Output success (to stderr so it doesn't interfere with eval)
     eprintln!();

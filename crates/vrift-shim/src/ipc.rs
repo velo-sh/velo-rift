@@ -6,6 +6,7 @@ use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Raw Unix socket connect using libc syscalls (avoids recursion through shim)
+/// RFC-0053: Adds 5 second timeout to prevent UE process states from blocking IPC
 pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
     // Fast-fail: Check if socket file exists before attempting connect
     let path_cstr = match std::ffi::CString::new(path) {
@@ -32,6 +33,31 @@ pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
             s
         }
     };
+
+    if fd < 0 {
+        return -1;
+    }
+
+    // RFC-0053: Set socket timeouts BEFORE connect to prevent UE process states
+    // 5 second timeout for both send and receive
+    let timeout = libc::timeval {
+        tv_sec: 5,
+        tv_usec: 0,
+    };
+    libc::setsockopt(
+        fd,
+        libc::SOL_SOCKET,
+        libc::SO_RCVTIMEO,
+        &timeout as *const _ as *const libc::c_void,
+        std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+    );
+    libc::setsockopt(
+        fd,
+        libc::SOL_SOCKET,
+        libc::SO_SNDTIMEO,
+        &timeout as *const _ as *const libc::c_void,
+        std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+    );
 
     let mut addr: libc::sockaddr_un = std::mem::zeroed();
     addr.sun_family = libc::AF_UNIX as libc::sa_family_t;

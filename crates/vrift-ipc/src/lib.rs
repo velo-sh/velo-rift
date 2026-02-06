@@ -562,7 +562,19 @@ pub struct DirEntry {
 pub use vrift_manifest::VnodeEntry;
 
 #[cfg(not(feature = "manifest"))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Default,
+    Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
+#[rkyv(derive(Debug))]
 pub struct VnodeEntry {
     pub content_hash: [u8; 32],
     pub size: u64,
@@ -570,6 +582,7 @@ pub struct VnodeEntry {
     pub mode: u32,
     pub flags: u16,
     #[serde(skip)]
+    #[rkyv(with = rkyv::with::Skip)]
     pub _pad: u16,
 }
 
