@@ -240,14 +240,12 @@ pub async fn read_response(stream: &mut UnixStream) -> Result<VeloResponse> {
 pub async fn ingest_via_daemon(
     path: &Path,
     manifest_path: &Path,
-    cas_root: &Path,
     threads: Option<usize>,
     phantom: bool,
     tier1: bool,
 ) -> Result<IngestResult> {
     // Normalize paths before sending to daemon (daemon's cwd may differ)
     let abs_path = normalize_or_original(path);
-    let abs_cas = normalize_or_original(cas_root);
     // Manifest may not exist yet, so normalize parent + append filename
     let abs_manifest =
         normalize_nonexistent(manifest_path).unwrap_or_else(|_| manifest_path.to_path_buf());
@@ -266,10 +264,9 @@ pub async fn ingest_via_daemon(
     };
 
     tracing::info!(
-        "[CLI] Sending IngestFullScan request: path={:?}, manifest={:?}, cas={:?}",
+        "[CLI] Sending IngestFullScan request: path={:?}, manifest={:?}",
         abs_path,
-        abs_manifest,
-        abs_cas
+        abs_manifest
     );
     send_request(&mut stream, req).await?;
     tracing::info!("[CLI] IngestFullScan request sent, waiting for response...");

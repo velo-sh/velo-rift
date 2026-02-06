@@ -246,46 +246,62 @@ pub mod frame_sync {
         Ok(header)
     }
 
-    /// Read frame payload and deserialize as request
+    /// Read frame payload and deserialize as request (skipping heartbeats)
     pub fn read_request<R: Read>(reader: &mut R) -> std::io::Result<(IpcHeader, VeloRequest)> {
-        let header = read_header(reader)?;
+        loop {
+            let header = read_header(reader)?;
 
-        if header.frame_type() != Some(FrameType::Request) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("expected Request frame, got {:?}", header.frame_type()),
-            ));
+            // RFC-0053: Skip heartbeats transparently
+            if header.frame_type() == Some(FrameType::Heartbeat) {
+                continue;
+            }
+
+            if header.frame_type() != Some(FrameType::Request) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("expected Request frame, got {:?}", header.frame_type()),
+                ));
+            }
+
+            let mut payload = vec![0u8; header.length as usize];
+            reader.read_exact(&mut payload)?;
+
+            let request: VeloRequest =
+                rkyv::from_bytes::<VeloRequest, rkyv::rancor::Error>(&payload).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+
+            return Ok((header, request));
         }
-
-        let mut payload = vec![0u8; header.length as usize];
-        reader.read_exact(&mut payload)?;
-
-        let request: VeloRequest =
-            rkyv::from_bytes::<VeloRequest, rkyv::rancor::Error>(&payload)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-        Ok((header, request))
     }
 
-    /// Read frame payload and deserialize as response
+    /// Read frame payload and deserialize as response (skipping heartbeats)
     pub fn read_response<R: Read>(reader: &mut R) -> std::io::Result<(IpcHeader, VeloResponse)> {
-        let header = read_header(reader)?;
+        loop {
+            let header = read_header(reader)?;
 
-        if header.frame_type() != Some(FrameType::Response) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("expected Response frame, got {:?}", header.frame_type()),
-            ));
+            // RFC-0053: Skip heartbeats transparently
+            if header.frame_type() == Some(FrameType::Heartbeat) {
+                continue;
+            }
+
+            if header.frame_type() != Some(FrameType::Response) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("expected Response frame, got {:?}", header.frame_type()),
+                ));
+            }
+
+            let mut payload = vec![0u8; header.length as usize];
+            reader.read_exact(&mut payload)?;
+
+            let response: VeloResponse =
+                rkyv::from_bytes::<VeloResponse, rkyv::rancor::Error>(&payload).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+
+            return Ok((header, response));
         }
-
-        let mut payload = vec![0u8; header.length as usize];
-        reader.read_exact(&mut payload)?;
-
-        let response: VeloResponse =
-            rkyv::from_bytes::<VeloResponse, rkyv::rancor::Error>(&payload)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-        Ok((header, response))
     }
 
     /// Send a heartbeat frame (zero-length payload)
@@ -403,50 +419,66 @@ pub mod frame_async {
         Ok(header)
     }
 
-    /// Read frame payload and deserialize as request
+    /// Read frame payload and deserialize as request (skipping heartbeats)
     pub async fn read_request<R: AsyncReadExt + Unpin>(
         reader: &mut R,
     ) -> std::io::Result<(IpcHeader, VeloRequest)> {
-        let header = read_header(reader).await?;
+        loop {
+            let header = read_header(reader).await?;
 
-        if header.frame_type() != Some(FrameType::Request) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("expected Request frame, got {:?}", header.frame_type()),
-            ));
+            // RFC-0053: Skip heartbeats transparently
+            if header.frame_type() == Some(FrameType::Heartbeat) {
+                continue;
+            }
+
+            if header.frame_type() != Some(FrameType::Request) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("expected Request frame, got {:?}", header.frame_type()),
+                ));
+            }
+
+            let mut payload = vec![0u8; header.length as usize];
+            reader.read_exact(&mut payload).await?;
+
+            let request: VeloRequest =
+                rkyv::from_bytes::<VeloRequest, rkyv::rancor::Error>(&payload).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+
+            return Ok((header, request));
         }
-
-        let mut payload = vec![0u8; header.length as usize];
-        reader.read_exact(&mut payload).await?;
-
-        let request: VeloRequest =
-            rkyv::from_bytes::<VeloRequest, rkyv::rancor::Error>(&payload)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-        Ok((header, request))
     }
 
-    /// Read frame payload and deserialize as response
+    /// Read frame payload and deserialize as response (skipping heartbeats)
     pub async fn read_response<R: AsyncReadExt + Unpin>(
         reader: &mut R,
     ) -> std::io::Result<(IpcHeader, VeloResponse)> {
-        let header = read_header(reader).await?;
+        loop {
+            let header = read_header(reader).await?;
 
-        if header.frame_type() != Some(FrameType::Response) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("expected Response frame, got {:?}", header.frame_type()),
-            ));
+            // RFC-0053: Skip heartbeats transparently
+            if header.frame_type() == Some(FrameType::Heartbeat) {
+                continue;
+            }
+
+            if header.frame_type() != Some(FrameType::Response) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("expected Response frame, got {:?}", header.frame_type()),
+                ));
+            }
+
+            let mut payload = vec![0u8; header.length as usize];
+            reader.read_exact(&mut payload).await?;
+
+            let response: VeloResponse =
+                rkyv::from_bytes::<VeloResponse, rkyv::rancor::Error>(&payload).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+
+            return Ok((header, response));
         }
-
-        let mut payload = vec![0u8; header.length as usize];
-        reader.read_exact(&mut payload).await?;
-
-        let response: VeloResponse =
-            rkyv::from_bytes::<VeloResponse, rkyv::rancor::Error>(&payload)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-        Ok((header, response))
     }
 
     // ========================================================================
@@ -1500,14 +1532,17 @@ mod tests {
         let header = frame_sync::read_header(&mut cursor).unwrap();
         assert!(frame_sync::is_heartbeat(&header));
 
-        // 3. Heartbeat read as Request (should fail)
-        let mut cursor = Cursor::new(&buf);
-        let res = frame_sync::read_request(&mut cursor);
-        assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .to_string()
-            .contains("expected Request frame"));
+        // 3. Heartbeat read as Request (should skip and read next or EOF)
+        // RFC-0053: We now skip heartbeats. So if we have Heartbeat + Request, it should work.
+        let mut mixed_buf = Vec::new();
+        frame_sync::send_heartbeat(&mut mixed_buf).unwrap();
+        frame_sync::send_request(&mut mixed_buf, &VeloRequest::Status).unwrap();
+
+        let mut cursor = Cursor::new(&mixed_buf);
+        let (header, req) =
+            frame_sync::read_request(&mut cursor).expect("Should skip heartbeat and read request");
+        assert_eq!(header.frame_type(), Some(crate::FrameType::Request));
+        assert!(matches!(req, VeloRequest::Status));
 
         // 4. Response read as Request (should fail)
         let mut buf = Vec::new();

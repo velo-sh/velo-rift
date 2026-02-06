@@ -416,10 +416,8 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                 output
             };
 
-            match daemon::ingest_via_daemon(
-                &directory, &output, &cas_root, threads, is_phantom, is_tier1,
-            )
-            .await
+            match daemon::ingest_via_daemon(&directory, &output, threads, is_phantom, is_tier1)
+                .await
             {
                 Ok(result) => {
                     let elapsed_secs = result.duration_ms as f64 / 1000.0;
@@ -1795,7 +1793,7 @@ fn format_number(n: u64) -> String {
 }
 
 /// Watch a directory and auto-ingest on changes
-async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<()> {
+async fn cmd_watch(_cas_root: &Path, directory: &Path, output: &Path) -> Result<()> {
     use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
     use std::sync::mpsc::channel;
     use std::time::Duration;
@@ -1809,7 +1807,7 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
 
     // Initial ingest via daemon
     println!("\n[Initial Scan]");
-    daemon::ingest_via_daemon(directory, output, cas_root, None, false, false).await?;
+    daemon::ingest_via_daemon(directory, output, None, false, false).await?;
 
     // Create a channel to receive the events.
     let (tx, rx) = channel();
@@ -1841,10 +1839,9 @@ async fn cmd_watch(cas_root: &Path, directory: &Path, output: &Path) -> Result<(
                         // Simple debounce
                         if last_ingest.elapsed() > debounce_duration {
                             println!("\n[Change Detected] Re-ingesting...");
-                            if let Err(e) = daemon::ingest_via_daemon(
-                                directory, output, cas_root, None, false, false,
-                            )
-                            .await
+                            if let Err(e) =
+                                daemon::ingest_via_daemon(directory, output, None, false, false)
+                                    .await
                             {
                                 eprintln!("Ingest failed: {}", e);
                             }
