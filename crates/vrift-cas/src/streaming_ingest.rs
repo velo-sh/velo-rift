@@ -106,7 +106,9 @@ pub fn streaming_ingest(
 
     // Wait for all workers to complete
     for (i, worker) in workers.into_iter().enumerate() {
-        worker.join().unwrap_or_else(|_| panic!("Worker {} panicked", i));
+        worker
+            .join()
+            .unwrap_or_else(|_| panic!("Worker {} panicked", i));
     }
     tracing::info!("[INGEST] All workers finished");
 

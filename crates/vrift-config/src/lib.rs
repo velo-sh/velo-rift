@@ -7,6 +7,8 @@
 //! 2. `.vrift/config.toml` (project-local, overrides global)
 //! 3. Environment variables (highest priority)
 
+pub mod path;
+
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -98,19 +100,65 @@ impl Config {
 
     /// Apply environment variable overrides
     fn apply_env_overrides(&mut self) {
+        // Storage
         if let Ok(path) = std::env::var("VR_THE_SOURCE") {
             self.storage.the_source = PathBuf::from(path);
         }
+
+        // Ingest
         if let Ok(threads) = std::env::var("VRIFT_THREADS") {
             if let Ok(n) = threads.parse() {
                 self.ingest.threads = Some(n);
             }
+        }
+
+        // Daemon
+        if let Ok(socket) = std::env::var("VRIFT_SOCKET_PATH") {
+            self.daemon.socket = PathBuf::from(socket);
+        }
+        if let Ok(registry) = std::env::var("VRIFT_REGISTRY_DIR") {
+            self.daemon.registry_dir = PathBuf::from(registry);
+        }
+        if let Ok(timeout) = std::env::var("VRIFT_LOCK_TIMEOUT") {
+            if let Ok(secs) = timeout.parse() {
+                self.daemon.lock_timeout_secs = secs;
+            }
+        }
+        if std::env::var("VRIFT_DEBUG").is_ok() {
+            self.daemon.debug = true;
         }
     }
 
     /// Generate default config TOML string
     pub fn default_toml() -> String {
         toml::to_string_pretty(&Config::default()).unwrap()
+    }
+
+    // ========== Convenience Accessors ==========
+
+    /// Get socket path (resolved)
+    pub fn socket_path(&self) -> &Path {
+        &self.daemon.socket
+    }
+
+    /// Get CAS root path (TheSource™)
+    pub fn cas_root(&self) -> &Path {
+        &self.storage.the_source
+    }
+
+    /// Get registry directory
+    pub fn registry_dir(&self) -> &Path {
+        &self.daemon.registry_dir
+    }
+
+    /// Get lock timeout in seconds
+    pub fn lock_timeout(&self) -> u64 {
+        self.daemon.lock_timeout_secs
+    }
+
+    /// Check if debug mode is enabled
+    pub fn debug_mode(&self) -> bool {
+        self.daemon.debug
     }
 }
 
@@ -247,15 +295,26 @@ impl Default for SecurityConfig {
 pub struct DaemonConfig {
     /// Unix socket path
     pub socket: PathBuf,
+    /// Registry directory for project index
+    pub registry_dir: PathBuf,
+    /// Lock acquisition timeout in seconds
+    pub lock_timeout_secs: u64,
     /// Enable daemon mode
     pub enabled: bool,
+    /// Enable debug mode
+    pub debug: bool,
 }
 
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            socket: PathBuf::from("/run/vrift/daemon.sock"),
+            socket: PathBuf::from("/tmp/vrift.sock"),
+            registry_dir: dirs::home_dir()
+                .map(|h| h.join(".vrift/registry"))
+                .unwrap_or_else(|| PathBuf::from("/tmp/vrift_registry")),
+            lock_timeout_secs: 30,
             enabled: false,
+            debug: false,
         }
     }
 }
@@ -287,10 +346,9 @@ mod tests {
 
         // Daemon defaults
         assert!(!config.daemon.enabled);
-        assert_eq!(
-            config.daemon.socket,
-            PathBuf::from("/run/vrift/daemon.sock")
-        );
+        assert_eq!(config.daemon.socket, PathBuf::from("/tmp/vrift.sock"));
+        assert_eq!(config.daemon.lock_timeout_secs, 30);
+        assert!(!config.daemon.debug);
     }
 
     #[test]

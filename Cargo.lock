@@ -2024,6 +2024,7 @@ dependencies = [
 name = "vrift-config"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dirs 5.0.1",
  "once_cell",
  "serde",
