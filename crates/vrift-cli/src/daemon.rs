@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use vrift_config::path::{normalize_nonexistent, normalize_or_original};
 use vrift_ipc::{VeloRequest, VeloResponse, PROTOCOL_VERSION};
@@ -216,28 +215,16 @@ fn spawn_daemon() -> Result<()> {
     Ok(())
 }
 
-pub async fn send_request(stream: &mut UnixStream, req: VeloRequest) -> Result<()> {
+pub async fn send_request(stream: &mut UnixStream, req: VeloRequest) -> Result<u16> {
     tracing::debug!("Sending request: {:?}", req);
-    let bytes = bincode::serialize(&req)?;
-    let len = (bytes.len() as u32).to_le_bytes();
-    stream.write_all(&len).await?;
-    stream.write_all(&bytes).await?;
-    Ok(())
+    let seq_id = vrift_ipc::frame_async::send_request(stream, &req).await?;
+    Ok(seq_id)
 }
 
 pub async fn read_response(stream: &mut UnixStream) -> Result<VeloResponse> {
-    tracing::debug!("[CLI] Waiting for response length...");
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    tracing::debug!("[CLI] Response length: {} bytes", len);
-
-    let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf).await?;
-    tracing::debug!("[CLI] Response body received");
-
-    let resp: VeloResponse = bincode::deserialize(&buf)?;
-    tracing::debug!("[CLI] Response deserialized: {:?}", resp);
+    tracing::debug!("[CLI] Waiting for response...");
+    let (header, resp) = vrift_ipc::frame_async::read_response(stream).await?;
+    tracing::debug!("[CLI] Response received, seq_id={}", header.seq_id);
     Ok(resp)
 }
 

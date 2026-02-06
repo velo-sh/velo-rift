@@ -312,31 +312,52 @@ pub(crate) unsafe fn sync_ipc_manifest_get(
     }
 }
 
-// Helper: send request on existing FD
+// Helper: send request on existing FD (v3 frame protocol)
 unsafe fn send_request_on_fd(fd: libc::c_int, request: &vrift_ipc::VeloRequest) -> bool {
-    let req_bytes = match bincode::serialize(request) {
+    use vrift_ipc::{next_seq_id, IpcHeader};
+
+    let payload = match bincode::serialize(request) {
         Ok(b) => b,
         Err(_) => return false,
     };
-    let len_bytes = (req_bytes.len() as u32).to_le_bytes();
-    raw_write_all(fd, &len_bytes) && raw_write_all(fd, &req_bytes)
+
+    if payload.len() > vrift_ipc::IpcHeader::MAX_LENGTH {
+        return false;
+    }
+
+    let seq_id = next_seq_id();
+    let header = IpcHeader::new_request(payload.len() as u16, seq_id);
+
+    raw_write_all(fd, &header.to_bytes()) && raw_write_all(fd, &payload)
 }
 
-// Helper: receive response on existing FD
+// Helper: receive response on existing FD (v3 frame protocol)
 unsafe fn recv_response_on_fd(fd: libc::c_int) -> Option<vrift_ipc::VeloResponse> {
-    let mut resp_len_buf = [0u8; 4];
-    if !raw_read_exact(fd, &mut resp_len_buf) {
+    use vrift_ipc::IpcHeader;
+
+    // Read header
+    let mut header_buf = [0u8; IpcHeader::SIZE];
+    if !raw_read_exact(fd, &mut header_buf) {
         return None;
     }
-    let resp_len = u32::from_le_bytes(resp_len_buf) as usize;
-    if resp_len > 1024 * 1024 {
-        return None; // Sanity limit
-    }
-    let mut resp_buf = vec![0u8; resp_len];
-    if !raw_read_exact(fd, &mut resp_buf) {
+
+    let header = IpcHeader::from_bytes(&header_buf);
+    if !header.is_valid() {
         return None;
     }
-    bincode::deserialize(&resp_buf).ok()
+
+    // Sanity check
+    if header.length as usize > 1024 * 1024 {
+        return None;
+    }
+
+    // Read payload
+    let mut payload = vec![0u8; header.length as usize];
+    if !raw_read_exact(fd, &mut payload) {
+        return None;
+    }
+
+    bincode::deserialize(&payload).ok()
 }
 
 /// Query directory listing from daemon

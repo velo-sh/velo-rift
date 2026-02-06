@@ -1347,30 +1347,49 @@ impl ShimState {
     }
 
     fn rpc(&self, request: &vrift_ipc::VeloRequest) -> Option<vrift_ipc::VeloResponse> {
+        use vrift_ipc::{next_seq_id, IpcHeader};
+
         unsafe {
             let fd = raw_unix_connect(&self.socket_path);
             if fd < 0 {
                 return None;
             }
-            // Serialize and send
-            let req_bytes = bincode::serialize(request).ok()?;
-            let len_bytes = (req_bytes.len() as u32).to_le_bytes();
-            if !raw_write_all(fd, &len_bytes) || !raw_write_all(fd, &req_bytes) {
+
+            // Serialize payload
+            let payload = bincode::serialize(request).ok()?;
+            if payload.len() > vrift_ipc::IpcHeader::MAX_LENGTH {
                 libc::close(fd);
                 return None;
             }
-            // Read response
-            let mut resp_len_buf = [0u8; 4];
-            if !raw_read_exact(fd, &mut resp_len_buf) {
+
+            // Send request frame
+            let seq_id = next_seq_id();
+            let header = IpcHeader::new_request(payload.len() as u16, seq_id);
+            if !raw_write_all(fd, &header.to_bytes()) || !raw_write_all(fd, &payload) {
                 libc::close(fd);
                 return None;
             }
-            let resp_len = u32::from_le_bytes(resp_len_buf) as usize;
-            let mut resp_buf = vec![0u8; resp_len];
+
+            // Read response header
+            let mut header_buf = [0u8; IpcHeader::SIZE];
+            if !raw_read_exact(fd, &mut header_buf) {
+                libc::close(fd);
+                return None;
+            }
+
+            let resp_header = IpcHeader::from_bytes(&header_buf);
+            if !resp_header.is_valid() {
+                libc::close(fd);
+                return None;
+            }
+
+            // Read response payload
+            let mut resp_buf = vec![0u8; resp_header.length as usize];
             if !raw_read_exact(fd, &mut resp_buf) {
                 libc::close(fd);
                 return None;
             }
+
             libc::close(fd);
             bincode::deserialize(&resp_buf).ok()
         }

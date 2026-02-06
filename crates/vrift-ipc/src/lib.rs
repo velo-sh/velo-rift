@@ -3,10 +3,376 @@ use serde::{Deserialize, Serialize};
 /// IPC Protocol Version - bump when making breaking changes
 /// v1: Initial protocol with basic requests
 /// v2: Added IngestFullScan, RegisterWorkspace (current)
-pub const PROTOCOL_VERSION: u32 = 2;
+/// v3: New wire format with IpcHeader (magic + request ID)
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Minimum protocol version this server supports
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
+
+// ============================================================================
+// IPC Wire Format (v3+)
+// ============================================================================
+
+/// Magic number for IPC frames: "VR" (Vrift)
+pub const IPC_MAGIC: [u8; 2] = *b"VR";
+
+/// Frame types for IPC protocol (stored in high 4 bits of type_ver byte)
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameType {
+    /// Request from client to server
+    Request = 0,
+    /// Response from server to client
+    Response = 1,
+    /// Heartbeat/keepalive
+    Heartbeat = 2,
+}
+
+impl TryFrom<u8> for FrameType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(FrameType::Request),
+            1 => Ok(FrameType::Response),
+            2 => Ok(FrameType::Heartbeat),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Compact IPC Frame Header (8 bytes)
+///
+/// Wire format:
+/// ```text
+/// ┌──────────┬────────────┬─────────┬──────────┬──────────┐
+/// │Magic (2B)│Type+Ver(1B)│Flags(1B)│Length(2B)│ SeqID(2B)│
+/// │  "VR"    │ hi4=type   │reserved │ LE u16   │ LE u16   │
+/// │          │ lo4=version│         │ max 64KB │ 0-65535  │
+/// └──────────┴────────────┴─────────┴──────────┴──────────┘
+/// ```
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IpcHeader {
+    /// Magic number: "VR"
+    pub magic: [u8; 2],
+    /// Type (high 4 bits) + Protocol Version (low 4 bits)
+    pub type_ver: u8,
+    /// Flags (reserved for future use)
+    pub flags: u8,
+    /// Payload length in bytes (max 65535)
+    pub length: u16,
+    /// Sequence ID for tracing and request-response matching
+    pub seq_id: u16,
+}
+
+impl IpcHeader {
+    /// Size of the header in bytes
+    pub const SIZE: usize = 8;
+
+    /// Maximum payload length (64KB - 1)
+    pub const MAX_LENGTH: usize = 65535;
+
+    /// Create a new request header
+    pub fn new_request(length: u16, seq_id: u16) -> Self {
+        Self {
+            magic: IPC_MAGIC,
+            type_ver: ((FrameType::Request as u8) << 4) | (PROTOCOL_VERSION as u8 & 0x0F),
+            flags: 0,
+            length,
+            seq_id,
+        }
+    }
+
+    /// Create a new response header
+    pub fn new_response(length: u16, seq_id: u16) -> Self {
+        Self {
+            magic: IPC_MAGIC,
+            type_ver: ((FrameType::Response as u8) << 4) | (PROTOCOL_VERSION as u8 & 0x0F),
+            flags: 0,
+            length,
+            seq_id,
+        }
+    }
+
+    /// Create a heartbeat header
+    pub fn new_heartbeat(seq_id: u16) -> Self {
+        Self {
+            magic: IPC_MAGIC,
+            type_ver: ((FrameType::Heartbeat as u8) << 4) | (PROTOCOL_VERSION as u8 & 0x0F),
+            flags: 0,
+            length: 0,
+            seq_id,
+        }
+    }
+
+    /// Validate the header magic
+    pub fn is_valid(&self) -> bool {
+        self.magic == IPC_MAGIC
+    }
+
+    /// Get frame type from high 4 bits
+    pub fn frame_type(&self) -> Option<FrameType> {
+        FrameType::try_from(self.type_ver >> 4).ok()
+    }
+
+    /// Get protocol version from low 4 bits
+    pub fn version(&self) -> u8 {
+        self.type_ver & 0x0F
+    }
+
+    /// Serialize header to bytes
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut bytes = [0u8; Self::SIZE];
+        bytes[0..2].copy_from_slice(&self.magic);
+        bytes[2] = self.type_ver;
+        bytes[3] = self.flags;
+        bytes[4..6].copy_from_slice(&self.length.to_le_bytes());
+        bytes[6..8].copy_from_slice(&self.seq_id.to_le_bytes());
+        bytes
+    }
+
+    /// Deserialize header from bytes
+    pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
+        Self {
+            magic: [bytes[0], bytes[1]],
+            type_ver: bytes[2],
+            flags: bytes[3],
+            length: u16::from_le_bytes([bytes[4], bytes[5]]),
+            seq_id: u16::from_le_bytes([bytes[6], bytes[7]]),
+        }
+    }
+}
+
+// ============================================================================
+// Frame IO Helpers (v3+ wire format)
+// ============================================================================
+
+use std::sync::atomic::{AtomicU16, Ordering};
+
+/// Global sequence ID counter for request tracing
+static NEXT_SEQ_ID: AtomicU16 = AtomicU16::new(1);
+
+/// Get next sequence ID (thread-safe, wraps at 65535)
+pub fn next_seq_id() -> u16 {
+    NEXT_SEQ_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Synchronous frame IO (for vrift-shim and blocking contexts)
+pub mod frame_sync {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// Send a request frame (header + bincode payload)
+    pub fn send_request<W: Write>(writer: &mut W, request: &VeloRequest) -> std::io::Result<u16> {
+        let payload = bincode::serialize(request)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        if payload.len() > IpcHeader::MAX_LENGTH {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "payload too large: {} > {}",
+                    payload.len(),
+                    IpcHeader::MAX_LENGTH
+                ),
+            ));
+        }
+
+        let seq_id = next_seq_id();
+        let header = IpcHeader::new_request(payload.len() as u16, seq_id);
+
+        writer.write_all(&header.to_bytes())?;
+        writer.write_all(&payload)?;
+        writer.flush()?;
+
+        Ok(seq_id)
+    }
+
+    /// Send a response frame
+    pub fn send_response<W: Write>(
+        writer: &mut W,
+        response: &VeloResponse,
+        seq_id: u16,
+    ) -> std::io::Result<()> {
+        let payload = bincode::serialize(response)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        if payload.len() > IpcHeader::MAX_LENGTH {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "payload too large: {} > {}",
+                    payload.len(),
+                    IpcHeader::MAX_LENGTH
+                ),
+            ));
+        }
+
+        let header = IpcHeader::new_response(payload.len() as u16, seq_id);
+
+        writer.write_all(&header.to_bytes())?;
+        writer.write_all(&payload)?;
+        writer.flush()?;
+
+        Ok(())
+    }
+
+    /// Read a frame header
+    pub fn read_header<R: Read>(reader: &mut R) -> std::io::Result<IpcHeader> {
+        let mut buf = [0u8; IpcHeader::SIZE];
+        reader.read_exact(&mut buf)?;
+
+        let header = IpcHeader::from_bytes(&buf);
+        if !header.is_valid() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid IPC magic",
+            ));
+        }
+
+        Ok(header)
+    }
+
+    /// Read frame payload and deserialize as request
+    pub fn read_request<R: Read>(reader: &mut R) -> std::io::Result<(IpcHeader, VeloRequest)> {
+        let header = read_header(reader)?;
+
+        let mut payload = vec![0u8; header.length as usize];
+        reader.read_exact(&mut payload)?;
+
+        let request: VeloRequest = bincode::deserialize(&payload)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        Ok((header, request))
+    }
+
+    /// Read frame payload and deserialize as response
+    pub fn read_response<R: Read>(reader: &mut R) -> std::io::Result<(IpcHeader, VeloResponse)> {
+        let header = read_header(reader)?;
+
+        let mut payload = vec![0u8; header.length as usize];
+        reader.read_exact(&mut payload)?;
+
+        let response: VeloResponse = bincode::deserialize(&payload)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        Ok((header, response))
+    }
+}
+
+/// Async frame IO (for daemon and CLI with tokio)
+#[cfg(feature = "tokio")]
+pub mod frame_async {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Send a request frame (header + bincode payload)
+    pub async fn send_request<W: AsyncWriteExt + Unpin>(
+        writer: &mut W,
+        request: &VeloRequest,
+    ) -> std::io::Result<u16> {
+        let payload = bincode::serialize(request)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        if payload.len() > IpcHeader::MAX_LENGTH {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "payload too large: {} > {}",
+                    payload.len(),
+                    IpcHeader::MAX_LENGTH
+                ),
+            ));
+        }
+
+        let seq_id = next_seq_id();
+        let header = IpcHeader::new_request(payload.len() as u16, seq_id);
+
+        writer.write_all(&header.to_bytes()).await?;
+        writer.write_all(&payload).await?;
+        writer.flush().await?;
+
+        Ok(seq_id)
+    }
+
+    /// Send a response frame
+    pub async fn send_response<W: AsyncWriteExt + Unpin>(
+        writer: &mut W,
+        response: &VeloResponse,
+        seq_id: u16,
+    ) -> std::io::Result<()> {
+        let payload = bincode::serialize(response)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        if payload.len() > IpcHeader::MAX_LENGTH {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "payload too large: {} > {}",
+                    payload.len(),
+                    IpcHeader::MAX_LENGTH
+                ),
+            ));
+        }
+
+        let header = IpcHeader::new_response(payload.len() as u16, seq_id);
+
+        writer.write_all(&header.to_bytes()).await?;
+        writer.write_all(&payload).await?;
+        writer.flush().await?;
+
+        Ok(())
+    }
+
+    /// Read a frame header
+    pub async fn read_header<R: AsyncReadExt + Unpin>(
+        reader: &mut R,
+    ) -> std::io::Result<IpcHeader> {
+        let mut buf = [0u8; IpcHeader::SIZE];
+        reader.read_exact(&mut buf).await?;
+
+        let header = IpcHeader::from_bytes(&buf);
+        if !header.is_valid() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid IPC magic",
+            ));
+        }
+
+        Ok(header)
+    }
+
+    /// Read frame payload and deserialize as request
+    pub async fn read_request<R: AsyncReadExt + Unpin>(
+        reader: &mut R,
+    ) -> std::io::Result<(IpcHeader, VeloRequest)> {
+        let header = read_header(reader).await?;
+
+        let mut payload = vec![0u8; header.length as usize];
+        reader.read_exact(&mut payload).await?;
+
+        let request: VeloRequest = bincode::deserialize(&payload)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        Ok((header, request))
+    }
+
+    /// Read frame payload and deserialize as response
+    pub async fn read_response<R: AsyncReadExt + Unpin>(
+        reader: &mut R,
+    ) -> std::io::Result<(IpcHeader, VeloResponse)> {
+        let header = read_header(reader).await?;
+
+        let mut payload = vec![0u8; header.length as usize];
+        reader.read_exact(&mut payload).await?;
+
+        let response: VeloResponse = bincode::deserialize(&payload)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        Ok((header, response))
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum VeloRequest {
@@ -197,8 +563,16 @@ fn default_compatible() -> bool {
 }
 
 /// Check if a protocol version is compatible with this build
+/// Note: protocol_version=0 is treated as v1 for backwards compatibility
+/// (legacy clients without the protocol_version field default to 0 via serde)
 pub fn is_version_compatible(client_version: u32) -> bool {
-    (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&client_version)
+    // Treat 0 as v1 (legacy clients without protocol_version field)
+    let effective = if client_version == 0 {
+        1
+    } else {
+        client_version
+    };
+    (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&effective)
 }
 
 pub fn default_socket_path() -> &'static str {
@@ -612,7 +986,6 @@ pub fn is_daemon_running() -> bool {
 pub mod client {
     use super::*;
     use std::path::Path;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
     pub struct DaemonClient {
@@ -631,27 +1004,25 @@ pub mod client {
             Ok(Self { stream })
         }
 
-        /// Send a request and receive response
+        /// Send a request and receive response using v3 frame protocol
         pub async fn send(&mut self, request: VeloRequest) -> anyhow::Result<VeloResponse> {
-            // Serialize request
-            let req_bytes = bincode::serialize(&request)?;
-            let req_len = (req_bytes.len() as u32).to_le_bytes();
+            use crate::frame_async;
 
-            // Send length + payload
-            self.stream.write_all(&req_len).await?;
-            self.stream.write_all(&req_bytes).await?;
+            // Send request frame
+            let seq_id = frame_async::send_request(&mut self.stream, &request).await?;
 
-            // Read response length
-            let mut len_buf = [0u8; 4];
-            self.stream.read_exact(&mut len_buf).await?;
-            let resp_len = u32::from_le_bytes(len_buf) as usize;
+            // Read response frame
+            let (header, response) = frame_async::read_response(&mut self.stream).await?;
 
-            // Read response payload
-            let mut resp_buf = vec![0u8; resp_len];
-            self.stream.read_exact(&mut resp_buf).await?;
+            // Verify seq_id matches (optional but good for debugging)
+            if header.seq_id != seq_id {
+                anyhow::bail!(
+                    "Response seq_id mismatch: expected {}, got {}",
+                    seq_id,
+                    header.seq_id
+                );
+            }
 
-            // Deserialize response
-            let response = bincode::deserialize(&resp_buf)?;
             Ok(response)
         }
 
@@ -716,5 +1087,109 @@ mod tests {
         let path = default_socket_path();
         assert!(!path.is_empty());
         assert!(path.ends_with(".sock"));
+    }
+
+    #[test]
+    fn test_ipc_header_size() {
+        // Verify header is exactly 8 bytes
+        assert_eq!(IpcHeader::SIZE, 8);
+        assert_eq!(std::mem::size_of::<IpcHeader>(), 8);
+    }
+
+    #[test]
+    fn test_ipc_header_roundtrip() {
+        let header = IpcHeader::new_request(1234, 42);
+        let bytes = header.to_bytes();
+        let decoded = IpcHeader::from_bytes(&bytes);
+
+        assert_eq!(decoded.magic, IPC_MAGIC);
+        assert_eq!(decoded.length, 1234);
+        assert_eq!(decoded.frame_type(), Some(FrameType::Request));
+        assert_eq!(decoded.seq_id, 42);
+        assert_eq!(decoded.version(), PROTOCOL_VERSION as u8);
+        assert!(decoded.is_valid());
+    }
+
+    #[test]
+    fn test_ipc_header_types() {
+        let req = IpcHeader::new_request(100, 1);
+        assert_eq!(req.frame_type(), Some(FrameType::Request));
+        assert_eq!(req.version(), 3); // PROTOCOL_VERSION
+
+        let resp = IpcHeader::new_response(200, 2);
+        assert_eq!(resp.frame_type(), Some(FrameType::Response));
+
+        let hb = IpcHeader::new_heartbeat(3);
+        assert_eq!(hb.frame_type(), Some(FrameType::Heartbeat));
+        assert_eq!(hb.length, 0);
+    }
+
+    #[test]
+    fn test_ipc_header_invalid_magic() {
+        let mut bytes = IpcHeader::new_request(100, 1).to_bytes();
+        bytes[0] = b'X'; // corrupt magic
+        let decoded = IpcHeader::from_bytes(&bytes);
+        assert!(!decoded.is_valid());
+    }
+
+    #[test]
+    fn test_ipc_header_max_length() {
+        // Test max payload length (64KB - 1)
+        let header = IpcHeader::new_request(65535, 0);
+        assert_eq!(header.length, 65535);
+        assert_eq!(IpcHeader::MAX_LENGTH, 65535);
+    }
+
+    #[test]
+    fn test_version_compatibility() {
+        // v0 should be treated as v1 (legacy)
+        assert!(is_version_compatible(0));
+        // v1 is supported
+        assert!(is_version_compatible(1));
+        // v2 is supported
+        assert!(is_version_compatible(2));
+        // v3 is current
+        assert!(is_version_compatible(3));
+        // v4 is not yet supported
+        assert!(!is_version_compatible(4));
+        // Very high version not supported
+        assert!(!is_version_compatible(100));
+    }
+
+    #[test]
+    fn test_frame_sync_roundtrip() {
+        use crate::frame_sync;
+        use std::io::Cursor;
+
+        // Test request roundtrip
+        let request = VeloRequest::Status;
+        let mut buf = Vec::new();
+        let seq_id = frame_sync::send_request(&mut buf, &request).unwrap();
+
+        let mut cursor = Cursor::new(&buf);
+        let (header, decoded) = frame_sync::read_request(&mut cursor).unwrap();
+
+        assert_eq!(header.seq_id, seq_id);
+        assert_eq!(header.frame_type(), Some(FrameType::Request));
+        assert!(matches!(decoded, VeloRequest::Status));
+    }
+
+    #[test]
+    fn test_frame_sync_response_roundtrip() {
+        use crate::frame_sync;
+        use std::io::Cursor;
+
+        let response = VeloResponse::StatusAck {
+            status: "OK".to_string(),
+        };
+        let mut buf = Vec::new();
+        frame_sync::send_response(&mut buf, &response, 42).unwrap();
+
+        let mut cursor = Cursor::new(&buf);
+        let (header, decoded) = frame_sync::read_response(&mut cursor).unwrap();
+
+        assert_eq!(header.seq_id, 42);
+        assert_eq!(header.frame_type(), Some(FrameType::Response));
+        assert!(matches!(decoded, VeloResponse::StatusAck { .. }));
     }
 }

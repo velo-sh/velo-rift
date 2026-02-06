@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use tokio::net::{UnixListener, UnixStream};
 use vrift_ipc::{VeloRequest, VeloResponse};
 use vrift_manifest::lmdb::{AssetTier, LmdbManifest};
@@ -77,8 +77,6 @@ fn load_registered_workspaces() -> Vec<PathBuf> {
 }
 
 use vrift_ipc::{bloom_hashes, BLOOM_SIZE};
-
-const MAX_IPC_SIZE: usize = 16 * 1024 * 1024; // 16 MB max to prevent DoS
 
 #[derive(Debug, Clone, Copy)]
 struct PeerCredentials {
@@ -465,53 +463,46 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
 
     loop {
         tracing::debug!("[DAEMON] Waiting for request...");
-        let mut len_buf = [0u8; 4];
-        if stream.read_exact(&mut len_buf).await.is_err() {
-            tracing::debug!("[DAEMON] Connection closed (read length failed)");
-            return;
-        }
-        let len = u32::from_le_bytes(len_buf) as usize;
-        tracing::debug!("[DAEMON] Request length: {} bytes", len);
 
-        if len > MAX_IPC_SIZE {
-            tracing::warn!("[DAEMON] IPC message too large: {} bytes", len);
-            return;
-        }
-
-        let mut buf = vec![0u8; len];
-        if stream.read_exact(&mut buf).await.is_err() {
-            tracing::debug!("[DAEMON] Connection closed (read body failed)");
-            return;
-        }
-        tracing::debug!("[DAEMON] Request body received");
-
-        let response = match bincode::deserialize::<VeloRequest>(&buf) {
-            Ok(req) => {
-                tracing::info!(
-                    "[DAEMON] Processing request: {:?}",
-                    std::mem::discriminant(&req)
-                );
-                let resp =
-                    handle_request(req, &state, peer_creds, daemon_uid, &mut current_workspace)
-                        .await;
-                tracing::info!(
-                    "[DAEMON] Request processed, response: {:?}",
-                    std::mem::discriminant(&resp)
-                );
-                resp
+        // Read request using v3 frame protocol
+        let (header, req) = match vrift_ipc::frame_async::read_request(&mut stream).await {
+            Ok(result) => result,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                tracing::debug!("[DAEMON] Connection closed (EOF)");
+                return;
             }
-            Err(e) => VeloResponse::Error(format!("Invalid request: {}", e)),
+            Err(e) => {
+                tracing::warn!("[DAEMON] Failed to read request: {}", e);
+                return;
+            }
         };
 
-        tracing::debug!("[DAEMON] Sending response...");
-        let resp_bytes = bincode::serialize(&response).unwrap();
-        let resp_len = (resp_bytes.len() as u32).to_le_bytes();
-        if stream.write_all(&resp_len).await.is_err() {
-            tracing::debug!("[DAEMON] Connection closed (write length failed)");
-            return;
-        }
-        if stream.write_all(&resp_bytes).await.is_err() {
-            tracing::debug!("[DAEMON] Connection closed (write body failed)");
+        let seq_id = header.seq_id;
+        tracing::debug!(
+            "[DAEMON] Request received: seq_id={}, len={}",
+            seq_id,
+            header.length
+        );
+
+        let response = {
+            tracing::info!(
+                "[DAEMON] Processing request: {:?}",
+                std::mem::discriminant(&req)
+            );
+            let resp =
+                handle_request(req, &state, peer_creds, daemon_uid, &mut current_workspace).await;
+            tracing::info!(
+                "[DAEMON] Request processed, response: {:?}",
+                std::mem::discriminant(&resp)
+            );
+            resp
+        };
+
+        // Send response using v3 frame protocol
+        tracing::debug!("[DAEMON] Sending response (seq_id={})...", seq_id);
+        if let Err(e) = vrift_ipc::frame_async::send_response(&mut stream, &response, seq_id).await
+        {
+            tracing::warn!("[DAEMON] Failed to send response: {}", e);
             return;
         }
         tracing::debug!("[DAEMON] Response sent successfully");
