@@ -88,7 +88,17 @@ setup_workspace() {
     
     "$VRIFTD_BIN" start &
     DAEMON_PID=$!
-    sleep 2
+    
+    # Wait for daemon with timeout (max 10s)
+    local waited=0
+    while [ ! -S /tmp/vrift.sock ] && [ $waited -lt 10 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    
+    if [ ! -S /tmp/vrift.sock ]; then
+        echo "⚠️ Daemon socket not ready after 10s, continuing anyway..."
+    fi
 }
 
 # ============================================================================

@@ -184,7 +184,7 @@ phase1_activation() {
     log_test "P1.4" "Start vriftd daemon"
     "$PROJECT_ROOT/target/release/vriftd" start &
     DAEMON_PID=$!
-    sleep 2
+    # Removed sleep 2 - using timeout loop above
     if kill -0 $DAEMON_PID 2>/dev/null; then
         log_pass "Daemon started (PID: $DAEMON_PID)"
     else

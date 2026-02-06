@@ -590,8 +590,16 @@ test_vfs_cargo() {
     "$VRIFT_CLI" ingest --mode solid --tier tier1 --output .vrift/manifest.lmdb src Cargo.toml 2>/dev/null || true
     
     "$VRIFTD_BIN" start &
+    
+    # Wait for daemon with timeout (max 10s)
+    local waited=0
+    while [ ! -S /tmp/vrift.sock ] && [ $waited -lt 10 ]; do
+        sleep 1
+        waited=$(($waited + 1))
+    done
+    sleep 0.5
     DAEMON_PID=$!
-    sleep 2
+    # Removed sleep 2 - using timeout loop above
     
     log_test "VFS.1" "cargo build with shim injected"
     export VRIFT_PROJECT_ROOT="$TEST_WORKSPACE"

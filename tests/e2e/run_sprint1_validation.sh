@@ -27,8 +27,9 @@ SKIPPED=0
 run_test() {
     local test_name=$1
     local test_script=$2
+    local timeout_secs=${3:-120}  # Default 120s timeout
     
-    echo -e "${YELLOW}━━━ Running: $test_name ━━━${NC}"
+    echo -e "${YELLOW}━━━ Running: $test_name (timeout: ${timeout_secs}s) ━━━${NC}"
     
     if [ ! -f "$test_script" ]; then
         echo -e "${YELLOW}SKIP: $test_script not found${NC}"
@@ -38,11 +39,17 @@ run_test() {
     
     chmod +x "$test_script"
     
-    if "$test_script"; then
+    # Use perl alarm for cross-platform timeout (works on macOS and Linux)
+    if perl -e "alarm $timeout_secs; exec @ARGV" "$test_script"; then
         echo -e "${GREEN}✓ $test_name: PASSED${NC}"
         ((PASSED++))
     else
-        echo -e "${RED}✗ $test_name: FAILED${NC}"
+        local exit_code=$?
+        if [ $exit_code -eq 142 ]; then
+            echo -e "${RED}✗ $test_name: TIMEOUT (${timeout_secs}s)${NC}"
+        else
+            echo -e "${RED}✗ $test_name: FAILED (exit $exit_code)${NC}"
+        fi
         ((FAILED++))
     fi
     echo ""
