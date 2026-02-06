@@ -73,7 +73,7 @@ impl CommandHandler {
             // Not yet implemented - forward to future handlers
             _ => {
                 warn!(?request, "Unhandled request type");
-                VeloResponse::Error("Not implemented".to_string())
+                VeloResponse::Error("Not implemented".into())
             }
         }
     }
@@ -117,7 +117,7 @@ impl CommandHandler {
             }
             Err(e) => {
                 error!(error = %e, path = %path, "Upsert failed");
-                VeloResponse::Error(e.to_string())
+                VeloResponse::Error(format!("{}", e).into())
             }
         }
     }
@@ -143,7 +143,7 @@ impl CommandHandler {
             Ok(c) => c,
             Err(e) => {
                 error!(error = %e, temp = %temp_path, "Failed to read temp file");
-                return VeloResponse::Error(format!("Read error: {}", e));
+                return VeloResponse::Error(format!("Read error: {}", e).into());
             }
         };
 
@@ -161,14 +161,14 @@ impl CommandHandler {
         // 3. Ingest to CAS (try reflink, fallback to copy)
         if let Err(e) = self.ingest_to_cas(&temp, &cas_path, &content).await {
             error!(error = %e, "CAS ingestion failed");
-            return VeloResponse::Error(format!("Ingest error: {}", e));
+            return VeloResponse::Error(format!("Ingest error: {}", e).into());
         }
 
         // 4. Get metadata
         let meta = match fs::metadata(&temp) {
             Ok(m) => m,
             Err(e) => {
-                return VeloResponse::Error(format!("Metadata error: {}", e));
+                return VeloResponse::Error(format!("Metadata error: {}", e).into());
             }
         };
 
@@ -185,7 +185,7 @@ impl CommandHandler {
         };
 
         if let Err(e) = self.vdir.upsert(entry) {
-            return VeloResponse::Error(format!("VDir update error: {}", e));
+            return VeloResponse::Error(format!("VDir update error: {}", e).into());
         }
 
         // 6. Cleanup temp file
@@ -322,7 +322,7 @@ impl CommandHandler {
         // 5. Build and write manifest (using vrift_manifest if available)
         // For now, just write a simple binary manifest
         if let Err(e) = self.write_manifest(&manifest_out, &file_paths, &results) {
-            return VeloResponse::Error(format!("Failed to write manifest: {}", e));
+            return VeloResponse::Error(format!("Failed to write manifest: {}", e).into());
         }
 
         info!(
@@ -692,8 +692,8 @@ mod tests {
             .await;
 
         match response {
-            VeloResponse::Error(msg) => {
-                assert!(msg.contains("Read error"));
+            VeloResponse::Error(err) => {
+                assert!(err.message.contains("Read error"));
             }
             _ => panic!("Expected Error for nonexistent file"),
         }
@@ -711,8 +711,8 @@ mod tests {
             .await;
 
         match response {
-            VeloResponse::Error(msg) => {
-                assert!(msg.contains("Not implemented"));
+            VeloResponse::Error(err) => {
+                assert!(err.message.contains("Not implemented"));
             }
             _ => panic!("Expected Not implemented error"),
         }

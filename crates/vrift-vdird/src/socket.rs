@@ -71,7 +71,7 @@ async fn handle_client(mut stream: UnixStream, handler: Arc<RwLock<CommandHandle
             Ok(req) => req,
             Err(e) => {
                 warn!(error = %e, "Failed to deserialize request");
-                let response = VeloResponse::Error(format!("Deserialize error: {}", e));
+                let response = VeloResponse::Error(format!("Deserialize error: {}", e).into());
                 send_response(&mut stream, &response).await?;
                 continue;
             }

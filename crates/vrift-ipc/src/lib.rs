@@ -573,6 +573,122 @@ impl VnodeEntry {
     }
 }
 
+// ============================================================================
+// Structured Error Types (Phase 3: IPC Error Semantics)
+// ============================================================================
+
+/// Error categories for IPC responses
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VeloErrorKind {
+    /// Resource not found (file, entry, workspace)
+    NotFound,
+    /// Permission denied (UID mismatch, access control)
+    PermissionDenied,
+    /// Invalid path (traversal, malformed)
+    InvalidPath,
+    /// Workspace not registered
+    WorkspaceNotRegistered,
+    /// Ingest operation failed
+    IngestFailed,
+    /// I/O error (disk, network)
+    IoError,
+    /// Lock acquisition failed (EWOULDBLOCK)
+    LockFailed,
+    /// Internal server error
+    Internal,
+}
+
+/// Structured error for IPC responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VeloError {
+    /// Error category
+    pub kind: VeloErrorKind,
+    /// Human-readable error message
+    pub message: String,
+    /// Optional path associated with the error
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl VeloError {
+    /// Create a new error
+    pub fn new(kind: VeloErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            path: None,
+        }
+    }
+
+    /// Create error with associated path
+    pub fn with_path(
+        kind: VeloErrorKind,
+        message: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            path: Some(path.into()),
+        }
+    }
+
+    // Convenience constructors for common errors
+
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new(VeloErrorKind::NotFound, message)
+    }
+
+    pub fn permission_denied(message: impl Into<String>) -> Self {
+        Self::new(VeloErrorKind::PermissionDenied, message)
+    }
+
+    pub fn invalid_path(message: impl Into<String>) -> Self {
+        Self::new(VeloErrorKind::InvalidPath, message)
+    }
+
+    pub fn workspace_not_registered() -> Self {
+        Self::new(
+            VeloErrorKind::WorkspaceNotRegistered,
+            "Workspace not registered",
+        )
+    }
+
+    pub fn io_error(message: impl Into<String>) -> Self {
+        Self::new(VeloErrorKind::IoError, message)
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(VeloErrorKind::Internal, message)
+    }
+}
+
+impl std::fmt::Display for VeloError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(path) = &self.path {
+            write!(f, "{:?}: {} (path: {})", self.kind, self.message, path)
+        } else {
+            write!(f, "{:?}: {}", self.kind, self.message)
+        }
+    }
+}
+
+impl std::error::Error for VeloError {}
+
+/// Allow creating VeloError from String for easy migration
+impl From<String> for VeloError {
+    fn from(message: String) -> Self {
+        Self::internal(message)
+    }
+}
+
+/// Allow creating VeloError from &str for easy migration
+impl From<&str> for VeloError {
+    fn from(message: &str) -> Self {
+        Self::internal(message)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum VeloResponse {
     HandshakeAck {
@@ -627,7 +743,8 @@ pub enum VeloResponse {
         /// Manifest path
         manifest_path: String,
     },
-    Error(String),
+    /// Structured error response (Phase 3: replaces Error(String))
+    Error(VeloError),
 }
 
 /// Check if a protocol version is compatible with this build
