@@ -129,6 +129,16 @@ impl Config {
         if std::env::var("VRIFT_DEBUG").is_ok() {
             self.daemon.debug = true;
         }
+        // New path overrides
+        if let Ok(mmap) = std::env::var("VRIFT_MMAP_PATH") {
+            self.daemon.mmap_path = PathBuf::from(mmap);
+        }
+        if let Ok(cow) = std::env::var("VRIFT_COW_TEMP_DIR") {
+            self.daemon.cow_temp_dir = PathBuf::from(cow);
+        }
+        if let Ok(log) = std::env::var("VRIFT_LOG_DIR") {
+            self.daemon.log_dir = PathBuf::from(log);
+        }
     }
 
     /// Generate default config TOML string
@@ -161,6 +171,21 @@ impl Config {
     /// Check if debug mode is enabled
     pub fn debug_mode(&self) -> bool {
         self.daemon.debug
+    }
+
+    /// Get manifest mmap path for hot stat cache (RFC-0044)
+    pub fn mmap_path(&self) -> &Path {
+        &self.daemon.mmap_path
+    }
+
+    /// Get CoW temporary file directory
+    pub fn cow_temp_dir(&self) -> &Path {
+        &self.daemon.cow_temp_dir
+    }
+
+    /// Get log directory for daemon and shim
+    pub fn log_dir(&self) -> &Path {
+        &self.daemon.log_dir
     }
 }
 
@@ -305,6 +330,12 @@ pub struct DaemonConfig {
     pub enabled: bool,
     /// Enable debug mode
     pub debug: bool,
+    /// Manifest mmap path for hot stat cache (RFC-0044)
+    pub mmap_path: PathBuf,
+    /// CoW temporary file directory for shim
+    pub cow_temp_dir: PathBuf,
+    /// Log directory for daemon and shim
+    pub log_dir: PathBuf,
 }
 
 impl Default for DaemonConfig {
@@ -317,6 +348,9 @@ impl Default for DaemonConfig {
             lock_timeout_secs: 30,
             enabled: false,
             debug: false,
+            mmap_path: PathBuf::from("/tmp/vrift-manifest.mmap"),
+            cow_temp_dir: PathBuf::from("/tmp"),
+            log_dir: PathBuf::from("/tmp"),
         }
     }
 }

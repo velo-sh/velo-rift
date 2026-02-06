@@ -635,8 +635,13 @@ pub fn is_version_compatible(client_version: u32) -> bool {
     (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&client_version)
 }
 
-pub fn default_socket_path() -> &'static str {
-    "/tmp/vrift.sock"
+/// Default socket path (internal fallback for DaemonClient)
+/// Prefer using vrift_config::config().socket_path() when available
+const DEFAULT_SOCKET_PATH: &str = "/tmp/vrift.sock";
+
+/// Get default socket path (for internal use only)
+fn default_socket_path() -> &'static str {
+    DEFAULT_SOCKET_PATH
 }
 
 #[cfg(feature = "cas")]
@@ -666,8 +671,6 @@ pub const MMAP_MAGIC: u32 = 0x504D4D56;
 pub const MMAP_VERSION: u32 = 1;
 /// Maximum entries in the hash table (power of 2 for fast modulo)
 pub const MMAP_MAX_ENTRIES: usize = 65536;
-/// Default mmap file path
-pub const MMAP_DEFAULT_PATH: &str = "/tmp/vrift-manifest.mmap";
 
 /// Header for the mmap'd manifest file
 /// Layout: [Header][Bloom Filter][Hash Table]
