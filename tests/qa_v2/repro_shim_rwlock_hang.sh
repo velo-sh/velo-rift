@@ -27,11 +27,21 @@ echo "----------------------------------------------------------------"
 echo "🐞 Reproduction: Shim Bootstrap Hang (RwLock)"
 echo "----------------------------------------------------------------"
 
-# 1. Ingest
+# 1. Start daemon and Ingest
 echo "⚡ Preparing VFS Project..."
 export VR_THE_SOURCE="$WORK_DIR/cas"
+
+# Start daemon in background (needed for ingest since --direct was removed)
+VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
+$VRIFTD_BIN start &>/dev/null &
+DAEMON_PID=$!
+sleep 1
+
 $VRIFT_BIN init "$WORK_DIR/project" >/dev/null 2>&1
 $VRIFT_BIN ingest "$WORK_DIR/project" --mode solid >/dev/null 2>&1
+
+# Note: Daemon stays running for the test phase
+# VFS_ENV below will connect to this active daemon.
 
 VFS_ENV="DYLD_INSERT_LIBRARIES=$SHIM_LIB DYLD_FORCE_FLAT_NAMESPACE=1 VRIFT_MANIFEST=$WORK_DIR/project/.vrift/manifest.lmdb VRIFT_VFS_PREFIX=$WORK_DIR/project"
 
@@ -70,6 +80,7 @@ else
 fi
 
 echo "✅ Test Finished: No bootstrap deadlock detected."
+kill $DAEMON_PID 2>/dev/null || true
 
 # Cleanup (ignore errors from VFS-protected files)
 rm -rf "$WORK_DIR" 2>/dev/null || true

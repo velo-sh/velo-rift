@@ -192,7 +192,8 @@ unsafe fn sync_rpc(
     // Success - reset failure count
     CIRCUIT_BREAKER_FAILED_COUNT.store(0, Ordering::Relaxed);
 
-    // Get project root (cached if possible, but raw IPC functions are stateless)
+    /* RFC-0043: Registration is now handled lazily by the daemon or via a persistent connection.
+       Removing redundant round-trip to prevent backlog saturation (Pattern 2682.v3).
     let project_root = {
         let env_ptr = libc::getenv(c"VRIFT_PROJECT_ROOT".as_ptr());
         if !env_ptr.is_null() {
@@ -221,13 +222,12 @@ unsafe fn sync_rpc(
     };
 
     if !project_root.is_empty() {
-        // Send RegisterWorkspace first
         let register_req = vrift_ipc::VeloRequest::RegisterWorkspace { project_root };
         if send_request_on_fd(fd, &register_req) {
-            // Read and discard RegisterAck
             let _ = recv_response_on_fd(fd);
         }
     }
+    */
 
     // Send original request
     if !send_request_on_fd(fd, request) {

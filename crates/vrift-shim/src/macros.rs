@@ -127,9 +127,18 @@ macro_rules! get_real {
 #[macro_export]
 macro_rules! get_real_shim {
     ($storage:ident, $name:literal, $it:ident, $t:ty) => {{
-        // RFC-0051: Always prefer dlsym(RTLD_NEXT) to avoid interposition loops
-        // during hazardous bootstrap phases (Pattern 2682).
-        $crate::get_real!($storage, $name, $t)
+        #[cfg(target_os = "macos")]
+        {
+            // RFC-0051: Bypass dlsym(RTLD_NEXT) by using the old_func pointer
+            // already resolved by dyld in the interpose table.
+            // This eliminates dyld lock contention and recursion deadlocks (Pattern 2682.v2).
+            let p = $it.old_func;
+            std::mem::transmute::<*const (), $t>(p)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            $crate::get_real!($storage, $name, $t)
+        }
     }};
 }
 

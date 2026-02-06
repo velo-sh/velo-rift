@@ -396,6 +396,22 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             let is_phantom = mode.to_lowercase() == "phantom";
             let is_tier1 = tier.to_lowercase() == "tier1";
 
+            // RFC-0039: Use .vrift/manifest.lmdb as default output for initialized projects
+            // The default CLI arg "vrift.manifest" is legacy; daemon mode requires LMDB format
+            let output = if output.to_string_lossy() == "vrift.manifest" {
+                // Check if project has .vrift directory (was initialized with `vrift init`)
+                let vrift_dir = directory.join(".vrift");
+                if vrift_dir.exists() {
+                    vrift_dir.join("manifest.lmdb")
+                } else {
+                    // Create .vrift directory and use LMDB manifest
+                    std::fs::create_dir_all(&vrift_dir).ok();
+                    vrift_dir.join("manifest.lmdb")
+                }
+            } else {
+                output
+            };
+
             match daemon::ingest_via_daemon(
                 &directory, &output, &cas_root, threads, is_phantom, is_tier1,
             )

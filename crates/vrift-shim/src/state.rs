@@ -1410,12 +1410,6 @@ impl ShimState {
         let count = crate::syscalls::io::OPEN_FD_COUNT.load(Ordering::Relaxed);
         let usage_pct = (count * 100) / soft;
 
-        let msg = format!(
-            "[vrift] DEBUG: count={}, soft={}, pct={}\n",
-            count, soft, usage_pct
-        );
-        unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len()) };
-
         // Determine current threshold level
         let threshold = if usage_pct >= 85 {
             85
