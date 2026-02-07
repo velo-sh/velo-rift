@@ -100,7 +100,7 @@ echo "   ✅ Daemon running"
 echo "🛡️ Verifying Shim Isolation..."
 
 # Compile test_stat
-TEST_STAT_SRC="$PROJECT_ROOT/test_stat.c"
+TEST_STAT_SRC="$PROJECT_ROOT/tests/helpers/test_stat.c"
 if [ ! -f "$TEST_STAT_SRC" ]; then
     echo -e "${RED}FAILED: test_stat.c not found at $TEST_STAT_SRC${NC}"
     exit 1
