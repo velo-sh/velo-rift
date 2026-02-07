@@ -46,13 +46,19 @@ echo "=== Repro Shell: Shim Init Race / Early Call ==="
 # 1. Ingest
 echo "secret content" > "$TEST_DIR/source/file.txt"
 export VR_THE_SOURCE="$TEST_DIR/cas"
-"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "" -o "$TEST_DIR/source/vrift.manifest" > "$TEST_DIR/ingest.log" 2>&1
-
-# 2. Start daemon with isolated socket
-echo "Starting daemon..."
 export VRIFT_SOCKET_PATH="$TEST_DIR/vrift.sock"
-export VRIFT_MANIFEST="$TEST_DIR/source/vrift.manifest"
-"$VRIFTD_BIN" start > "$TEST_DIR/daemon.log" 2>&1 &
+export VRIFT_MANIFEST="$TEST_DIR/source/.vrift/manifest.lmdb"
+
+"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "" > "$TEST_DIR/ingest.log" 2>&1
+echo "CAS contents after ingest:"
+ls -R "$TEST_DIR/cas" || echo "CAS directory missing!"
+cat "$TEST_DIR/ingest.log"
+
+# 2. Start daemon (if not already started by ingest via_daemon)
+# CLI auto-starts daemon if missing. But we want it to stay alive.
+# So we run it explicitly.
+echo "Ensuring daemon is running..."
+"$VRIFTD_BIN" start >> "$TEST_DIR/daemon.log" 2>&1 &
 VRIFT_PID=$!
 sleep 2
 

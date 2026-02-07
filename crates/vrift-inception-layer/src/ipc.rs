@@ -176,38 +176,7 @@ unsafe fn sync_rpc(
     CIRCUIT_BREAKER_FAILED_COUNT.store(0, Ordering::Relaxed);
 
     // RFC-0043: Registration ensures the daemon knows which project manifest to query.
-    let project_root = {
-        let env_ptr = unsafe { libc::getenv(c"VRIFT_PROJECT_ROOT".as_ptr()) };
-        if !env_ptr.is_null() {
-            unsafe { std::ffi::CStr::from_ptr(env_ptr) }
-                .to_string_lossy()
-                .to_string()
-        } else {
-            let manifest_ptr = unsafe { libc::getenv(c"VRIFT_MANIFEST".as_ptr()) };
-            if !manifest_ptr.is_null() {
-                let manifest = unsafe { std::ffi::CStr::from_ptr(manifest_ptr).to_string_lossy() };
-                let p = std::path::Path::new(manifest.as_ref());
-                let parent = p.parent().unwrap_or(p);
-                let root = if parent.ends_with(".vrift") {
-                    parent.parent().unwrap_or(parent)
-                } else {
-                    parent
-                };
-                // BUG-007b: DO NOT call canonicalize() here — it triggers
-                // interposed stat/readlink calls, causing recursive IPC deadlock
-                // under concurrent workloads. The path from env is already usable.
-                root.to_string_lossy().to_string()
-            } else {
-                String::new()
-            }
-        }
-    };
-
-    // BUG-007b: DO NOT call std::fs::canonicalize() here.
-    // canonicalize() calls stat/readlink internally, which are interposed by the shim.
-    // When called from within a shim entry point (open -> query_manifest_ipc -> sync_rpc),
-    // this creates recursive IPC that floods the daemon socket under concurrent access.
-    // project_root from env vars is already an absolute path.
+    let project_root = get_project_root();
 
     if !project_root.is_empty() {
         let register_req = vrift_ipc::VeloRequest::RegisterWorkspace { project_root };
@@ -395,28 +364,61 @@ pub(crate) unsafe fn send_fire_and_forget_sync(socket_path: &str, payload: &[u8]
 }
 
 /// Extract project root from env vars (shared between sync_rpc and fire-and-forget).
+/// RFC-0044: Use raw_realpath to avoid Project ID Divergence (e.g. /var vs /private/var)
 fn get_project_root() -> String {
-    let env_ptr = unsafe { libc::getenv(c"VRIFT_PROJECT_ROOT".as_ptr()) };
-    if !env_ptr.is_null() {
-        return unsafe { std::ffi::CStr::from_ptr(env_ptr) }
-            .to_string_lossy()
-            .to_string();
-    }
-
-    let manifest_ptr = unsafe { libc::getenv(c"VRIFT_MANIFEST".as_ptr()) };
-    if !manifest_ptr.is_null() {
-        let manifest = unsafe { std::ffi::CStr::from_ptr(manifest_ptr).to_string_lossy() };
-        let p = std::path::Path::new(manifest.as_ref());
-        let parent = p.parent().unwrap_or(p);
-        let root = if parent.ends_with(".vrift") {
-            parent.parent().unwrap_or(parent)
+    let raw_root = {
+        let env_ptr = unsafe { libc::getenv(c"VRIFT_PROJECT_ROOT".as_ptr()) };
+        if !env_ptr.is_null() {
+            unsafe { std::ffi::CStr::from_ptr(env_ptr) }
+                .to_string_lossy()
+                .to_string()
         } else {
-            parent
-        };
-        return root.to_string_lossy().to_string();
+            let manifest_ptr = unsafe { libc::getenv(c"VRIFT_MANIFEST".as_ptr()) };
+            if !manifest_ptr.is_null() {
+                let manifest = unsafe { std::ffi::CStr::from_ptr(manifest_ptr).to_string_lossy() };
+                let p = std::path::Path::new(manifest.as_ref());
+                let parent = p.parent().unwrap_or(p);
+                let root = if parent.ends_with(".vrift") {
+                    parent.parent().unwrap_or(parent)
+                } else {
+                    parent
+                };
+                root.to_string_lossy().to_string()
+            } else {
+                return String::new();
+            }
+        }
+    };
+
+    if raw_root.is_empty() {
+        return String::new();
     }
 
-    String::new()
+    // Canonicalize using raw_realpath to avoid recursion (Pattern 2682.v2)
+    let root_cstr = std::ffi::CString::new(raw_root.clone()).unwrap_or_default();
+    let mut resolved = [0u8; libc::PATH_MAX as usize];
+    #[cfg(target_os = "macos")]
+    let result = unsafe {
+        crate::syscalls::macos_raw::raw_realpath(
+            root_cstr.as_ptr(),
+            resolved.as_mut_ptr() as *mut libc::c_char,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::realpath(
+            root_cstr.as_ptr(),
+            resolved.as_mut_ptr() as *mut libc::c_char,
+        )
+    };
+
+    if !result.is_null() {
+        unsafe { std::ffi::CStr::from_ptr(result) }
+            .to_string_lossy()
+            .to_string()
+    } else {
+        raw_root
+    }
 }
 
 pub(crate) unsafe fn sync_ipc_flock(socket_path: &str, path: &str, op: i32) -> bool {

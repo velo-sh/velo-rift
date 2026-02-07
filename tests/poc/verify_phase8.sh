@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-PROJECT_ROOT=$(pwd)
+PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TEST_DIR="/tmp/vrift-p8-$(date +%s)"
 mkdir -p "$TEST_DIR/project/subdir"
 echo "data" > "$TEST_DIR/project/file.txt"
@@ -11,13 +11,19 @@ mkdir -p "$VR_THE_SOURCE"
 
 # 1. Ingest
 echo "📦 Ingesting project..."
-./target/release/vrift ingest "$TEST_DIR/project" --output "$TEST_DIR/project/vrift.manifest" --prefix ""
+VRIFT_BIN="./target/release/vrift"
+VRIFTD_BIN="./target/release/vriftd"
+if [ ! -f "$VRIFT_BIN" ]; then
+    VRIFT_BIN="./target/debug/vrift"
+    VRIFTD_BIN="./target/debug/vriftd"
+fi
+"$VRIFT_BIN" ingest "$TEST_DIR/project" --prefix ""
 
 # 2. Start Daemon
 echo "🔍 Starting Daemon..."
 pkill vriftd || true
 sleep 1
-./target/release/vriftd start > "$TEST_DIR/vriftd.log" 2>&1 &
+"$VRIFTD_BIN" start > "$TEST_DIR/vriftd.log" 2>&1 &
 DAEMON_PID=$!
 sleep 2
 
@@ -85,10 +91,15 @@ codesign --force --sign - "$TEST_DIR/test_pkg"
 
 # 4. Run Test
 echo "🚀 Executing compatibility test..."
-export DYLD_INSERT_LIBRARIES="$PROJECT_ROOT/target/debug/libvrift_inception_layer.dylib"
+# Use release inception layer with debug fallback
+INCEPTION_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
+if [ ! -f "$INCEPTION_LIB" ]; then
+    INCEPTION_LIB="$PROJECT_ROOT/target/debug/libvrift_inception_layer.dylib"
+fi
+export DYLD_INSERT_LIBRARIES="$INCEPTION_LIB"
 export DYLD_FORCE_FLAT_NAMESPACE=1
 export VRIFT_VFS_PREFIX="/vrift"
-export VRIFT_MANIFEST="$TEST_DIR/project/vrift.manifest"
+export VRIFT_MANIFEST="$TEST_DIR/project/.vrift/manifest.lmdb"
 export VRIFT_DEBUG=1
 
 "$TEST_DIR/test_pkg"

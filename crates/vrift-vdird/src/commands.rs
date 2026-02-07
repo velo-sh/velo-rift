@@ -75,9 +75,17 @@ impl CommandHandler {
                 threads,
                 phantom,
                 tier1,
+                prefix,
             } => {
-                self.handle_ingest_full_scan(&path, &manifest_path, threads, phantom, tier1)
-                    .await
+                self.handle_ingest_full_scan(
+                    &path,
+                    &manifest_path,
+                    threads,
+                    phantom,
+                    tier1,
+                    prefix.as_deref(),
+                )
+                .await
             }
 
             // Not yet implemented - forward to future handlers
@@ -238,6 +246,7 @@ impl CommandHandler {
         threads: Option<usize>,
         phantom: bool,
         tier1: bool,
+        prefix: Option<&str>,
     ) -> VeloResponse {
         use std::time::Instant;
         use vrift_cas::{parallel_ingest_with_progress, IngestMode};
@@ -314,7 +323,7 @@ impl CommandHandler {
 
         // 5. Build and write manifest (using vrift_manifest if available)
         // For now, just write a simple binary manifest
-        if let Err(e) = self.write_manifest(&manifest_out, &file_paths, &results) {
+        if let Err(e) = self.write_manifest(&manifest_out, &source_path, &results, prefix) {
             return VeloResponse::Error(VeloError::io_error(format!(
                 "Failed to write manifest: {}",
                 e
@@ -343,54 +352,48 @@ impl CommandHandler {
     fn write_manifest(
         &self,
         manifest_path: &Path,
-        file_paths: &[PathBuf],
+        source_root: &Path,
         results: &[Result<vrift_cas::IngestResult, vrift_cas::CasError>],
+        prefix: Option<&str>,
     ) -> Result<()> {
         let mut manifest = vrift_manifest::Manifest::new();
 
-        // Find common root to make paths relative
-        // We assume file_paths come from walking a single directory
-        let root = if !file_paths.is_empty() {
-            // Heuristic: take parent of first file until it's a common prefix?
-            // Actually, file_paths come from WalkDir(source_path)
-            // But we don't have source_path here easily unless we pass it.
-            // However, for flat ingest, making paths relative to manifest location or root is tricky.
-            // Standard behavior: keys should be absolute or relative to project root?
-            // RFC-0039 says manifest paths are typically relative to project root, starting with /
-            // If we don't know project root, we can check config, OR just use absolute for now.
-            // But for portability, relative is better.
-            // Let's assume common parent of all files is the ingest root.
-            file_paths[0].parent().unwrap_or(Path::new("/"))
-        } else {
-            Path::new("/")
-        };
+        for result in results.iter().flatten() {
+            // Try to get metadata for mtime/mode
+            let (mtime, mode) = match fs::metadata(&result.source_path) {
+                Ok(meta) => (meta.mtime() as u64, meta.mode()),
+                Err(_) => (0, 0o644), // Fallback
+            };
 
-        for (path, result) in file_paths.iter().zip(results.iter()) {
-            if let Ok(res) = result {
-                // Try to get metadata for mtime/mode
-                let (mtime, mode) = match fs::metadata(path) {
-                    Ok(meta) => (meta.mtime() as u64, meta.mode()),
-                    Err(_) => (0, 0o644), // Fallback
-                };
+            let entry = VnodeEntry {
+                content_hash: result.hash,
+                size: result.size,
+                mtime,
+                mode,
+                flags: 0,
+                _pad: 0,
+            };
 
-                let entry = VnodeEntry {
-                    content_hash: res.hash,
-                    size: res.size,
-                    mtime,
-                    mode,
-                    flags: 0,
-                    _pad: 0,
-                };
+            // RFC-0050: Handle prefix
+            let canon_source = result
+                .source_path
+                .canonicalize()
+                .unwrap_or_else(|_| result.source_path.clone());
+            let canon_root = source_root
+                .canonicalize()
+                .unwrap_or_else(|_| source_root.to_path_buf());
+            let rel = canon_source
+                .strip_prefix(&canon_root)
+                .unwrap_or(&canon_source);
 
-                // Make path relative if possible so it looks cleaner
-                let key = if let Ok(rel) = path.strip_prefix(root) {
-                    format!("/{}", rel.display())
-                } else {
-                    path.to_string_lossy().to_string()
-                };
+            let prefix_str = prefix.unwrap_or("");
+            let key = if prefix_str == "/" || prefix_str.is_empty() {
+                format!("/{}", rel.display())
+            } else {
+                format!("{}/{}", prefix_str.trim_end_matches('/'), rel.display())
+            };
 
-                manifest.insert(&key, entry);
-            }
+            manifest.insert(&key, entry);
         }
 
         manifest

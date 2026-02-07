@@ -379,7 +379,7 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
         Commands::Ingest {
             directory,
             output,
-            prefix: _,
+            prefix,
             parallel: _,
             threads,
             mode,
@@ -399,6 +399,7 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             // Always use daemon (unified architecture)
             let is_phantom = mode.to_lowercase() == "phantom";
             let is_tier1 = tier.to_lowercase() == "tier1";
+            let prefix_val = prefix.unwrap_or_else(|| "".to_string());
 
             // RFC-0039: Always use LMDB manifest in target project directory
             // Must match daemon workspace path at get_or_create_workspace()
@@ -412,8 +413,15 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                 output
             };
 
-            match daemon::ingest_via_daemon(&directory, &output, threads, is_phantom, is_tier1)
-                .await
+            match daemon::ingest_via_daemon(
+                &directory,
+                &output,
+                threads,
+                is_phantom,
+                is_tier1,
+                Some(prefix_val),
+            )
+            .await
             {
                 Ok(result) => {
                     let elapsed_secs = result.duration_ms as f64 / 1000.0;
@@ -1852,7 +1860,7 @@ async fn cmd_watch(_cas_root: &Path, directory: &Path, output: &Path) -> Result<
 
     // Initial ingest via daemon
     println!("\n[Initial Scan]");
-    daemon::ingest_via_daemon(directory, output, None, false, false).await?;
+    daemon::ingest_via_daemon(directory, output, None, false, false, None).await?;
 
     // Create a channel to receive the events.
     let (tx, rx) = channel();
@@ -1884,9 +1892,10 @@ async fn cmd_watch(_cas_root: &Path, directory: &Path, output: &Path) -> Result<
                         // Simple debounce
                         if last_ingest.elapsed() > debounce_duration {
                             println!("\n[Change Detected] Re-ingesting...");
-                            if let Err(e) =
-                                daemon::ingest_via_daemon(directory, output, None, false, false)
-                                    .await
+                            if let Err(e) = daemon::ingest_via_daemon(
+                                directory, output, None, false, false, None,
+                            )
+                            .await
                             {
                                 eprintln!("Ingest failed: {}", e);
                             }

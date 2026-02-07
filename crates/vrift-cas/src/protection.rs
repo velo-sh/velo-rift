@@ -17,9 +17,7 @@ use std::path::Path;
 /// Execution bits are enforced (0555) to allow direct execution of binaries in jails.
 /// This ensures that hard-linked/symlinked binaries remain functional in pivoted roots.
 #[allow(clippy::unnecessary_cast)]
-pub const CAS_READ_ONLY_PERM: u32 =
-    (libc::S_IRUSR | libc::S_IXUSR | libc::S_IRGRP | libc::S_IXGRP | libc::S_IROTH | libc::S_IXOTH)
-        as u32; // 0555
+pub const CAS_READ_ONLY_PERM: u32 = (libc::S_IRUSR | libc::S_IRGRP | libc::S_IROTH) as u32; // 0444
 
 pub const CAS_FORBIDDEN_PERM_MASK: u32 = (libc::S_IWUSR | libc::S_IWGRP | libc::S_IWOTH) as u32; // Write bits forbidden
 

@@ -12,8 +12,14 @@ echo ""
 
 # Build vrift CLI if needed
 echo "[BUILD] Building vrift CLI..."
-cargo build -p vrift-cli --quiet 2>/dev/null || cargo build -p vrift-cli
-VRIFT="${PROJECT_ROOT}/target/debug/vrift"
+cargo build -p vrift-cli --release --quiet 2>/dev/null || cargo build -p vrift-cli --release
+VRIFT="${PROJECT_ROOT}/target/release/vrift"
+
+if [ ! -f "$VRIFT" ]; then
+    # Fallback to debug build
+    cargo build -p vrift-cli --quiet 2>/dev/null || cargo build -p vrift-cli
+    VRIFT="${PROJECT_ROOT}/target/debug/vrift"
+fi
 
 if [ ! -f "$VRIFT" ]; then
     echo "[FAIL] vrift CLI not found at $VRIFT"
@@ -44,6 +50,10 @@ dd if=/dev/urandom of="$TEST_DIR/source/binary.bin" bs=1024 count=1 2>/dev/null
 
 echo "[INGEST] Creating CAS and ingesting test files..."
 # Use VR_THE_SOURCE which is the CLI's env var for CAS location
+# Kill any pre-existing daemon so our VR_THE_SOURCE is inherited
+pkill -9 vriftd 2>/dev/null || true
+sleep 1
+
 export VR_THE_SOURCE="$TEST_DIR/cas"
 $VRIFT ingest "$TEST_DIR/source" --prefix "test" 2>&1 | grep -v "^2026" || true
 

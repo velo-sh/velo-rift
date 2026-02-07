@@ -228,11 +228,11 @@ impl CasStore {
             return Err(CasError::Io(e));
         }
 
-        // RFC-0039: Ensure CAS blobs are executable by default (0o555)
+        // RFC-0039: Ensure CAS blobs are read-only by default (0o444)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o555));
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o444));
         }
 
         Ok(hash)
@@ -293,11 +293,11 @@ impl CasStore {
             }
         }
 
-        // RFC-0039: Ensure CAS blobs are executable by default (0o555)
+        // RFC-0039: Ensure CAS blobs are read-only by default (0o444)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o555));
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o444));
         }
 
         Ok(hash)

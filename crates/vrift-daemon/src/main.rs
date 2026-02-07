@@ -931,6 +931,7 @@ async fn handle_request(
             threads,
             phantom,
             tier1,
+            prefix,
         } => {
             use std::time::Instant;
             use vrift_cas::{streaming_ingest, IngestMode};
@@ -944,6 +945,7 @@ async fn handle_request(
                 threads = ?threads,
                 phantom = phantom,
                 tier1 = tier1,
+                prefix = ?prefix,
                 "Starting streaming ingest"
             );
 
@@ -999,7 +1001,13 @@ async fn handle_request(
             let duration = start.elapsed();
 
             // 6. Write LMDB manifest (RFC-0039 compatible with shim)
-            if let Err(e) = write_ingest_manifest(&manifest_out, &source_path, &results, tier1) {
+            if let Err(e) = write_ingest_manifest(
+                &manifest_out,
+                &source_path,
+                &results,
+                tier1,
+                prefix.as_deref(),
+            ) {
                 return VeloResponse::Error(VeloError::io_error(format!(
                     "Failed to write manifest: {}",
                     e
@@ -1033,6 +1041,7 @@ fn write_ingest_manifest(
     source_root: &Path,
     results: &[Result<vrift_cas::IngestResult, vrift_cas::CasError>],
     tier1: bool,
+    prefix: Option<&str>,
 ) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     use vrift_manifest::VnodeEntry;
@@ -1060,8 +1069,7 @@ fn write_ingest_manifest(
             }
         };
 
-        // Compute manifest path: relative to source_root with leading /
-        // RFC-0050: Robustly handle macOS /private/tmp symlink duality
+        // Compute manifest path: relative to source_root with optional prefix
         let canon_source = result
             .source_path
             .canonicalize()
@@ -1073,7 +1081,22 @@ fn write_ingest_manifest(
         let relative_path = canon_source
             .strip_prefix(&canon_root)
             .unwrap_or(&canon_source);
-        let manifest_key = format!("/{}", relative_path.display());
+
+        // RFC-0050: Apply prefix correctly
+        let prefix_str = prefix.unwrap_or("");
+        let manifest_key = if prefix_str == "/" {
+            format!("/{}", relative_path.display())
+        } else if prefix_str.is_empty() {
+            // Default behavior or empty prefix: relative path with leading /
+            format!("/{}", relative_path.display())
+        } else {
+            // User provided a custom prefix, e.g. "/vrift"
+            format!(
+                "{}/{}",
+                prefix_str.trim_end_matches('/'),
+                relative_path.display()
+            )
+        };
 
         // Extract mtime and mode
         let mtime = metadata.mtime() as u64;
@@ -1249,6 +1272,13 @@ async fn get_or_create_workspace(
     if !vrift_dir.exists() {
         std::fs::create_dir_all(&vrift_dir)?;
     }
+
+    // RFC-0047: Ensure staging directory exists for COW
+    let staging_dir = vrift_dir.join("staging");
+    if !staging_dir.exists() {
+        std::fs::create_dir_all(&staging_dir)?;
+    }
+
     let manifest_path = vrift_dir.join("manifest.lmdb");
     let manifest = LmdbManifest::open(manifest_path.to_str().unwrap())?;
 

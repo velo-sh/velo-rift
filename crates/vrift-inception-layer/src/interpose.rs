@@ -457,28 +457,28 @@ pub static IT_CLOSEDIR: Interpose = Interpose {
     old_func: real_closedir as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_REALPATH: Interpose = Interpose {
     new_func: realpath_inception as _,
     old_func: real_realpath as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_REALPATH_DARWIN: Interpose = Interpose {
     new_func: realpath_inception as _,
     old_func: real_realpath_darwin as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_GETCWD: Interpose = Interpose {
     new_func: getcwd_inception as _,
     old_func: real_getcwd as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_CHDIR: Interpose = Interpose {
     new_func: chdir_inception as _,

@@ -177,18 +177,115 @@ pub unsafe extern "C" fn getcwd_inception(
     buf: *mut libc::c_char,
     size: libc::size_t,
 ) -> *mut libc::c_char {
-    // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+    // Pattern 2930: Raw syscall for bootstrap safety
     #[cfg(target_os = "macos")]
-    return crate::syscalls::macos_raw::raw_getcwd(buf, size);
+    {
+        use crate::state::InceptionLayerState;
+        let raw_getcwd = crate::syscalls::macos_raw::raw_getcwd;
+
+        // Early-boot passthrough
+        passthrough_if_init!(raw_getcwd, buf, size);
+
+        let res = raw_getcwd(buf, size);
+        if res.is_null() {
+            return res;
+        }
+
+        // Check if we need to reverse-map the path
+        if let Some(state) = InceptionLayerState::get() {
+            let real_cwd = match CStr::from_ptr(buf).to_str() {
+                Ok(s) => s,
+                Err(_) => return res,
+            };
+
+            let prefix = state.path_resolver.vfs_prefix.as_str();
+            let project_root = state.path_resolver.project_root.as_str();
+
+            if !project_root.is_empty() && real_cwd.starts_with(project_root) {
+                // Map project_root -> vfs_prefix
+                let relative = &real_cwd[project_root.len()..];
+                let relative = relative.strip_prefix('/').unwrap_or(relative);
+
+                let virt_cwd = if relative.is_empty() {
+                    prefix.to_string()
+                } else {
+                    format!("{}/{}", prefix, relative)
+                };
+
+                // Copy back to buffer if it fits
+                if virt_cwd.len() < size {
+                    let bytes = virt_cwd.as_bytes();
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+                    *(buf.add(bytes.len())) = 0;
+                    return buf;
+                } else {
+                    crate::set_errno(libc::ERANGE);
+                    return std::ptr::null_mut();
+                }
+            }
+        }
+
+        res
+    }
     #[cfg(target_os = "linux")]
     return crate::syscalls::linux_raw::raw_getcwd(buf, size);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn chdir_inception(path: *const libc::c_char) -> c_int {
-    // Pattern 2930: Use raw syscall to avoid post-init dlsym hazard
+    // Pattern 2930: Raw syscall for bootstrap safety
     #[cfg(target_os = "macos")]
-    return crate::syscalls::macos_raw::raw_chdir(path);
+    {
+        use crate::state::InceptionLayerState;
+        use std::ffi::CStr;
+
+        let raw_chdir = crate::syscalls::macos_raw::raw_chdir;
+
+        // Early-boot passthrough
+        passthrough_if_init!(raw_chdir, path);
+
+        if path.is_null() {
+            return raw_chdir(path);
+        }
+
+        let path_str = match CStr::from_ptr(path).to_str() {
+            Ok(s) => s,
+            Err(_) => return raw_chdir(path),
+        };
+
+        // Get inception layer state
+        let state = match InceptionLayerState::get() {
+            Some(s) => s,
+            None => return raw_chdir(path),
+        };
+
+        // Check if path is in VFS domain
+        if let Some(_vfs_path) = state.resolve_path(path_str) {
+            // Map VFS path to real filesystem path:
+            // VFS prefix      -> project_root
+            // /vrift/subdir   -> /real/project/subdir
+            let prefix = state.path_resolver.vfs_prefix.as_str();
+            let project_root = state.path_resolver.project_root.as_str();
+
+            let relative = path_str.strip_prefix(prefix).unwrap_or("");
+            let relative = relative.strip_prefix('/').unwrap_or(relative);
+
+            let real_path = if relative.is_empty() {
+                project_root.to_string()
+            } else {
+                format!("{}/{}", project_root, relative)
+            };
+
+            let c_real = match std::ffi::CString::new(real_path) {
+                Ok(c) => c,
+                Err(_) => return raw_chdir(path),
+            };
+            return raw_chdir(c_real.as_ptr());
+        }
+
+        // Not in VFS domain, passthrough
+        raw_chdir(path)
+    }
     #[cfg(target_os = "linux")]
     return crate::syscalls::linux_raw::raw_chdir(path);
 }

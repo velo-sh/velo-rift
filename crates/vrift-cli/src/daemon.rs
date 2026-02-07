@@ -243,6 +243,7 @@ pub async fn ingest_via_daemon(
     threads: Option<usize>,
     phantom: bool,
     tier1: bool,
+    prefix: Option<String>,
 ) -> Result<IngestResult> {
     // Normalize paths before sending to daemon (daemon's cwd may differ)
     let abs_path = normalize_or_original(path);
@@ -261,6 +262,7 @@ pub async fn ingest_via_daemon(
         threads,
         phantom,
         tier1,
+        prefix,
     };
 
     tracing::info!(

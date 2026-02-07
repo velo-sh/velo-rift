@@ -86,6 +86,8 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
         entry.size
     );
 
+    inception_log!("redirection path: '{}'", blob_path);
+
     let is_write = (flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_APPEND | libc::O_TRUNC)) != 0;
 
     if is_write {
@@ -110,7 +112,7 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
             let mut writer = crate::macros::StackWriter::new(&mut buf);
             let _ = write!(
                 writer,
-                "{}/.vrift/staging/vrift_cow_{}_{}_{}_{}.tmp\0",
+                "{}/.vrift/staging/vrift_cow_{}_{}_{}_{}.tmp",
                 state.project_root.as_str(),
                 pid,
                 timestamp,

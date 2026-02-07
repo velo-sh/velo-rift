@@ -10,27 +10,24 @@ VELO_PROJECT_ROOT="$TEST_DIR/workspace"
 
 echo "=== Test: Dirty Consistency (COW Metadata) ==="
 
-# 1. Prepare Fake CAS and Manifest
-mkdir -p "$TEST_DIR/cas/blake3/aa/bb"
-CONTENT="original content"
-HASH="aabb000000000000000000000000000000000000000000000000000000000000"
-echo "$CONTENT" > "$TEST_DIR/cas/blake3/aa/bb/${HASH}_16.bin"
+# Setup VFS project by ingesting a real file
+mkdir -p "$VELO_PROJECT_ROOT"
+echo "original content" > "$VELO_PROJECT_ROOT/test_file.txt"
 
-mkdir -p "$VELO_PROJECT_ROOT/.vrift"
-# Manifest entry for test_file.txt
-cat > "$VELO_PROJECT_ROOT/.vrift/manifest.json" << EOF
-{
-  "files": {
-    "/test_file.txt": {
-      "content_hash": [170, 187, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-      "size": 16,
-      "mtime": $(date +%s),
-      "mode": 33188,
-      "flags": 0
-    }
-  }
-}
-EOF
+# Ingest into CAS and create LMDB manifest
+export VR_THE_SOURCE="$TEST_DIR/cas"
+mkdir -p "$TEST_DIR/cas"
+
+# Kill pre-existing daemon so test env is used
+pkill -9 vriftd 2>/dev/null || true
+sleep 1
+
+# Use release binary with debug fallback
+VRIFT_BIN="${PROJECT_ROOT}/target/release/vrift"
+if [ ! -f "$VRIFT_BIN" ]; then
+    VRIFT_BIN="${PROJECT_ROOT}/target/debug/vrift"
+fi
+"$VRIFT_BIN" ingest "$VELO_PROJECT_ROOT" --prefix "" 2>/dev/null || true
 
 # Compile test program
 cat > "$TEST_DIR/consistency_test.c" << 'EOF'
@@ -81,17 +78,40 @@ int main(int argc, char *argv[]) {
 EOF
 gcc -o "$TEST_DIR/consistency_test" "$TEST_DIR/consistency_test.c"
 
-# Setup Shim and run test
-export VRIFT_MANIFEST="$VELO_PROJECT_ROOT/.vrift/manifest.json"
-export VRIFT_CAS_ROOT="$TEST_DIR/cas"
+# Environment Setup
+export VR_THE_SOURCE="$TEST_DIR/cas"
+export VRIFT_SOCKET_PATH="$TEST_DIR/vrift.sock"
+export VRIFT_MANIFEST="$TEST_DIR/workspace/.vrift/manifest.lmdb"
 
-DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvrift_shim.dylib" \
+# 1. Ingest
+echo "Ingesting project..."
+"$VRIFT_BIN" ingest "$TEST_DIR/workspace" --prefix "" > "$TEST_DIR/ingest.log" 2>&1
+cat "$TEST_DIR/ingest.log"
+
+# 2. Start Daemon (if not already started)
+"$VRIFTD_BIN" start >> "$TEST_DIR/daemon.log" 2>&1 &
+VRIFT_PID=$!
+sleep 2
+
+# Use release inception layer with debug fallback
+INCEPTION_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
+if [ ! -f "$INCEPTION_LIB" ]; then
+    INCEPTION_LIB="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
+fi
+
+DYLD_INSERT_LIBRARIES="$INCEPTION_LIB" \
 DYLD_FORCE_FLAT_NAMESPACE=1 \
-VRIFT_SOCKET_PATH="/tmp/vrift_dummy.sock" \
+VRIFT_SOCKET_PATH="$TEST_DIR/vrift.sock" \
 VRIFT_VFS_PREFIX="$VELO_PROJECT_ROOT" \
 VRIFT_DEBUG=1 \
 "$TEST_DIR/consistency_test" "$VELO_PROJECT_ROOT/test_file.txt"
 
 RET=$?
-rm -rf "$TEST_DIR"
+
+# Cleanup properly even with immutable files
+if [ -d "$TEST_DIR" ]; then
+    # Clear immutable flags on CAS blobs before rm
+    find "$TEST_DIR" -type f -exec chflags nouchg {} + 2>/dev/null || true
+    rm -rf "$TEST_DIR"
+fi
 exit $RET

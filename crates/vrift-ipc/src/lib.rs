@@ -640,6 +640,8 @@ pub enum VeloRequest {
         phantom: bool,
         /// Use Tier-1 mode (immutable)
         tier1: bool,
+        /// Optional prefix for manifest keys
+        prefix: Option<String>,
     },
 }
 
