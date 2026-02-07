@@ -15,15 +15,6 @@ VRIFT_BIN="$PROJECT_ROOT/target/release/vrift"
 VRIFTD_BIN="$PROJECT_ROOT/target/release/vriftd"
 SHIM_LIB="$PROJECT_ROOT/target/release/libvrift_inception_layer.dylib"
 
-# Platform detection
-OS=$(uname -s)
-if [ "$OS" == "Darwin" ]; then
-    VFS_ENV="DYLD_INSERT_LIBRARIES=$SHIM_LIB DYLD_FORCE_FLAT_NAMESPACE=1"
-else
-    VFS_ENV="LD_PRELOAD=${SHIM_LIB/dylib/so}"
-fi
-VFS_ENV="$VFS_ENV VRIFT_DEBUG=1"
-
 # Color helpers
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -35,9 +26,20 @@ echo "----------------------------------------------------------------"
 echo -e "${BLUE}🌀 Phase 7 Diagnostic: The Virtual Toolchain Factory${NC}"
 echo "----------------------------------------------------------------"
 
-WORK_DIR="/tmp/vrift_endgame_stress"
+WORK_DIR="/tmp/vrift_endgame_stress_$$"
+export VR_THE_SOURCE="$WORK_DIR/cas"
+export VRIFT_SOCKET_PATH="$WORK_DIR/vrift.sock"
+DAEMON_PID=""
+
+cleanup() {
+    [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
+    rm -f "$VRIFT_SOCKET_PATH"
+    rm -rf "$WORK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 rm -rf "$WORK_DIR"
-mkdir -p "$WORK_DIR/factory/p1" "$WORK_DIR/factory/p2" "$WORK_DIR/cas"
+mkdir -p "$WORK_DIR/factory/p1" "$WORK_DIR/cas"
 
 # 1. Setup Dataset
 echo "📦 Generating 5,000 shared blobs..."
@@ -47,18 +49,17 @@ done
 
 # 2. Ingestion (Phantom Mode)
 echo "⚡ Ingesting Project 1 (Phantom Mode)..."
-export VR_THE_SOURCE="$WORK_DIR/cas"
 cd "$WORK_DIR/factory/p1"
 "$VRIFT_BIN" init . >/dev/null 2>&1
-"$VRIFT_BIN" --the-source-root "$VR_THE_SOURCE" ingest . --mode phantom >/dev/null 2>&1
+"$VRIFT_BIN" ingest . --mode phantom --output .vrift/manifest.lmdb >/dev/null 2>&1
 
 # 3. Diagnostic Layer 1: Physical CAS Audit
 echo -e "\n🔍 [Diagnostic 1] Physical CAS Audit..."
-CAS_FILE=$(find "$WORK_DIR/cas/blake3" -type f | head -n 1)
+CAS_FILE=$(find "$WORK_DIR/cas/blake3" -type f 2>/dev/null | head -n 1)
 if [ -n "$CAS_FILE" ]; then
     echo -e "   ${GREEN}✅ Physical Blobs exist in CAS.${NC}"
     echo "   Example: $CAS_FILE"
-    
+
     # Check for Uppercase vs Lowercase bug
     if [[ "$CAS_FILE" =~ [A-Z] ]]; then
         echo -e "   ${YELLOW}⚠️  WARNING: Uppercase hex detected in CAS path. This may break case-sensitive lookups.${NC}"
@@ -81,13 +82,24 @@ fi
 
 # 5. Diagnostic Layer 3: Daemon Awareness
 echo -e "\n🔍 [Diagnostic 3] Daemon Global Index Audit..."
-export VR_THE_SOURCE="$WORK_DIR/cas"
 # Run daemon with INFO logging
 RUST_LOG=info "$VRIFTD_BIN" start > "$WORK_DIR/vriftd.log" 2>&1 &
 DAEMON_PID=$!
-sleep 3
 
-BLOBS_REPORTED=$("$VRIFT_BIN" --the-source-root "$VR_THE_SOURCE" status | grep "Unique blobs" | awk '{print $NF}' | tr -d ',')
+# Wait for socket
+waited=0
+while [ ! -S "$VRIFT_SOCKET_PATH" ] && [ $waited -lt 10 ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+done
+
+if [ ! -S "$VRIFT_SOCKET_PATH" ]; then
+    echo -e "   ${RED}❌ Daemon failed to start (no socket after 5s)${NC}"
+    cat "$WORK_DIR/vriftd.log" 2>/dev/null | tail -10
+    exit 1
+fi
+
+BLOBS_REPORTED=$("$VRIFT_BIN" status 2>/dev/null | grep "Unique blobs" | awk '{print $NF}' | tr -d ',') || true
 if [ "$BLOBS_REPORTED" == "0" ] || [ -z "$BLOBS_REPORTED" ]; then
     echo -e "   ${RED}❌ BUG DETECTED: Daemon reports 0 blobs despite physical presence in CAS.${NC}"
     echo "   --- Recent Daemon Logs ---"
@@ -103,25 +115,30 @@ export VRIFT_MANIFEST="$WORK_DIR/factory/p1/.vrift/manifest.lmdb"
 export VRIFT_PROJECT_ROOT="$WORK_DIR/factory/p1"
 export VRIFT_VFS_PREFIX="$WORK_DIR/factory/p1"
 
-FAIL_COUNT=0
+PIDS=()
 for i in {1..100}; do
     (
-        if ! env $VFS_ENV cat "$WORK_DIR/factory/p1/file_$(( (RANDOM % 5000) + 1 )).txt" > /dev/null 2>&1; then
-            exit 1
-        fi
+        env DYLD_INSERT_LIBRARIES="$SHIM_LIB" DYLD_FORCE_FLAT_NAMESPACE=1 \
+            VRIFT_SOCKET_PATH="$VRIFT_SOCKET_PATH" VR_THE_SOURCE="$VR_THE_SOURCE" \
+            VRIFT_VFS_PREFIX="$WORK_DIR/factory/p1" VRIFT_PROJECT_ROOT="$WORK_DIR/factory/p1" \
+            cat "$WORK_DIR/factory/p1/file_$(( (RANDOM % 5000) + 1 )).txt" > /dev/null 2>&1
     ) &
+    PIDS+=($!)
 done
 
-wait
-WAVE_EXIT=$?
-if [ $WAVE_EXIT -ne 0 ]; then
-    echo -e "   ${RED}❌ FAILURE: Concurrency wave crashed or returned 'No such file'.${NC}"
+WAVE_FAIL=0
+for pid in "${PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || WAVE_FAIL=$((WAVE_FAIL + 1))
+done
+
+if [ $WAVE_FAIL -gt 0 ]; then
+    echo -e "   ${RED}❌ FAILURE: $WAVE_FAIL of 100 concurrent VFS operations failed.${NC}"
 else
     echo -e "   ${GREEN}✅ Success: Concurrent VFS operations completed.${NC}"
 fi
 
-# Cleanup
-kill $DAEMON_PID 2>/dev/null || true
+# Cleanup handled by trap
 echo "----------------------------------------------------------------"
 echo -e "${YELLOW}🏁 Diagnostic Run Complete${NC}"
 echo "----------------------------------------------------------------"
+exit 0

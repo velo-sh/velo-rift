@@ -1,27 +1,35 @@
 #!/bin/bash
-# test_large_file_4gb.sh - Verify off_t/size handling for files >4GB
+# stress_large_file_4gb.sh - Verify off_t/size handling for files >4GB
 # Priority: P2 (Boundary Condition)
 set -e
 
 echo "=== Test: Large File (>4GB) Handling ==="
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-VR_THE_SOURCE="/tmp/large_file_cas"
-VRIFT_MANIFEST="/tmp/large_file.manifest"
+VRIFT_CLI="${PROJECT_ROOT}/target/release/vrift"
+VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
+SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
+[ ! -f "$SHIM_LIB" ] && SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.so"
+
+TEST_DIR="/tmp/large_file_test_$$"
+export VR_THE_SOURCE="$TEST_DIR/.cas"
+export VRIFT_SOCKET_PATH="$TEST_DIR/vrift.sock"
+DAEMON_PID=""
 
 cleanup() {
-    rm -rf "$VR_THE_SOURCE" /tmp/large_file_test "$VRIFT_MANIFEST" 2>/dev/null || true
+    [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
+    rm -f "$VRIFT_SOCKET_PATH"
+    rm -rf "$TEST_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
-cleanup
+cleanup 2>/dev/null || true
 
-mkdir -p "$VR_THE_SOURCE" /tmp/large_file_test
+mkdir -p "$VR_THE_SOURCE" "$TEST_DIR/project"
 
 echo "[1] Creating 5GB sparse file..."
-# Use sparse file to avoid disk space issues
-dd if=/dev/zero of=/tmp/large_file_test/bigfile.bin bs=1 count=0 seek=5368709120 2>/dev/null
+dd if=/dev/zero of="$TEST_DIR/project/bigfile.bin" bs=1 count=0 seek=5368709120 2>/dev/null
 
-ACTUAL_SIZE=$(stat -f%z /tmp/large_file_test/bigfile.bin 2>/dev/null || stat -c%s /tmp/large_file_test/bigfile.bin 2>/dev/null)
+ACTUAL_SIZE=$(stat -f%z "$TEST_DIR/project/bigfile.bin" 2>/dev/null || stat -c%s "$TEST_DIR/project/bigfile.bin" 2>/dev/null)
 echo "    Created file size: $ACTUAL_SIZE bytes"
 
 if [ "$ACTUAL_SIZE" -lt 4294967296 ]; then
@@ -30,37 +38,36 @@ if [ "$ACTUAL_SIZE" -lt 4294967296 ]; then
 fi
 
 echo "[2] Ingesting large file into CAS..."
-"${PROJECT_ROOT}/target/debug/vrift" --the-source-root "$VR_THE_SOURCE" \
-    ingest /tmp/large_file_test --output "$VRIFT_MANIFEST" --prefix /large 2>&1 | tail -5
+cd "$TEST_DIR/project"
+"$VRIFT_CLI" init . >/dev/null 2>&1
+"$VRIFT_CLI" ingest . --mode solid --output .vrift/manifest.lmdb 2>&1 | tail -5
 
-if [ ! -f "$VRIFT_MANIFEST" ]; then
+# Check manifest exists
+if [ ! -d "$TEST_DIR/project/.vrift/manifest.lmdb" ]; then
     echo "[FAIL] Manifest not created"
     exit 1
 fi
 
-echo "[3] Checking manifest stores correct size..."
-# The manifest should contain the 5GB size
-MANIFEST_BYTES=$(wc -c < "$VRIFT_MANIFEST")
-if [ "$MANIFEST_BYTES" -lt 50 ]; then
-    echo "[FAIL] Manifest too small, likely corrupted"
-    exit 1
-fi
+echo "[3] Starting daemon..."
+VRIFT_LOG=info "$VRIFTD_BIN" start </dev/null > "$TEST_DIR/vriftd.log" 2>&1 &
+DAEMON_PID=$!
+
+# Wait for socket
+waited=0
+while [ ! -S "$VRIFT_SOCKET_PATH" ] && [ $waited -lt 10 ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+done
 
 echo "[4] Verifying shim stat returns >4GB size..."
-# Start daemon
-killall vriftd 2>/dev/null || true
-export VRIFT_MANIFEST
-"${PROJECT_ROOT}/target/debug/vriftd" start > /tmp/large_daemon.log 2>&1 &
-DAEMON_PID=$!
-sleep 2
-
 # Create test program to verify stat
-cat > /tmp/large_test.c << 'EOF'
+cat > /tmp/large_test_$$.c << 'EOF'
 #include <stdio.h>
 #include <sys/stat.h>
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc < 2) return 1;
     struct stat sb;
-    if (stat("/vrift/large/bigfile.bin", &sb) == 0) {
+    if (stat(argv[1], &sb) == 0) {
         printf("SIZE=%lld\n", (long long)sb.st_size);
         return (sb.st_size > 4294967296LL) ? 0 : 1;
     }
@@ -69,13 +76,15 @@ int main() {
 }
 EOF
 
-gcc /tmp/large_test.c -o /tmp/large_test 2>/dev/null
+gcc "/tmp/large_test_$$.c" -o "/tmp/large_test_$$" 2>/dev/null
+rm -f "/tmp/large_test_$$.c"
 
-export DYLD_FORCE_FLAT_NAMESPACE=1
-export DYLD_INSERT_LIBRARIES="${PROJECT_ROOT}/target/debug/libvelo_shim.dylib"
-OUTPUT=$(/tmp/large_test 2>&1) || true
-unset DYLD_INSERT_LIBRARIES
-kill $DAEMON_PID 2>/dev/null || true
+OUTPUT=$(env DYLD_INSERT_LIBRARIES="$SHIM_LIB" DYLD_FORCE_FLAT_NAMESPACE=1 \
+    VRIFT_SOCKET_PATH="$VRIFT_SOCKET_PATH" VR_THE_SOURCE="$VR_THE_SOURCE" \
+    VRIFT_VFS_PREFIX="$TEST_DIR/project" VRIFT_PROJECT_ROOT="$TEST_DIR/project" \
+    "/tmp/large_test_$$" "$TEST_DIR/project/bigfile.bin" 2>&1) || true
+
+rm -f "/tmp/large_test_$$"
 
 if echo "$OUTPUT" | grep -q "SIZE=5368709120"; then
     echo "✅ PASS: Shim correctly reports >4GB file size"
