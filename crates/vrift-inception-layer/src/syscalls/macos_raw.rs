@@ -60,7 +60,7 @@
 //! - ARM64 ABI: Apple ARM64 Function Calling Conventions
 //! - Pattern 2682: Raw Assembly Syscall Wrappers (linux_raw.rs)
 
-use libc::c_int;
+use libc::{c_char, c_int};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use std::arch::asm;
 
@@ -131,6 +131,8 @@ const SYS_UNLINKAT: i64 = 472;
 /// SYS_mkdirat = 475 on macOS
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_MKDIRAT: i64 = 475;
+const SYS_UTIMENSAT: i64 = 476;
+const SYS_FUTIMENS: i64 = 477;
 
 /// SYS_symlinkat = 474 on macOS
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -2533,6 +2535,36 @@ pub unsafe fn raw_fchownat(
 ) -> libc::c_int {
     crate::syscalls::linux_raw::raw_fchownat(dirfd, path, owner, group, flags)
 }
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub unsafe fn raw_utimensat(
+    dirfd: c_int,
+    path: *const c_char,
+    times: *const libc::timespec,
+    flags: c_int,
+) -> c_int {
+    let ret: i64;
+    asm!(
+        "svc #0x80",
+        in("x16") SYS_UTIMENSAT,
+        in("x0") dirfd as i64,
+        in("x1") path as i64,
+        in("x2") times as i64,
+        in("x3") flags as i64,
+        lateout("x0") ret,
+    );
+    if ret < 0 {
+        crate::set_errno(-(ret as i32));
+        -1
+    } else {
+        ret as c_int
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub unsafe fn raw_futimens(fd: c_int, times: *const libc::timespec) -> c_int {
+    raw_utimensat(fd, std::ptr::null(), times, 0)
+}
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub unsafe fn raw_flock(fd: c_int, operation: c_int) -> c_int {
     let ret: i64;

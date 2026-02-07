@@ -3,6 +3,7 @@ use crate::state::*;
 use libc::c_void;
 use libc::{c_char, c_int};
 use std::ffi::CStr;
+use std::fmt::Write;
 use std::sync::atomic::Ordering;
 
 /// RFC-0047: Rename implementation with VFS boundary enforcement
@@ -250,13 +251,53 @@ pub unsafe extern "C" fn futimes_inception(fd: c_int, times: *const libc::timeva
 }
 
 #[no_mangle]
-#[cfg(target_os = "linux")]
 pub unsafe extern "C" fn futimens_inception(fd: c_int, times: *const libc::timespec) -> c_int {
+    let _guard = match InceptionLayerGuard::enter() {
+        Some(g) => g,
+        None => {
+            #[cfg(target_os = "macos")]
+            return crate::syscalls::macos_raw::raw_futimens(fd, times);
+            #[cfg(target_os = "linux")]
+            return crate::syscalls::linux_raw::raw_utimensat(fd, std::ptr::null(), times, 0);
+        }
+    };
+
     if let Some(err) = quick_block_vfs_fd_mutation(fd) {
         return err;
     }
-    // Linux futimens is utimensat with dirfd and NULL path
-    crate::syscalls::linux_raw::raw_utimensat(fd, std::ptr::null(), times, 0)
+
+    #[cfg(target_os = "macos")]
+    return crate::syscalls::macos_raw::raw_futimens(fd, times);
+    #[cfg(target_os = "linux")]
+    return crate::syscalls::linux_raw::raw_utimensat(fd, std::ptr::null(), times, 0);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn utimensat_inception(
+    dirfd: c_int,
+    path: *const c_char,
+    times: *const libc::timespec,
+    flags: c_int,
+) -> c_int {
+    let _guard = match InceptionLayerGuard::enter() {
+        Some(g) => g,
+        None => {
+            #[cfg(target_os = "macos")]
+            return crate::syscalls::macos_raw::raw_utimensat(dirfd, path, times, flags);
+            #[cfg(target_os = "linux")]
+            return crate::syscalls::linux_raw::raw_utimensat(dirfd, path, times, flags);
+        }
+    };
+    // RFC-0039: Block mutation of existing VFS entries
+    if let Some(res) = block_existing_vfs_entry_at(dirfd, path) {
+        inception_log!("blocking utimensat on VFS entry");
+        return res;
+    }
+
+    #[cfg(target_os = "macos")]
+    return crate::syscalls::macos_raw::raw_utimensat(dirfd, path, times, flags);
+    #[cfg(target_os = "linux")]
+    return crate::syscalls::linux_raw::raw_utimensat(dirfd, path, times, flags);
 }
 
 #[no_mangle]
@@ -501,7 +542,7 @@ pub unsafe extern "C" fn mkdirat_inception(
             return crate::syscalls::macos_raw::raw_mkdirat(dirfd, path, mode);
         }
         // RFC-0039: Only block if path EXISTS in manifest, allow new dir creation
-        block_existing_vfs_entry(path)
+        block_existing_vfs_entry_at(dirfd, path)
             .unwrap_or_else(|| crate::syscalls::macos_raw::raw_mkdirat(dirfd, path, mode))
     }
     #[cfg(target_os = "linux")]
@@ -835,39 +876,64 @@ pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
 /// Helper for CREATION ops (mkdir, symlink): Only block if path EXISTS in manifest
 /// RFC-0039 Solid Mode: Allow creating new files/directories in VFS territory
 /// This enables compilers to create .o files, build dirs, etc.
-pub(crate) unsafe fn block_existing_vfs_entry(path: *const c_char) -> Option<c_int> {
+pub(crate) unsafe fn block_existing_vfs_entry_at(
+    dirfd: c_int,
+    path: *const c_char,
+) -> Option<c_int> {
     if path.is_null() {
         return None;
     }
 
     let path_str = CStr::from_ptr(path).to_str().ok()?;
 
-    // Full inception layer state check: only block if manifest HIT
-    if let Some(_guard) = InceptionLayerGuard::enter() {
-        if let Some(state) = InceptionLayerState::get() {
-            if let Some(vpath) = state.resolve_path(path_str) {
-                // Check if this path exists in manifest
-                if state.query_manifest_ipc(&vpath).is_some() {
-                    inception_log!(
-                        "blocking creation on EXISTING VFS entry: '{}'",
-                        vpath.absolute
-                    );
-                    crate::set_errno(libc::EEXIST);
-                    return Some(-1);
-                }
-                // Manifest MISS: Allow creation (passthrough)
-                inception_log!(
-                    "allowing creation in VFS territory (manifest MISS): '{}'",
-                    vpath.absolute
-                );
-                return None;
-            }
+    let _guard = InceptionLayerGuard::enter()?;
+    let state = InceptionLayerState::get()?;
+    let mut resolved_vpath = None;
+
+    if path_str.starts_with('/') || dirfd == libc::AT_FDCWD {
+        resolved_vpath = state.resolve_path(path_str);
+    } else {
+        // Resolve dirfd
+        let mut dir_path_buf = [0i8; 1024];
+        #[cfg(target_os = "macos")]
+        if libc::fcntl(dirfd, libc::F_GETPATH, dir_path_buf.as_mut_ptr()) == 0 {
+            let mut abs_buf = [0u8; 1024];
+            let mut aw = crate::macros::StackWriter::new(&mut abs_buf);
+            let dir_path_ptr = dir_path_buf.as_ptr() as *const u8;
+            let dir_path_len = unsafe { libc::strlen(dir_path_ptr as *const i8) };
+
+            // Safety: libc::fcntl with F_GETPATH fills the buffer with a NUL-terminated C string.
+            // We use bytes directly to avoid to_string_lossy (which can allocate).
+            let dir_path_bytes = unsafe { std::slice::from_raw_parts(dir_path_ptr, dir_path_len) };
+            let _ = aw.write_str(std::str::from_utf8(dir_path_bytes).unwrap_or(""));
+            let _ = aw.write_char('/');
+            let _ = aw.write_str(path_str);
+
+            resolved_vpath = state.resolve_path(aw.as_str());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // TODO: linux dirfd resolution
         }
     }
 
-    // During early init, we cannot check manifest - allow passthrough
-    // The file system itself will report EEXIST if needed
+    if let Some(vpath) = resolved_vpath {
+        // Check if this path exists in manifest
+        if state.query_manifest_ipc(&vpath).is_some() {
+            inception_log!(
+                "blocking creation on EXISTING VFS entry: '{}'",
+                vpath.absolute
+            );
+            crate::set_errno(libc::EEXIST);
+            return Some(-1);
+        }
+    }
+
     None
+}
+
+pub(crate) unsafe fn block_existing_vfs_entry(path: *const c_char) -> Option<c_int> {
+    block_existing_vfs_entry_at(libc::AT_FDCWD, path)
 }
 
 #[inline]
@@ -1400,8 +1466,6 @@ pub unsafe extern "C" fn truncate_inception(path: *const c_char, length: libc::o
         .unwrap_or_else(|| crate::syscalls::linux_raw::raw_truncate(path, length));
 }
 
-// --- chflags (macOS only) ---
-
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn chflags_inception(path: *const c_char, flags: libc::c_uint) -> c_int {
@@ -1478,53 +1542,6 @@ pub unsafe extern "C" fn removexattr_inception(
 
 /// utimensat_inception: Block timestamp modifications on VFS files (at variant)
 /// Note: macOS doesn't have a direct utimensat syscall - it uses getattrlist/setattrlist
-/// For safety, we keep using the dlsym path here since this is not interposed at boot time
-#[allow(unused_variables)]
-pub unsafe extern "C" fn utimensat_inception(
-    dirfd: c_int,
-    path: *const c_char,
-    times: *const libc::timespec,
-    flags: c_int,
-) -> c_int {
-    #[cfg(target_os = "macos")]
-    {
-        // Pattern 2930 exception: utimensat has no direct syscall on macOS
-        // Since this function is not in __interpose, the dlsym risk is low
-        let real = std::mem::transmute::<
-            *mut libc::c_void,
-            unsafe extern "C" fn(c_int, *const c_char, *const libc::timespec, c_int) -> c_int,
-        >(crate::reals::REAL_UTIMENSAT.get());
-
-        let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0
-            || crate::state::INCEPTION_LAYER_STATE
-                .load(std::sync::atomic::Ordering::Acquire)
-                .is_null()
-        {
-            if let Some(err) = quick_block_vfs_mutation(path) {
-                return err;
-            }
-            return real(dirfd, path, times, flags);
-        }
-        block_vfs_mutation(path).unwrap_or_else(|| real(dirfd, path, times, flags))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let init_state = INITIALIZING.load(Ordering::Relaxed);
-        if init_state != 0
-            || crate::state::INCEPTION_LAYER_STATE
-                .load(std::sync::atomic::Ordering::Acquire)
-                .is_null()
-        {
-            if let Some(err) = quick_block_vfs_mutation(path) {
-                return err;
-            }
-            return crate::syscalls::linux_raw::raw_utimensat(dirfd, path, times, flags);
-        }
-        block_vfs_mutation(path)
-            .unwrap_or_else(|| crate::syscalls::linux_raw::raw_utimensat(dirfd, path, times, flags))
-    }
-}
 #[no_mangle]
 pub unsafe extern "C" fn setrlimit_inception(resource: c_int, rlp: *const libc::rlimit) -> c_int {
     #[cfg(target_os = "macos")]

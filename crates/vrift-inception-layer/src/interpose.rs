@@ -33,12 +33,12 @@ extern "C" {
 use crate::syscalls::misc::{
     chflags_inception, chmod_inception, chown_inception, exchangedata_inception, execve_inception,
     faccessat_inception, fchflags_inception, fchmod_inception, fchmodat_inception,
-    fchown_inception, fchownat_inception, flock_inception, futimes_inception, lchown_inception,
-    link_inception, linkat_inception, mkdir_inception, mkdirat_inception, posix_spawn_inception,
-    posix_spawnp_inception, readlinkat_inception, removexattr_inception, rmdir_inception,
-    setrlimit_inception, setxattr_inception, symlink_inception, symlinkat_inception,
-    truncate_inception, unlink_inception, unlinkat_inception, utimensat_inception,
-    utimes_inception,
+    fchown_inception, fchownat_inception, flock_inception, futimens_inception, futimes_inception,
+    lchown_inception, link_inception, linkat_inception, mkdir_inception, mkdirat_inception,
+    posix_spawn_inception, posix_spawnp_inception, readlinkat_inception, removexattr_inception,
+    rmdir_inception, setrlimit_inception, setxattr_inception, symlink_inception,
+    symlinkat_inception, truncate_inception, unlink_inception, unlinkat_inception,
+    utimensat_inception, utimes_inception,
 };
 
 #[cfg(target_os = "macos")]
@@ -49,7 +49,7 @@ use crate::syscalls::path::realpath_inception;
 use libc::{c_char, c_int, c_void, mode_t};
 
 #[cfg(target_os = "macos")]
-use libc::{c_long, dirent, pid_t, size_t, ssize_t, timespec, timeval, DIR};
+use libc::{c_long, dirent, pid_t, size_t, ssize_t, timeval, DIR};
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
@@ -149,13 +149,6 @@ extern "C" {
     fn real_symlink(p1: *const c_char, p2: *const c_char) -> c_int;
     #[link_name = "flock"]
     fn real_flock(fd: c_int, op: c_int) -> c_int;
-    #[link_name = "utimensat"]
-    fn real_utimensat(
-        dirfd: c_int,
-        path: *const c_char,
-        times: *const timespec,
-        flags: c_int,
-    ) -> c_int;
     #[link_name = "mkdir"]
     fn real_mkdir(path: *const c_char, mode: mode_t) -> c_int;
     #[link_name = "mmap"]
@@ -178,8 +171,19 @@ extern "C" {
     fn real_chmod(path: *const c_char, mode: mode_t) -> c_int;
     #[link_name = "fchmodat"]
     fn real_fchmodat(dirfd: c_int, path: *const c_char, mode: mode_t, flags: c_int) -> c_int;
+    #[link_name = "futimens"]
+    fn real_futimens(fd: c_int, times: *const libc::timespec) -> c_int;
+    #[link_name = "utimensat"]
+    fn real_utimensat(
+        dirfd: c_int,
+        path: *const c_char,
+        times: *const libc::timespec,
+        flags: c_int,
+    ) -> c_int;
     #[link_name = "truncate"]
     fn real_truncate(path: *const c_char, length: libc::off_t) -> c_int;
+    #[link_name = "ftruncate"]
+    fn real_ftruncate(fd: c_int, length: libc::off_t) -> c_int;
     #[link_name = "chflags"]
     fn real_chflags(path: *const c_char, flags: libc::c_uint) -> c_int;
     #[link_name = "setxattr"]
@@ -203,8 +207,6 @@ extern "C" {
     fn real_fchdir(fd: c_int) -> c_int;
     #[link_name = "lseek"]
     fn real_lseek(fd: c_int, offset: libc::off_t, whence: c_int) -> libc::off_t;
-    #[link_name = "ftruncate"]
-    fn real_ftruncate(fd: c_int, length: libc::off_t) -> c_int;
     #[link_name = "unlinkat"]
     fn real_unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int;
     #[link_name = "mkdirat"]
@@ -606,6 +608,13 @@ pub static IT_TRUNCATE: Interpose = Interpose {
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
+pub static IT_FTRUNCATE: Interpose = Interpose {
+    new_func: ftruncate_inception as _,
+    old_func: real_ftruncate as _,
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
 pub static IT_CHFLAGS: Interpose = Interpose {
     new_func: chflags_inception as _,
     old_func: real_chflags as _,
@@ -660,19 +669,13 @@ pub static IT_LSEEK: Interpose = Interpose {
     old_func: real_lseek as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__interpose"]
 #[used]
-pub static IT_FTRUNCATE: Interpose = Interpose {
-    new_func: ftruncate_inception as _,
-    old_func: real_ftruncate as _,
-};
-#[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
-#[used]
 pub static IT_UNLINKAT: Interpose = Interpose {
     new_func: unlinkat_inception as _,
     old_func: real_unlinkat as _,
 };
+
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
@@ -680,13 +683,23 @@ pub static IT_MKDIRAT: Interpose = Interpose {
     new_func: mkdirat_inception as _,
     old_func: real_mkdirat as _,
 };
+
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
+pub static IT_FUTIMENS: Interpose = Interpose {
+    new_func: futimens_inception as _,
+    old_func: real_futimens as _,
+};
+
+#[cfg(target_os = "macos")]
+#[used]
+#[link_section = "__DATA,__interpose"]
 pub static IT_SYMLINKAT: Interpose = Interpose {
     new_func: symlinkat_inception as _,
     old_func: real_symlinkat as _,
 };
+
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,__interpose"]
 #[used]
