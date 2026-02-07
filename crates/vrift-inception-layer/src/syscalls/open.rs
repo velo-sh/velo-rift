@@ -343,7 +343,6 @@ pub unsafe extern "C" fn open_inception_c_impl(p: *const c_char, f: c_int, m: mo
             None => return raw_open_internal(p, f, m),
         };
 
-        
         velo_open_impl(p, f, m)
     };
 

@@ -5,6 +5,20 @@ use std::os::unix::net::UnixStream;
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// BUG-007b: Raw close for IPC socket FDs — avoids interposed close_inception
+/// which would trigger reingest IPC and recursive socket operations.
+#[inline(always)]
+unsafe fn ipc_raw_close(fd: c_int) -> c_int {
+    #[cfg(target_os = "macos")]
+    {
+        crate::syscalls::macos_raw::raw_close(fd)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::syscalls::linux_raw::raw_close(fd)
+    }
+}
+
 /// Raw Unix socket connect using libc syscalls (avoids recursion through inception layer)
 /// RFC-0053: Adds 5 second timeout to prevent UE process states from blocking IPC
 pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
@@ -13,8 +27,15 @@ pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
         Ok(p) => p,
         Err(_) => return -1,
     };
-    if libc::access(path_cstr.as_ptr(), libc::F_OK) != 0 {
-        return -1; // Socket doesn't exist, fail immediately
+    // BUG-007b: Use raw_access, NOT libc::access — access is interposed by the shim
+    // and would trigger recursive IPC (open → sync_rpc → access → access_inception → IPC → deadlock)
+    #[cfg(target_os = "macos")]
+    if crate::syscalls::macos_raw::raw_access(path_cstr.as_ptr(), libc::F_OK) != 0 {
+        return -1;
+    }
+    #[cfg(target_os = "linux")]
+    if crate::syscalls::linux_raw::raw_access(path_cstr.as_ptr(), libc::F_OK) != 0 {
+        return -1;
     }
 
     // RFC-0043: Prevent FD leakage to child processes (Atomic CLOEXEC)
@@ -27,8 +48,11 @@ pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
         {
             let s = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
             if s >= 0 {
-                // Fallback: Non-atomic but best effort
-                libc::fcntl(s, libc::F_SETFD, libc::FD_CLOEXEC);
+                // BUG-007b: Use raw_fcntl to avoid interposed fcntl
+                #[cfg(target_os = "macos")]
+                crate::syscalls::macos_raw::raw_fcntl(s, libc::F_SETFD, libc::FD_CLOEXEC);
+                #[cfg(target_os = "linux")]
+                libc::fcntl(s, libc::F_SETFD, libc::FD_CLOEXEC); // Linux has no fcntl interpose
             }
             s
         }
@@ -64,7 +88,7 @@ pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
 
     let path_bytes = path.as_bytes();
     if path_bytes.len() >= addr.sun_path.len() {
-        libc::close(fd);
+        ipc_raw_close(fd);
         return -1;
     }
     ptr::copy_nonoverlapping(
@@ -75,7 +99,7 @@ pub(crate) unsafe fn raw_unix_connect(path: &str) -> c_int {
 
     let addr_len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
     if libc::connect(fd, &addr as *const _ as *const libc::sockaddr, addr_len) < 0 {
-        libc::close(fd);
+        ipc_raw_close(fd);
         return -1;
     }
 
@@ -210,25 +234,21 @@ unsafe fn sync_rpc(
                 } else {
                     parent
                 };
-                root.canonicalize()
-                    .unwrap_or_else(|_| root.to_path_buf())
-                    .to_string_lossy()
-                    .to_string()
+                // BUG-007b: DO NOT call canonicalize() here — it triggers
+                // interposed stat/readlink calls, causing recursive IPC deadlock
+                // under concurrent workloads. The path from env is already usable.
+                root.to_string_lossy().to_string()
             } else {
                 String::new()
             }
         }
     };
 
-    // Ensure project_root is canonicalized if from VRIFT_PROJECT_ROOT
-    let project_root = if !project_root.is_empty() {
-        std::fs::canonicalize(&project_root)
-            .unwrap_or_else(|_| std::path::PathBuf::from(project_root))
-            .to_string_lossy()
-            .to_string()
-    } else {
-        project_root
-    };
+    // BUG-007b: DO NOT call std::fs::canonicalize() here.
+    // canonicalize() calls stat/readlink internally, which are interposed by the shim.
+    // When called from within a shim entry point (open -> query_manifest_ipc -> sync_rpc),
+    // this creates recursive IPC that floods the daemon socket under concurrent access.
+    // project_root from env vars is already an absolute path.
 
     if !project_root.is_empty() {
         let register_req = vrift_ipc::VeloRequest::RegisterWorkspace { project_root };
@@ -239,12 +259,12 @@ unsafe fn sync_rpc(
 
     // Send original request
     if !send_request_on_fd(fd, request) {
-        libc::close(fd);
+        ipc_raw_close(fd);
         return None;
     }
 
     let response = recv_response_on_fd(fd);
-    libc::close(fd);
+    ipc_raw_close(fd);
     response
 }
 

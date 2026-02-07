@@ -409,6 +409,10 @@ pub fn is_vfs_ready() -> bool {
 // Lock-free recursion key using atomic instead of OnceLock (avoids mutex deadlock during library init)
 static RECURSION_KEY_INIT: AtomicBool = AtomicBool::new(false);
 static RECURSION_KEY_VALUE: AtomicUsize = AtomicUsize::new(0);
+// BUG-007b: Dedicated lock for TLS key creation — MUST NOT reuse BOOTSTRAPPING.
+// InceptionLayerGuard::enter() sets BOOTSTRAPPING=true before calling get_recursion_key(),
+// so reusing BOOTSTRAPPING here would always return key=0, disabling the recursion guard.
+static TLS_KEY_LOCK: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn get_recursion_key() -> libc::pthread_key_t {
     // Fast path: already initialized
@@ -417,16 +421,22 @@ pub(crate) fn get_recursion_key() -> libc::pthread_key_t {
     }
 
     // Slow path: initialize (only one thread will succeed)
-    // RFC-0049: Use BOOTSTRAPPING flag to prevent recursion if pthread_key_create
-    // or its internal calls are intercepted.
-    if BOOTSTRAPPING.swap(true, Ordering::SeqCst) {
-        return 0; // Already bootstrapping, avoid recursion
+    // BUG-007b: Use dedicated TLS_KEY_LOCK, NOT BOOTSTRAPPING.
+    if TLS_KEY_LOCK.swap(true, Ordering::SeqCst) {
+        // Another thread is creating the key — spin briefly waiting for it
+        for _ in 0..1000 {
+            std::hint::spin_loop();
+            if RECURSION_KEY_INIT.load(Ordering::Acquire) {
+                return RECURSION_KEY_VALUE.load(Ordering::Relaxed) as libc::pthread_key_t;
+            }
+        }
+        return 0; // Give up after spin — TLS guard disabled for this call
     }
 
     let mut key: libc::pthread_key_t = 0;
     let ret = unsafe { libc::pthread_key_create(&mut key, None) };
     if ret != 0 {
-        BOOTSTRAPPING.store(false, Ordering::SeqCst);
+        TLS_KEY_LOCK.store(false, Ordering::SeqCst);
         return 0;
     }
 
@@ -437,12 +447,12 @@ pub(crate) fn get_recursion_key() -> libc::pthread_key_t {
         .is_ok()
     {
         RECURSION_KEY_INIT.store(true, Ordering::Release);
-        BOOTSTRAPPING.store(false, Ordering::SeqCst);
+        TLS_KEY_LOCK.store(false, Ordering::SeqCst);
         key
     } else {
         // Another thread beat us, clean up and use their key
         unsafe { libc::pthread_key_delete(key) };
-        BOOTSTRAPPING.store(false, Ordering::SeqCst);
+        TLS_KEY_LOCK.store(false, Ordering::SeqCst);
         RECURSION_KEY_VALUE.load(Ordering::Relaxed) as libc::pthread_key_t
     }
 }
@@ -769,6 +779,10 @@ pub(crate) static SYNTHETIC_DIR_COUNTER: std::sync::atomic::AtomicUsize =
 /// Open mmap'd manifest file for O(1) stat lookup.
 /// Returns (ptr, size) or (null, 0) if unavailable.
 /// Uses raw libc to avoid recursion through inception layer.
+/// BUG-007b: MUST NOT be inlined — allocates large stack buffers (PATH_MAX etc.)
+/// that would overflow the 512KB default pthread stack if merged into get().
+#[inline(never)]
+#[cold]
 pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
     // Check if mmap is explicitly disabled
     unsafe {
@@ -829,8 +843,29 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
 
     let root_str = std::str::from_utf8(&root_bytes[..final_root_len]).unwrap_or("");
 
-    // RFC-0050: Canonicalize project root for ID consistency (macOS /private/tmp duality)
-    let canon_root = std::fs::canonicalize(root_str).unwrap_or_else(|_| PathBuf::from(root_str));
+    // BUG-007b: Use raw_realpath instead of std::fs::canonicalize()
+    // canonicalize() calls stat/readlink which are interposed by the shim,
+    // causing potential recursion/deadlock during initialization.
+    let canon_root = unsafe {
+        let mut resolved = [0u8; libc::PATH_MAX as usize];
+        let root_cstr = std::ffi::CString::new(root_str).unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        let result = crate::syscalls::macos_raw::raw_realpath(
+            root_cstr.as_ptr(),
+            resolved.as_mut_ptr() as *mut libc::c_char,
+        );
+        #[cfg(target_os = "linux")]
+        let result = libc::realpath(
+            root_cstr.as_ptr(),
+            resolved.as_mut_ptr() as *mut libc::c_char,
+        );
+        if !result.is_null() {
+            let resolved_str = CStr::from_ptr(result).to_string_lossy().to_string();
+            PathBuf::from(resolved_str)
+        } else {
+            PathBuf::from(root_str)
+        }
+    };
     let canon_root_str = canon_root.to_string_lossy();
 
     // RFC-0044: Use standardized VDir mmap path managed by daemon
@@ -1144,6 +1179,13 @@ impl InceptionLayerState {
         soft_limit
     }
 
+    /// BUG-007b: MUST NOT be inlined into get().
+    /// init() + open_manifest_mmap() together allocate ~605KB on stack
+    /// (FixedStrings, PATH_MAX buffers, InceptionLayerState struct).
+    /// macOS pthread stacks default to 512KB → stack overflow in get()'s prologue,
+    /// silently hanging all threads in the stack probe loop.
+    #[inline(never)]
+    #[cold]
     pub(crate) fn init() -> Option<*mut Self> {
         let soft_limit = Self::boost_fd_limit();
         unsafe { Self::init_logger() };
@@ -1181,9 +1223,27 @@ impl InceptionLayerState {
         let prefix_ptr = unsafe { libc::getenv(c"VRIFT_VFS_PREFIX".as_ptr()) };
         if !prefix_ptr.is_null() {
             let raw_prefix = unsafe { CStr::from_ptr(prefix_ptr).to_string_lossy() };
-            // RFC-0050: Canonicalize prefix for macOS /private/tmp stability
-            if let Ok(canon) = std::fs::canonicalize(raw_prefix.as_ref()) {
-                vfs_prefix.set(&canon.to_string_lossy());
+            // RFC-0050 + BUG-007b: Canonicalize prefix using raw_realpath
+            // (std::fs::canonicalize calls interposed stat/readlink)
+            let prefix_cstr = std::ffi::CString::new(raw_prefix.as_ref()).unwrap_or_default();
+            let mut resolved = [0u8; libc::PATH_MAX as usize];
+            #[cfg(target_os = "macos")]
+            let result = unsafe {
+                crate::syscalls::macos_raw::raw_realpath(
+                    prefix_cstr.as_ptr(),
+                    resolved.as_mut_ptr() as *mut libc::c_char,
+                )
+            };
+            #[cfg(target_os = "linux")]
+            let result = unsafe {
+                libc::realpath(
+                    prefix_cstr.as_ptr(),
+                    resolved.as_mut_ptr() as *mut libc::c_char,
+                )
+            };
+            if !result.is_null() {
+                let canon = unsafe { CStr::from_ptr(result).to_string_lossy() };
+                vfs_prefix.set(&canon);
             } else {
                 vfs_prefix.set(&raw_prefix);
             }
@@ -1210,9 +1270,27 @@ impl InceptionLayerState {
             } else {
                 parent
             };
-            // RFC-0050: Canonicalize project root
-            if let Ok(canon) = std::fs::canonicalize(root) {
-                project_root_fs.set(&canon.to_string_lossy());
+            // RFC-0050 + BUG-007b: Canonicalize using raw_realpath
+            let root_str_lossy = root.to_string_lossy();
+            let root_cstr = std::ffi::CString::new(root_str_lossy.as_ref()).unwrap_or_default();
+            let mut resolved = [0u8; libc::PATH_MAX as usize];
+            #[cfg(target_os = "macos")]
+            let result = unsafe {
+                crate::syscalls::macos_raw::raw_realpath(
+                    root_cstr.as_ptr(),
+                    resolved.as_mut_ptr() as *mut libc::c_char,
+                )
+            };
+            #[cfg(target_os = "linux")]
+            let result = unsafe {
+                libc::realpath(
+                    root_cstr.as_ptr(),
+                    resolved.as_mut_ptr() as *mut libc::c_char,
+                )
+            };
+            if !result.is_null() {
+                let canon = unsafe { CStr::from_ptr(result).to_string_lossy() };
+                project_root_fs.set(&canon);
             } else {
                 project_root_fs.set(&root.to_string_lossy());
             }
