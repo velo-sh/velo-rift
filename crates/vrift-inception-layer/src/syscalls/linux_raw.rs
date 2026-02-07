@@ -1720,6 +1720,146 @@ pub unsafe fn raw_fchownat(
     }
 }
 
+/// Raw chown syscall - change file ownership by path (follows symlinks)
+/// Uses SYS_chown on x86_64, fchownat(AT_FDCWD, ..., 0) on aarch64
+#[inline(always)]
+pub unsafe fn raw_chown(path: *const c_char, owner: libc::uid_t, group: libc::gid_t) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 92i64, // SYS_chown
+            in("rdi") path,
+            in("rsi") owner as i64,
+            in("rdx") group as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // AArch64 has no direct chown — use fchownat(AT_FDCWD, path, ..., 0)
+        raw_fchownat(libc::AT_FDCWD, path, owner, group, 0)
+    }
+}
+
+/// Raw lchown syscall - change symlink ownership (does NOT follow symlinks)
+/// Uses SYS_lchown on x86_64, fchownat(AT_FDCWD, ..., AT_SYMLINK_NOFOLLOW) on aarch64
+#[inline(always)]
+pub unsafe fn raw_lchown(path: *const c_char, owner: libc::uid_t, group: libc::gid_t) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 94i64, // SYS_lchown
+            in("rdi") path,
+            in("rsi") owner as i64,
+            in("rdx") group as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as c_int
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // AArch64 has no direct lchown — use fchownat with AT_SYMLINK_NOFOLLOW
+        raw_fchownat(
+            libc::AT_FDCWD,
+            path,
+            owner,
+            group,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    }
+}
+
+/// Raw readlinkat syscall - read symlink target via dirfd + path
+#[inline(always)]
+pub unsafe fn raw_readlinkat(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut c_char,
+    bufsiz: size_t,
+) -> ssize_t {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "syscall",
+            in("rax") 267i64, // SYS_readlinkat
+            in("rdi") dirfd as i64,
+            in("rsi") path,
+            in("rdx") buf,
+            in("r10") bufsiz as i64,
+            lateout("rax") ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: i64;
+        std::arch::asm!(
+            "svc #0",
+            in("x8") 78i64, // SYS_readlinkat
+            in("x0") dirfd as i64,
+            in("x1") path,
+            in("x2") buf,
+            in("x3") bufsiz as i64,
+            lateout("x0") ret,
+        );
+        if ret < 0 {
+            set_errno_from_ret(ret);
+            -1
+        } else {
+            ret as ssize_t
+        }
+    }
+}
+
+/// Raw futimes syscall - change file timestamps via FD
+/// Linux has no dedicated futimes syscall; uses utimensat(fd, NULL, ...) instead
+#[inline(always)]
+pub unsafe fn raw_futimes(fd: c_int, times: *const libc::timeval) -> c_int {
+    if times.is_null() {
+        raw_utimensat(fd, std::ptr::null(), std::ptr::null(), 0)
+    } else {
+        let times_array = std::slice::from_raw_parts(times, 2);
+        let ts = [
+            libc::timespec {
+                tv_sec: times_array[0].tv_sec,
+                tv_nsec: times_array[0].tv_usec * 1000,
+            },
+            libc::timespec {
+                tv_sec: times_array[1].tv_sec,
+                tv_nsec: times_array[1].tv_usec * 1000,
+            },
+        ];
+        raw_utimensat(fd, std::ptr::null(), ts.as_ptr(), 0)
+    }
+}
+
 /// Raw truncate syscall
 #[inline(always)]
 pub unsafe fn raw_truncate(path: *const c_char, length: off_t) -> c_int {

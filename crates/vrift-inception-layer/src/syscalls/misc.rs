@@ -245,8 +245,8 @@ pub unsafe extern "C" fn futimes_inception(fd: c_int, times: *const libc::timeva
     if let Some(err) = quick_block_vfs_fd_mutation(fd) {
         return err;
     }
-    // Linux: use libc futimes directly (no raw syscall needed)
-    libc::futimes(fd, times)
+    // Linux: use raw syscall to avoid LD_PRELOAD recursion
+    crate::syscalls::linux_raw::raw_futimes(fd, times)
 }
 
 #[no_mangle]
@@ -1238,13 +1238,13 @@ pub unsafe extern "C" fn chown_inception(
         #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_chown(path, owner, group);
         #[cfg(target_os = "linux")]
-        return libc::chown(path, owner, group);
+        return crate::syscalls::linux_raw::raw_chown(path, owner, group);
     }
     block_vfs_mutation(path).unwrap_or_else(|| {
         #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_chown(path, owner, group);
         #[cfg(target_os = "linux")]
-        return libc::chown(path, owner, group);
+        return crate::syscalls::linux_raw::raw_chown(path, owner, group);
     })
 }
 
@@ -1267,13 +1267,13 @@ pub unsafe extern "C" fn lchown_inception(
         #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_lchown(path, owner, group);
         #[cfg(target_os = "linux")]
-        return libc::lchown(path, owner, group);
+        return crate::syscalls::linux_raw::raw_lchown(path, owner, group);
     }
     block_vfs_mutation(path).unwrap_or_else(|| {
         #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_lchown(path, owner, group);
         #[cfg(target_os = "linux")]
-        return libc::lchown(path, owner, group);
+        return crate::syscalls::linux_raw::raw_lchown(path, owner, group);
     })
 }
 
@@ -1299,7 +1299,7 @@ pub unsafe extern "C" fn readlinkat_inception(
         #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_readlinkat(dirfd, path, buf, bufsiz);
         #[cfg(target_os = "linux")]
-        return libc::readlinkat(dirfd, path, buf, bufsiz);
+        return crate::syscalls::linux_raw::raw_readlinkat(dirfd, path, buf, bufsiz);
     }
 
     // For AT_FDCWD with absolute paths, use VFS-resolved readlink path
@@ -1323,7 +1323,7 @@ pub unsafe extern "C" fn readlinkat_inception(
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_readlinkat(dirfd, path, buf, bufsiz);
     #[cfg(target_os = "linux")]
-    return libc::readlinkat(dirfd, path, buf, bufsiz);
+    return crate::syscalls::linux_raw::raw_readlinkat(dirfd, path, buf, bufsiz);
 }
 
 /// exchangedata_inception: Block atomic file swaps involving VFS (macOS only)
@@ -1570,7 +1570,7 @@ pub unsafe extern "C" fn symlink_inception(p1: *const c_char, p2: *const c_char)
         #[cfg(target_os = "macos")]
         return crate::syscalls::macos_raw::raw_symlinkat(p1, libc::AT_FDCWD, p2);
         #[cfg(target_os = "linux")]
-        return libc::symlink(p1, p2);
+        return crate::syscalls::linux_raw::raw_symlink(p1, p2);
     }
     // RFC-0039: Only block if path EXISTS in manifest, allow new symlink creation
     if let Some(err) = block_existing_vfs_entry(p2) {
@@ -1579,7 +1579,7 @@ pub unsafe extern "C" fn symlink_inception(p1: *const c_char, p2: *const c_char)
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_symlinkat(p1, libc::AT_FDCWD, p2);
     #[cfg(target_os = "linux")]
-    return libc::symlink(p1, p2);
+    return crate::syscalls::linux_raw::raw_symlink(p1, p2);
 }
 
 #[no_mangle]
