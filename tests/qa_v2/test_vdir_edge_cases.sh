@@ -60,7 +60,6 @@ log_skip() {
 
 cleanup() {
     [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
-    pkill -f vriftd 2>/dev/null || true
     rm -f "$VRIFT_SOCKET_PATH"
     
     if [ -d "$TEST_WORKSPACE" ]; then
@@ -80,20 +79,21 @@ setup_workspace() {
     echo 'int main() { return 0; }' > src/main.c
     
     "$VRIFT_CLI" init 2>/dev/null || true
-    "$VRIFT_CLI" ingest --mode solid --tier tier1 --output .vrift/manifest.lmdb src 2>/dev/null || true
+    "$VRIFT_CLI" ingest --mode solid --tier tier2 --output .vrift/manifest.lmdb src 2>/dev/null || true
     
-    "$VRIFTD_BIN" start &
+    VRIFT_SOCKET_PATH="$VRIFT_SOCKET_PATH" VR_THE_SOURCE="$VR_THE_SOURCE" \
+        "$VRIFTD_BIN" start </dev/null > "${TEST_WORKSPACE}/vriftd.log" 2>&1 &
     DAEMON_PID=$!
     
-    # Wait for daemon with timeout (max 10s)
+    # Wait for daemon socket with timeout (max 10s)
     local waited=0
     while [ ! -S "$VRIFT_SOCKET_PATH" ] && [ $waited -lt 10 ]; do
-        sleep 1
+        sleep 0.5
         waited=$((waited + 1))
     done
     
     if [ ! -S "$VRIFT_SOCKET_PATH" ]; then
-        echo "⚠️ Daemon socket not ready after 10s, continuing anyway..."
+        echo "⚠️ Daemon socket not ready after 5s, continuing anyway..."
     fi
 }
 
