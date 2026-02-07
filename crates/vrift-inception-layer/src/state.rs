@@ -1505,6 +1505,20 @@ impl InceptionLayerState {
         None
     }
 
+    /// Returns the global InceptionLayerState, initializing it on first call.
+    ///
+    /// # BUG-007b Safety Constraints
+    ///
+    /// This function is called from EVERY interposed syscall on EVERY thread.
+    /// Its stack frame MUST stay small (<4KB). The init() and open_manifest_mmap()
+    /// functions are marked `#[inline(never)]` to prevent the compiler from merging
+    /// their ~600KB of local variables into this function's prologue.
+    ///
+    /// If the stack frame exceeds 512KB (macOS default pthread stack), all worker
+    /// threads will silently hang in the prologue's stack probe loop. This was the
+    /// root cause of BUG-007b. Verify with:
+    ///   `objdump -d libvrift_inception_layer.dylib | grep -A5 'get.*:'`
+    ///   Expected: `sub sp, sp, #<small>` (should be < 4096)
     pub(crate) fn get() -> Option<&'static Self> {
         let ptr = INCEPTION_LAYER_STATE.load(Ordering::Acquire);
         if !ptr.is_null() {

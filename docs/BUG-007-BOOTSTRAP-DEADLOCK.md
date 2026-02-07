@@ -198,3 +198,191 @@ If you encounter similar hangs:
 *   **`test_e2e_gcc_compile.sh`**: ✅ **PASS** (Verified mutation interposition)
 *   **Regression Suite**: ✅ **PASS** (IPC v4 and legacy name issues fixed)
 *   **Current Status**: **RESOLVED & VERIFIED**. Fix confirmed via raw syscall allocation proxy.
+
+---
+
+# BUG-007b: Multithreaded Stress Deadlock (Stack Overflow + Recursive IPC)
+
+> **Status: ✅ RESOLVED AND VERIFIED** (Feb 7, 2026)
+>
+> `repro_rwlock_stress.sh` (10 threads × 100 opens): ✅ PASS
+> Full qa_v2 regression: ✅ 19/19 PASS
+>
+> Commit: `392ed02c`
+
+## Summary
+
+When 10+ threads simultaneously call `open()` through the inception layer, the process
+hangs indefinitely. Unlike BUG-007 (malloc recursion), this deadlock is **silent** — no
+CPU spike, no crash, no error messages. All threads freeze in the prologue of
+`InceptionLayerState::get()`.
+
+## Symptom Profile
+
+| Aspect | BUG-007 (malloc) | BUG-007b (stress) |
+|--------|-------------------|--------------------|
+| Trigger | Single-threaded, dyld bootstrap | Multi-threaded, post-bootstrap |
+| CPU | 100% (spin loop) | 0% (all threads blocked) |
+| `sample` output | Recursive fstat_shim | Threads stuck at `get() + 52` |
+| Visual | Visible infinite recursion | Silent freeze, no stack growth |
+
+## Root Cause: Five Interacting Pitfalls
+
+### Pitfall 1: Stack Overflow from Function Inlining (PRIMARY)
+
+The compiler inlined `init()` + `open_manifest_mmap()` into `get()`, creating a
+**605KB combined stack frame**. macOS pthread stacks default to **512KB**.
+
+```
+get() prologue (ARM64 disassembly):
+    sub x9, sp, #602112      ; 605KB frame allocation
+    sub x9, x9, #3360
+loop:
+    sub sp, sp, #4096         ; touch each page (stack probe)
+    cmp sp, x9
+    b.gt loop                 ; <-- ALL THREADS STUCK HERE (offset +0x34)
+```
+
+Every thread calling `open()` → `open_impl()` → `get()` immediately overflows the
+stack in the function prologue. The stack probe touches unmapped guard pages, causing
+the thread to permanently block in a kernel page fault.
+
+**Fix**: `#[inline(never)]` + `#[cold]` on `init()` and `open_manifest_mmap()`.
+
+```
+Before: sub x9, sp, #602112   ; 605KB stack frame 💀
+After:  sub sp, sp, #64       ; 64B stack frame ✅
+```
+
+**Rule**: Any function >10KB stack that may be called from interposed syscall paths
+MUST be marked `#[inline(never)]`. The compiler cannot know about pthread stack limits.
+
+### Pitfall 2: Interposed libc Calls in IPC Layer
+
+`raw_unix_connect()` and `sync_rpc()` used standard `libc::access()`, `libc::close()`,
+and `libc::fcntl()` — all of which are interposed by the shim itself.
+
+```
+open() → open_inception → sync_rpc() → libc::access() → access_inception → sync_rpc() → ...
+                                                                              ↑ RECURSIVE IPC
+```
+
+Under high concurrency, this recursive IPC floods the daemon socket with duplicate
+RegisterWorkspace/ManifestGet requests, eventually deadlocking the event loop.
+
+**Fix**: Replace with raw syscall equivalents:
+- `libc::access()` → `raw_access()`
+- `libc::close()` → `ipc_raw_close()` (wrapper around `raw_close()`)
+- `libc::fcntl()` → `raw_fcntl()`
+
+**Rule**: **ALL libc calls inside `ipc.rs` MUST use raw syscalls.** The IPC layer is the
+lowest-level communication path — any interposed call here creates infinite recursion.
+
+### Pitfall 3: `std::fs::canonicalize()` in Init Path
+
+`canonicalize()` internally calls `stat()`, `lstat()`, and `readlink()` — all interposed.
+During `init()` (INITIALIZING=Busy), `stat_inception` does raw passthrough, so this
+*usually* works. But `canonicalize()` also allocates heap memory (`PathBuf`), which can
+trigger `mmap` or other interposed calls depending on allocator state.
+
+Three locations were affected:
+1. `init()` → VRIFT_VFS_PREFIX canonicalization
+2. `init()` → VRIFT_MANIFEST project root canonicalization
+3. `open_manifest_mmap()` → project root for VDir path
+
+**Fix**: Replace with `raw_realpath()` (macOS raw syscall wrapper) using stack buffers.
+
+**Rule**: Never use `std::fs::*` functions during initialization. They are convenience
+wrappers that internally call multiple interposed syscalls and allocate heap memory.
+
+### Pitfall 4: `canonicalize()` in `sync_rpc()`
+
+Even outside of init, `sync_rpc()` called `std::fs::canonicalize()` on the manifest
+path and project root before sending IPC requests. Since `sync_rpc()` is called from
+within interposed syscall handlers, this triggered recursive interposition:
+
+```
+open → open_impl → sync_rpc → canonicalize → stat → stat_inception → open_impl → ...
+```
+
+**Fix**: Removed `canonicalize()` entirely from `sync_rpc()`. Environment variable paths
+from `VR_THE_SOURCE`, `VRIFT_MANIFEST`, `VRIFT_SOCKET_PATH` are already absolute.
+
+**Rule**: `sync_rpc()` must be zero-overhead. No filesystem operations, no allocations,
+no string transformations beyond what is strictly necessary for the IPC protocol.
+
+### Pitfall 5: TLS Recursion Guard Disabled by BOOTSTRAPPING Flag
+
+`get_recursion_key()` reused the `BOOTSTRAPPING` atomic flag to protect TLS key creation.
+But `InceptionLayerGuard::enter()` sets `BOOTSTRAPPING = true` before calling
+`get_recursion_key()`, so the recursion guard was **permanently disabled**:
+
+```
+enter() → BOOTSTRAPPING = true → get_recursion_key() → sees BOOTSTRAPPING=true → return 0
+                                                        ↑ GUARD NEVER ACTIVATES
+```
+
+With the guard disabled, recursive calls (from Pitfalls 2-4) were not detected,
+allowing unbounded recursion depth.
+
+**Fix**: Dedicated `TLS_KEY_LOCK: AtomicBool` for TLS key initialization, separate from
+`BOOTSTRAPPING`.
+
+**Rule**: Each initialization phase must have its own lock. Never reuse atomic flags
+across different initialization stages — the ordering assumptions will be violated.
+
+## Golden Rules for Inception Layer Development
+
+These rules are derived from all BUG-007/007b incidents:
+
+1. **Raw syscalls only in IPC**: Every function in `ipc.rs` must use `raw_*` syscalls.
+   No `libc::*` calls, no `std::fs::*`, no `std::io::*`.
+
+2. **No inlining of init paths**: `init()`, `open_manifest_mmap()`, and any function
+   with >4KB of local variables must be `#[inline(never)]`.
+
+3. **No `std::fs::canonicalize()` in hot paths**: Use `raw_realpath()` with stack
+   buffers, or skip canonicalization entirely if paths are already absolute.
+
+4. **Separate locks per init phase**: Never reuse atomic flags across different
+   initialization stages. Each phase gets its own synchronization primitive.
+
+5. **Test with threads**: Always run `repro_rwlock_stress.sh` after touching `state.rs`,
+   `ipc.rs`, or `interpose.rs`. Single-threaded tests miss stack overflow and race
+   conditions.
+
+6. **`sample <PID> 1` is your best friend**: When a process hangs silently, use
+   `sample` to capture thread state. Look for:
+   - All threads at same offset → stack overflow
+   - Threads in `dlsym`/`malloc` → bootstrap recursion (BUG-007)
+   - Threads in `raw_unix_connect`/`sync_rpc` → IPC recursion (BUG-007b)
+
+## Diagnostic Cheat Sheet
+
+```bash
+# Reproduce the stress test
+bash tests/qa_v2/repro_rwlock_stress.sh
+
+# Manual reproduction with sample capture
+gcc -O3 tests/qa_v2/repro_rwlock_stress.c -o /tmp/repro -lpthread
+DYLD_INSERT_LIBRARIES=target/release/libvrift_inception_layer.dylib \
+DYLD_FORCE_FLAT_NAMESPACE=1 \
+VRIFT_SOCKET_PATH=/tmp/vrift.sock \
+VR_THE_SOURCE=/tmp/cas \
+VRIFT_MANIFEST=/tmp/project/.vrift/manifest.lmdb \
+VRIFT_VFS_PREFIX=/tmp/project \
+/tmp/repro /tmp/project/src/file.txt &
+PID=$!; sleep 3; sample $PID 1; kill $PID
+
+# Verify stack frame size after changes
+objdump -d target/release/libvrift_inception_layer.dylib | \
+  grep -A 5 "InceptionLayerState.*get.*:"
+# Look for: sub sp, sp, #<small number> (should be <4096)
+```
+
+## Files Modified
+
+| File | Changes |
+|------|---------|
+| `state.rs` | `#[inline(never)]` on `init()`/`open_manifest_mmap()`, `raw_realpath` ×3, `TLS_KEY_LOCK` |
+| `ipc.rs` | `ipc_raw_close()` helper, `raw_access`/`raw_fcntl`, removed `canonicalize()` |

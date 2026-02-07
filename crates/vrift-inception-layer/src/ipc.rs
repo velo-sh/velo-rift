@@ -1,3 +1,13 @@
+// =============================================================================
+// BUG-007b SAFETY: ALL functions in this module MUST use raw syscalls only.
+//
+// This module is called from within interposed syscall handlers (open, stat, etc.).
+// Any libc call here (access, close, fcntl, stat, etc.) will be re-intercepted
+// by the shim, creating recursive IPC that floods the daemon socket and deadlocks.
+//
+// Allowed:     raw_access, raw_close, raw_fcntl, raw_read, raw_write, raw_mmap
+// Forbidden:   libc::access, libc::close, libc::fcntl, std::fs::*, std::io::*
+// =============================================================================
 #![allow(unused_imports)]
 use libc::c_int;
 use std::io::{Read, Write};
