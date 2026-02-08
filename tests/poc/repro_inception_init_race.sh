@@ -10,6 +10,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../" && pwd)"
 VELO_BIN="${PROJECT_ROOT}/target/release/vrift"
 VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
 
+# Ensure vdir_d symlink for vDird subprocess model
+VDIRD_BIN="${PROJECT_ROOT}/target/release/vrift-vdird"
+[ -f "$VDIRD_BIN" ] && [ ! -e "$(dirname "$VRIFTD_BIN")/vdir_d" ] && \
+    ln -sf "vrift-vdird" "$(dirname "$VRIFTD_BIN")/vdir_d"
+
 # OS Detection
 if [ "$(uname -s)" == "Darwin" ]; then
     INCEPTION_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"

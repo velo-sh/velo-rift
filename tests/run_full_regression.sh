@@ -47,6 +47,16 @@ echo "  FULL REGRESSION @ ${COMMIT}"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "  Timeout: ${TIMEOUT_SEC}s per test"
 echo "============================================"
+
+# Ensure vdir_d symlink for vDird subprocess model
+VDIRD_SRC="${PROJECT_ROOT}/target/release/vrift-vdird"
+VDIRD_LINK="${PROJECT_ROOT}/target/release/vdir_d"
+[ -f "$VDIRD_SRC" ] && [ ! -e "$VDIRD_LINK" ] && ln -sf "vrift-vdird" "$VDIRD_LINK"
+# Also for debug builds
+VDIRD_SRC_DBG="${PROJECT_ROOT}/target/debug/vrift-vdird"
+VDIRD_LINK_DBG="${PROJECT_ROOT}/target/debug/vdir_d"
+[ -f "$VDIRD_SRC_DBG" ] && [ ! -e "$VDIRD_LINK_DBG" ] && ln -sf "vrift-vdird" "$VDIRD_LINK_DBG"
+
 echo ""
 
 echo "--- qa_v2 ---"

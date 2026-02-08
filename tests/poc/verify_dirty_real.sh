@@ -5,6 +5,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TEST_DIR="${PROJECT_ROOT}/test_dirty_final"
+# CAS blobs may have immutable flags — must strip before rm
+chflags -R nouchg "$TEST_DIR" 2>/dev/null || true
+chmod -R u+w "$TEST_DIR" 2>/dev/null || true
 rm -rf "$TEST_DIR"
 mkdir -p "$TEST_DIR"
 VELO_PROJECT_ROOT="$TEST_DIR/workspace"
@@ -16,6 +19,11 @@ echo "=== Test: Dirty Consistency (Real vriftd) ==="
 VELO_BIN="${PROJECT_ROOT}/target/debug/vrift"
 VRIFTD_BIN="${PROJECT_ROOT}/target/debug/vriftd"
 SHIM_BIN="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
+
+# Ensure vdir_d symlink for vDird subprocess model
+VDIRD_BIN="${PROJECT_ROOT}/target/debug/vrift-vdird"
+[ -f "$VDIRD_BIN" ] && [ ! -e "$(dirname "$VRIFTD_BIN")/vdir_d" ] && \
+    ln -sf "vrift-vdird" "$(dirname "$VRIFTD_BIN")/vdir_d"
 
 # 2. Preparation
 echo "original content for test_file.txt" > "$VELO_PROJECT_ROOT/test_file.txt"
@@ -36,10 +44,14 @@ echo "[Daemon] Starting vriftd with manifest $VRIFT_MANIFEST..."
 "$VRIFTD_BIN" > "$TEST_DIR/daemon.log" 2>&1 &
 DAEMON_PID=$!
 
-stop_daemon() {
+cleanup() {
     kill $DAEMON_PID 2>/dev/null || true
+    # CAS blobs have immutable flags — strip before rm
+    chflags -R nouchg "$TEST_DIR" 2>/dev/null || true
+    chmod -R u+w "$TEST_DIR" 2>/dev/null || true
+    rm -rf "$TEST_DIR"
 }
-trap stop_daemon EXIT
+trap cleanup EXIT
 
 # Wait for socket
 MAX_RETRIES=10

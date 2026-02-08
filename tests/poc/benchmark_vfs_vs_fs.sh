@@ -12,10 +12,15 @@ if [ -f "${PROJECT_ROOT}/target/release/vrift" ]; then
     VRIFT_BIN="${PROJECT_ROOT}/target/release/vrift"
     VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
     SHIM_PATH="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
+    VDIRD_BIN="${PROJECT_ROOT}/target/release/vrift-vdird"
 else
     echo "❌ ERROR: Release binaries not found. Run: cargo build --release"
     exit 1
 fi
+
+# Ensure vdir_d symlink for vDird subprocess model
+[ -f "$VDIRD_BIN" ] && [ ! -e "$(dirname "$VRIFTD_BIN")/vdir_d" ] && \
+    ln -sf "vrift-vdird" "$(dirname "$VRIFTD_BIN")/vdir_d"
 
 echo "=== VFS vs FS Benchmark (Stat Caching Test) ==="
 echo ""

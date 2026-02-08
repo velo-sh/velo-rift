@@ -1114,8 +1114,11 @@ async fn spawn_or_get_vdird(
     let vdird_bin = find_vdird_binary()?;
 
     // Spawn vDird subprocess
+    // CRITICAL: Clear VRIFT_SOCKET_PATH so vDird derives its own project-specific
+    // socket path instead of re-using the daemon's socket path (env leak bug).
     let child = std::process::Command::new(&vdird_bin)
         .arg(project_root.to_string_lossy().as_ref())
+        .env_remove("VRIFT_SOCKET_PATH")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

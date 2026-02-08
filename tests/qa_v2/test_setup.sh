@@ -49,12 +49,14 @@ VRIFT_SOCKET_PATH="${TEST_WORKSPACE}/vrift.sock"
 # Binaries
 VRIFT_CLI="${PROJECT_ROOT}/target/release/vrift"
 VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
+VDIRD_BIN="${PROJECT_ROOT}/target/release/vrift-vdird"
 SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
 [ ! -f "$SHIM_LIB" ] && SHIM_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.so"
 
 # Fallback to debug builds if release not found
 [ ! -f "$VRIFT_CLI" ] && VRIFT_CLI="${PROJECT_ROOT}/target/debug/vrift"
 [ ! -f "$VRIFTD_BIN" ] && VRIFTD_BIN="${PROJECT_ROOT}/target/debug/vriftd"
+[ ! -f "$VDIRD_BIN" ] && VDIRD_BIN="${PROJECT_ROOT}/target/debug/vrift-vdird"
 [ ! -f "$SHIM_LIB" ] && SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.dylib"
 [ ! -f "$SHIM_LIB" ] && SHIM_LIB="${PROJECT_ROOT}/target/debug/libvrift_inception_layer.so"
 
@@ -66,6 +68,7 @@ export VRIFT_SOCKET_PATH
 export VRIFT_PROJECT_ROOT="${TEST_WORKSPACE}"
 export VRIFT_CLI
 export VRIFTD_BIN
+export VDIRD_BIN
 export SHIM_LIB
 
 # ============================================================================
@@ -84,9 +87,19 @@ export VFS_ENV_BASE
 # ============================================================================
 VRIFTD_PID=""
 
+# Ensure vdir_d symlink exists next to vriftd (vDird subprocess model)
+ensure_vdird_symlink() {
+    local vriftd_dir
+    vriftd_dir="$(dirname "$VRIFTD_BIN")"
+    if [ -f "$VDIRD_BIN" ] && [ ! -e "${vriftd_dir}/vdir_d" ]; then
+        ln -sf "$(basename "$VDIRD_BIN")" "${vriftd_dir}/vdir_d"
+    fi
+}
+
 start_daemon() {
     local log_level="${1:-info}"
     
+    ensure_vdird_symlink
     echo "   Starting vriftd (socket: $VRIFT_SOCKET_PATH)..."
     VRIFT_LOG="$log_level" VR_THE_SOURCE="$VR_THE_SOURCE" \
         VRIFT_SOCKET_PATH="$VRIFT_SOCKET_PATH" \
@@ -157,6 +170,9 @@ setup_test_workspace() {
     mkdir -p "${TEST_WORKSPACE}/src"
     mkdir -p "${VR_THE_SOURCE}"
     
+    # Ensure vdir_d symlink for vDird subprocess model
+    ensure_vdird_symlink
+    
     cd "$TEST_WORKSPACE"
     
     echo "   Test ID:      $TEST_ID"
@@ -193,6 +209,12 @@ check_prerequisites() {
     
     if [ ! -f "$VRIFTD_BIN" ]; then
         echo "❌ vriftd not found: $VRIFTD_BIN"
+        echo "   Run: cargo build --release"
+        missing=1
+    fi
+    
+    if [ ! -f "$VDIRD_BIN" ]; then
+        echo "❌ vrift-vdird not found: $VDIRD_BIN"
         echo "   Run: cargo build --release"
         missing=1
     fi

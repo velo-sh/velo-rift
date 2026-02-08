@@ -82,8 +82,13 @@ impl ProjectConfig {
             cas_path: std::env::var("VR_THE_SOURCE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| vrift_home.join("the_source")),
-            manifest_path: vrift_config::path::get_manifest_db_path(&project_id)
-                .unwrap_or_else(|| project_root.join(".vrift").join("manifest.lmdb")),
+            manifest_path: std::env::var("VRIFT_MANIFEST")
+                .ok()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    vrift_config::path::get_manifest_db_path(&project_id)
+                        .unwrap_or_else(|| project_root.join(".vrift").join("manifest.lmdb"))
+                }),
         }
     }
 

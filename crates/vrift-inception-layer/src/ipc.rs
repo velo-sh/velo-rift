@@ -186,11 +186,29 @@ unsafe fn sync_rpc(
                 recv_response_on_fd(fd)
             {
                 cache_vdird_socket(&vdird_socket);
+
+                // Phase 1.2: Manifest operations must be routed to vDird, not daemon.
+                // After caching the vDird socket, re-route manifest requests immediately.
+                if is_manifest_request(request) && !vdird_socket.is_empty() {
+                    ipc_raw_close(fd);
+                    // Route directly to the newly-cached vDird socket
+                    let vdird_fd = raw_unix_connect(&vdird_socket);
+                    if vdird_fd < 0 {
+                        return None;
+                    }
+                    if !send_request_on_fd(vdird_fd, request) {
+                        ipc_raw_close(vdird_fd);
+                        return None;
+                    }
+                    let response = recv_response_on_fd(vdird_fd);
+                    ipc_raw_close(vdird_fd);
+                    return response;
+                }
             }
         }
     }
 
-    // Send original request
+    // Send original request (non-manifest ops go to daemon)
     if !send_request_on_fd(fd, request) {
         ipc_raw_close(fd);
         return None;
@@ -199,6 +217,20 @@ unsafe fn sync_rpc(
     let response = recv_response_on_fd(fd);
     ipc_raw_close(fd);
     response
+}
+
+/// Phase 1.2: Check if a request is a manifest operation that must be routed to vDird.
+fn is_manifest_request(request: &vrift_ipc::VeloRequest) -> bool {
+    matches!(
+        request,
+        vrift_ipc::VeloRequest::ManifestGet { .. }
+            | vrift_ipc::VeloRequest::ManifestUpsert { .. }
+            | vrift_ipc::VeloRequest::ManifestRemove { .. }
+            | vrift_ipc::VeloRequest::ManifestRename { .. }
+            | vrift_ipc::VeloRequest::ManifestUpdateMtime { .. }
+            | vrift_ipc::VeloRequest::ManifestReingest { .. }
+            | vrift_ipc::VeloRequest::ManifestListDir { .. }
+    )
 }
 
 /// Phase 1.2: Cache the vDird socket path into InceptionLayerState.
