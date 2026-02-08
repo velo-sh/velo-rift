@@ -1284,9 +1284,11 @@ pub unsafe fn raw_setattrlist(
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SYS_FCHDIR: i64 = 13;
 
-/// SYS_getcwd is not a direct syscall on macOS - uses __getcwd = 304
+/// NOTE: There is NO direct __getcwd kernel syscall on macOS!
+/// SYS 304 is psynch_cvsignal. raw_getcwd uses open(".") + fcntl(F_GETPATH) instead.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const SYS_GETCWD: i64 = 304;
+#[allow(dead_code)]
+const SYS_GETCWD: i64 = 304; // WRONG — keep for reference only
 
 /// SYS_chdir = 12 on macOS
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -1319,7 +1321,17 @@ pub unsafe fn raw_fchdir(fd: libc::c_int) -> libc::c_int {
     ret as libc::c_int
 }
 
-/// Raw __getcwd syscall for macOS ARM64.
+/// Raw getcwd for macOS ARM64.
+///
+/// NOTE: There is no direct __getcwd kernel syscall on macOS
+/// (SYS 304 is psynch_cvsignal, NOT __getcwd).
+///
+/// Under DYLD_FORCE_FLAT_NAMESPACE, ANY dlsym-based resolution of "getcwd"
+/// (including RTLD_NEXT, RTLD_DEFAULT) resolves to our own `getcwd_inception`,
+/// causing infinite recursion (same pattern as realpath — see 60ac738).
+///
+/// Solution: Use raw_open(".") + raw_fcntl(F_GETPATH) + raw_close() — the same
+/// proven approach used by raw_realpath.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
 pub unsafe fn raw_getcwd(buf: *mut libc::c_char, size: libc::size_t) -> *mut libc::c_char {
@@ -1328,24 +1340,45 @@ pub unsafe fn raw_getcwd(buf: *mut libc::c_char, size: libc::size_t) -> *mut lib
     // BUG-007 check: Bootstrap safety
     let init_state = crate::state::INITIALIZING.load(Ordering::Relaxed);
     if init_state >= 2 {
-        // During early bootstrap, we cannot call dlsym.
-        // realpath/getcwd are not typically needed by dyld itself for malloc init.
-        // Return null to signal "not available yet" or handle specially.
         return std::ptr::null_mut();
     }
 
-    let real_func = crate::reals::REAL_GETCWD.get();
-    if real_func.is_null() {
+    if buf.is_null() || size == 0 {
+        crate::set_errno(libc::EINVAL);
         return std::ptr::null_mut();
     }
-    let func: unsafe extern "C" fn(*mut libc::c_char, libc::size_t) -> *mut libc::c_char =
-        std::mem::transmute(real_func);
-    func(buf, size)
+
+    // Open current directory "." using raw syscall
+    let dot = b".\0";
+    let fd = raw_open(
+        dot.as_ptr() as *const libc::c_char,
+        libc::O_RDONLY | libc::O_CLOEXEC,
+        0,
+    );
+    if fd < 0 {
+        return std::ptr::null_mut();
+    }
+
+    // fcntl(fd, F_GETPATH, buf) — kernel resolves the canonical path
+    let ret = raw_fcntl(fd, libc::F_GETPATH, buf as i64);
+    raw_close(fd);
+
+    if ret < 0 {
+        crate::set_errno(libc::ENOENT);
+        return std::ptr::null_mut();
+    }
+
+    buf
 }
 
 /// Raw chdir syscall for macOS ARM64.
+///
+/// NOTE: Under DYLD_FORCE_FLAT_NAMESPACE, dlsym-based resolution of "chdir"
+/// may resolve to our own `chdir_inception`, causing infinite recursion.
+/// Solution: Use raw kernel syscall SYS_chdir (12) directly.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub unsafe fn raw_chdir(path: *const libc::c_char) -> libc::c_int {
+    use std::arch::asm;
     use std::sync::atomic::Ordering;
 
     // BUG-007 check: Bootstrap safety
@@ -1354,13 +1387,28 @@ pub unsafe fn raw_chdir(path: *const libc::c_char) -> libc::c_int {
         return -1;
     }
 
-    let real_func = crate::reals::REAL_CHDIR.get();
-    if real_func.is_null() {
+    if path.is_null() {
+        crate::set_errno(libc::EINVAL);
         return -1;
     }
-    let func: unsafe extern "C" fn(*const libc::c_char) -> libc::c_int =
-        std::mem::transmute(real_func);
-    func(path)
+
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_CHDIR,
+        in("x0") path as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
 }
 
 /// Raw setrlimit syscall for macOS ARM64.
