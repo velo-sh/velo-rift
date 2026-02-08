@@ -114,7 +114,7 @@ mkdir -p "$PHYSICAL_ROOT/.vrift"
 
 # 3. Start vriftd
 echo "🔧 Step 3: Starting vriftd..."
-pkill -9 vriftd 2>/dev/null || true
+pkill -f vriftd 2>/dev/null || true
 sleep 0.5
 
 # NOTE: VRIFT_MANIFEST determines where shim looks for mmap

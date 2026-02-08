@@ -58,6 +58,20 @@ rm "$WORK_DIR/project/src/template.bin"
 # 2. Ingest
 echo "⚡ Ingesting project (Solid Mode)..."
 export VR_THE_SOURCE="$WORK_DIR/cas"
+
+# Ensure daemon is running and responsive
+pkill -f vriftd 2>/dev/null || true
+sleep 0.5
+
+cleanup() {
+    pkill -f vriftd 2>/dev/null || true
+    if [ "$(uname -s)" == "Darwin" ]; then
+        chflags -R nouchg "$WORK_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
 $VRIFT_BIN init "$WORK_DIR/project"
 cd "$WORK_DIR/project"
 $VRIFT_BIN ingest --mode solid --tier tier1 --output .vrift/manifest.lmdb src

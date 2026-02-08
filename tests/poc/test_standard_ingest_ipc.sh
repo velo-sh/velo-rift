@@ -23,19 +23,23 @@ export VR_THE_SOURCE="$CAS_ROOT"
 (
     unset DYLD_INSERT_LIBRARIES
     unset DYLD_FORCE_FLAT_NAMESPACE
-    RUST_LOG=debug ./target/debug/vriftd start > "$TEST_DIR/daemon.log" 2>&1 &
+    RUST_LOG=debug ./target/release/vriftd start > "$TEST_DIR/daemon.log" 2>&1 &
     echo $! > "$TEST_DIR/daemon.pid"
 )
 DAEMON_PID=$(cat "$TEST_DIR/daemon.pid")
-sleep 1
+# Wait up to 5s for daemon to be ready
+for i in $(seq 1 10); do
+    if ./target/release/vrift daemon status 2>/dev/null | grep -q "running\|Operational"; then break; fi
+    sleep 0.5
+done
 
 # 3. Check Daemon Status via CLI
 echo "[+] Checking daemon status..."
-./target/debug/vrift --the-source-root "$CAS_ROOT" daemon status
+./target/release/vrift --the-source-root "$CAS_ROOT" daemon status
 
 # 4. Perform Ingest (Tier-1 to trigger protect_file IPC)
 echo "[+] Performing Ingest (Tier-1)..."
-./target/debug/vrift --the-source-root "$CAS_ROOT" ingest "$TEST_DIR" --tier tier1 --output "$MANIFEST_FILE"
+./target/release/vrift --the-source-root "$CAS_ROOT" ingest "$TEST_DIR" --tier tier1 --output "$MANIFEST_FILE"
 
 # 5. Verify CAS Blob Integrity & Permissions
 # Dynamically find the ingested blob (there should be only one)
@@ -86,7 +90,7 @@ echo "[+] Testing Fallback (Daemon Offline)..."
 kill $DAEMON_PID
 sleep 1
 
-./target/debug/vrift --the-source-root "$CAS_ROOT" ingest "$TEST_DIR" --output "$TEST_DIR/fallback.manifest"
+./target/release/vrift --the-source-root "$CAS_ROOT" ingest "$TEST_DIR" --output "$TEST_DIR/fallback.manifest"
 if [ $? -eq 0 ]; then
     echo "[SUCCESS] CLI correctly falls back to direct mode when daemon is offline."
     echo ""

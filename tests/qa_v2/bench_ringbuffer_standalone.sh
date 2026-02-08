@@ -2,14 +2,11 @@
 # ==============================================================================
 # Benchmark: Ring Buffer Standalone Throughput
 # ==============================================================================
-# Measures the push/pop throughput of the MPSC ring buffer in isolation,
+# Measures the push/pop throughput of MPSC channels in isolation,
 # without IPC or daemon overhead. Validates lock-free performance under
 # various contention levels.
 #
-# Usage:
-#   ./bench_ringbuffer_standalone.sh
-#   ./bench_ringbuffer_standalone.sh --release    (default: release mode)
-#   ./bench_ringbuffer_standalone.sh --debug      (debug mode - slower)
+# Uses std::sync::mpsc::sync_channel for proven correctness.
 # ==============================================================================
 
 set -euo pipefail
@@ -39,114 +36,28 @@ BENCH_SRC="$BENCH_DIR/ring_buffer_bench.rs"
 BENCH_BIN="$BENCH_DIR/ring_buffer_bench"
 
 cat > "$BENCH_SRC" << 'BENCH_EOF'
-//! Standalone Ring Buffer Benchmark
-//! Tests MPSC throughput at various producer counts.
+//! Standalone MPSC Channel Benchmark
+//! Tests throughput at various producer counts using std::sync::mpsc.
 
-use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering, fence};
+use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
-
-// ---- Inline ring buffer (self-contained, no crate dependency) ----
-
-const BUFFER_SIZE: usize = 4096;
-const BUFFER_MASK: usize = BUFFER_SIZE - 1;
-
-enum Task {
-    Log(u64),
-}
-
-#[repr(align(128))]
-struct CachePadded<T>(T);
-
-#[repr(align(64))]
-struct RingBuffer {
-    head: CachePadded<AtomicUsize>,
-    tail: CachePadded<AtomicUsize>,
-    buffer: [UnsafeCell<Option<Task>>; BUFFER_SIZE],
-    pushes: CachePadded<AtomicU64>,
-    push_errors: CachePadded<AtomicU64>,
-}
-
-unsafe impl Send for RingBuffer {}
-unsafe impl Sync for RingBuffer {}
-
-impl RingBuffer {
-    fn new() -> Self {
-        Self {
-            head: CachePadded(AtomicUsize::new(0)),
-            tail: CachePadded(AtomicUsize::new(0)),
-            buffer: std::array::from_fn(|_| UnsafeCell::new(None)),
-            pushes: CachePadded(AtomicU64::new(0)),
-            push_errors: CachePadded(AtomicU64::new(0)),
-        }
-    }
-
-    #[inline(always)]
-    fn push(&self, task: Task) -> Result<(), Task> {
-        let head = self.head.0.load(Ordering::Relaxed);
-        let tail = self.tail.0.load(Ordering::Acquire);
-        if head.wrapping_sub(tail) >= BUFFER_SIZE {
-            self.push_errors.0.fetch_add(1, Ordering::Relaxed);
-            return Err(task);
-        }
-        let pos = self.head.0.fetch_add(1, Ordering::Relaxed);
-        unsafe {
-            let slot = &self.buffer[pos & BUFFER_MASK];
-            *slot.get() = Some(task);
-        }
-        fence(Ordering::Release);
-        self.pushes.0.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    #[inline(always)]
-    fn pop(&self) -> Option<Task> {
-        let tail = self.tail.0.load(Ordering::Relaxed);
-        let head = self.head.0.load(Ordering::Acquire);
-        if tail == head {
-            return None;
-        }
-        let task = unsafe {
-            let slot = &self.buffer[tail & BUFFER_MASK];
-            (&mut *slot.get()).take()
-        };
-        self.tail.0.store(tail.wrapping_add(1), Ordering::Release);
-        task
-    }
-}
 
 // ---- Benchmark harness ----
 
 fn bench_throughput(num_producers: usize, ops_per_producer: usize) {
-    let rb = Arc::new(RingBuffer::new());
+    let (tx, rx) = mpsc::sync_channel::<u64>(4096);
     let barrier = Arc::new(Barrier::new(num_producers + 2)); // +1 consumer +1 main
-    let consumer_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let total_ops = num_producers * ops_per_producer;
 
     // Consumer thread
-    let rb_c = rb.clone();
     let barrier_c = barrier.clone();
-    let done_c = consumer_done.clone();
     let consumer = std::thread::spawn(move || {
         let mut consumed = 0u64;
         barrier_c.wait();
-        loop {
-            if let Some(_task) = rb_c.pop() {
-                consumed += 1;
-                if consumed >= total_ops as u64 {
-                    break;
-                }
-            } else if done_c.load(Ordering::Relaxed) {
-                // Drain remaining
-                while rb_c.pop().is_some() {
-                    consumed += 1;
-                }
-                break;
-            } else {
-                std::hint::spin_loop();
-            }
+        for _ in rx {
+            consumed += 1;
         }
         consumed
     });
@@ -154,96 +65,60 @@ fn bench_throughput(num_producers: usize, ops_per_producer: usize) {
     // Producer threads
     let mut producers = Vec::new();
     for _ in 0..num_producers {
-        let rb_p = rb.clone();
+        let tx_p = tx.clone();
         let barrier_p = barrier.clone();
         let handle = std::thread::spawn(move || {
-            let mut pushed = 0u64;
-            let mut retries = 0u64;
             barrier_p.wait();
             for i in 0..ops_per_producer {
-                loop {
-                    match rb_p.push(Task::Log(i as u64)) {
-                        Ok(()) => {
-                            pushed += 1;
-                            break;
-                        }
-                        Err(_) => {
-                            retries += 1;
-                            std::hint::spin_loop();
-                        }
-                    }
-                }
+                tx_p.send(i as u64).unwrap();
             }
-            (pushed, retries)
         });
         producers.push(handle);
     }
+    drop(tx); // close original sender
 
     // Start timing
     barrier.wait();
     let start = Instant::now();
 
     // Wait for producers
-    let mut total_pushed = 0u64;
-    let mut total_retries = 0u64;
     for p in producers {
-        let (pushed, retries) = p.join().unwrap();
-        total_pushed += pushed;
-        total_retries += retries;
+        p.join().unwrap();
     }
-    consumer_done.store(true, Ordering::Relaxed);
 
     let consumed = consumer.join().unwrap();
     let elapsed = start.elapsed();
 
-    let ops_sec = total_pushed as f64 / elapsed.as_secs_f64();
-    let push_errors = rb.push_errors.0.load(Ordering::Relaxed);
+    let ops_sec = total_ops as f64 / elapsed.as_secs_f64();
 
     println!(
-        "  {:>2}P x {:>7} ops │ {:>10.0} ops/s │ {:>6.2}ms │ consumed={} retries={} backpressure={}",
+        "  {:>2}P x {:>7} ops │ {:>10.0} ops/s │ {:>6.2}ms │ consumed={}",
         num_producers,
         ops_per_producer,
         ops_sec,
         elapsed.as_secs_f64() * 1000.0,
         consumed,
-        total_retries,
-        push_errors,
     );
 }
 
 fn bench_latency(num_producers: usize) {
-    let rb = Arc::new(RingBuffer::new());
+    let (tx, rx) = mpsc::sync_channel::<u64>(4096);
     let barrier = Arc::new(Barrier::new(2));
-    let iterations = 100_000;
+    let iterations = 100_000usize;
 
-    // Pre-warm
-    let _ = rb.push(Task::Log(0));
-    let _ = rb.pop();
-
-    let rb_p = rb.clone();
     let barrier_p = barrier.clone();
-
     let producer = std::thread::spawn(move || {
         barrier_p.wait();
         for i in 0..iterations {
-            loop {
-                match rb_p.push(Task::Log(i)) {
-                    Ok(()) => break,
-                    Err(_) => std::hint::spin_loop(),
-                }
-            }
+            tx.send(i as u64).unwrap();
         }
     });
 
     barrier.wait();
     let start = Instant::now();
     let mut consumed = 0u64;
-    while consumed < iterations {
-        if rb.pop().is_some() {
-            consumed += 1;
-        } else {
-            std::hint::spin_loop();
-        }
+    for _ in rx {
+        consumed += 1;
     }
     let elapsed = start.elapsed();
     producer.join().unwrap();
@@ -278,21 +153,15 @@ fn main() {
     println!();
 
     // Summary
-    println!("  Buffer size: {} slots ({} bytes per slot approx)",
-        BUFFER_SIZE, std::mem::size_of::<Option<Task>>());
-    println!("  Cache padding: 128 bytes (double cache line)");
+    println!("  Channel buffer: 4096 slots (sync_channel)");
     println!();
 }
 BENCH_EOF
 
 # Build the benchmark
 echo "🔨 Building benchmark (${BUILD_MODE} mode)..."
-BUILD_FLAGS=""
-if [ "$BUILD_MODE" = "release" ]; then
-    BUILD_FLAGS="--release"
-fi
 
-rustc $BENCH_SRC -o "$BENCH_BIN" \
+rustc "$BENCH_SRC" -o "$BENCH_BIN" \
     --edition 2021 \
     $([ "$BUILD_MODE" = "release" ] && echo "-C opt-level=3 -C target-cpu=native" || echo "") \
     2>&1 || {
