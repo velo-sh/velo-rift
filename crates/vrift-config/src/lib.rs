@@ -269,6 +269,10 @@ the_source = "{the_source}"
     }
 
     /// Generate default config TOML string
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use Config::init_toml() for human-readable template"
+    )]
     pub fn default_toml() -> String {
         toml::to_string_pretty(&Config::default()).unwrap()
     }

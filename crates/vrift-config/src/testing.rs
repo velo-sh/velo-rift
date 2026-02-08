@@ -102,18 +102,21 @@ impl TestEnvironment {
         self.socket_path.exists()
     }
 
-    /// Get environment variables for spawning daemon with this config
+    /// Get environment variables for spawning daemon/shim with this config.
+    ///
+    /// Builds a Config from test paths and uses `shim_env()` for consistency
+    /// with production code, plus daemon-specific vars.
     pub fn daemon_env(&self) -> Vec<(String, String)> {
-        vec![
-            (
-                "VRIFT_SOCKET_PATH".to_string(),
-                self.socket_path.to_string_lossy().to_string(),
-            ),
-            (
-                "VR_THE_SOURCE".to_string(),
-                self.cas_root.to_string_lossy().to_string(),
-            ),
-        ]
+        let mut cfg = crate::Config::default();
+        cfg.storage.the_source = self.cas_root.clone();
+        cfg.daemon.socket = self.socket_path.clone();
+        cfg.project.root = self.project_root.clone();
+        cfg.project.manifest = self.manifest_path();
+
+        
+        // Daemon also needs VRIFT_SOCKET_PATH explicitly (shim_env includes it)
+        // Add any daemon-only vars here if needed in the future
+        cfg.shim_env()
     }
 }
 

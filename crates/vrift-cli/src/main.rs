@@ -43,7 +43,6 @@ struct Cli {
     /// TheSource™ storage root directory (global CAS)
     #[arg(
         long = "the-source-root",
-        env = "VR_THE_SOURCE",
         default_value = vrift_config::DEFAULT_CAS_ROOT
     )]
     the_source_root: PathBuf,
@@ -668,7 +667,7 @@ fn cmd_config(command: ConfigCommands) -> Result<()> {
             }
 
             // Generate default config
-            let default_config = vrift_config::Config::default_toml();
+            let default_config = vrift_config::Config::init_toml();
             std::fs::write(&config_path, default_config)?;
 
             println!("Created config file: {}", config_path.display());

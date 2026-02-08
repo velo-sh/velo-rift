@@ -114,16 +114,20 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
     let current_path = env::var("PATH").unwrap_or_default();
     let new_path = format!("{}/.vrift/bin:{}", project_root_str, current_path);
 
+    // Derive shim environment from Config SSOT
+    let cfg = vrift_config::Config::load_for_project(&project_root).unwrap_or_default();
+    let shim_env = cfg.shim_env();
+
     // Spawn subshell with VFS environment
     let mut cmd = Command::new(&shell);
     cmd.current_dir(&project_root)
-        .env("VRIFT_PROJECT_ROOT", &*project_root_str)
         .env("VRIFT_INCEPTION", "1")
-        .env(
-            "VRIFT_MANIFEST",
-            format!("{}/.vrift/manifest.lmdb", project_root_str),
-        )
         .env("PATH", new_path);
+
+    // Apply all SSOT-derived env vars
+    for (key, value) in &shim_env {
+        cmd.env(key, value);
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -210,14 +214,16 @@ pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
         .map(|d| d.to_string_lossy().to_string())
         .unwrap_or_default();
 
+    // Derive shim environment from Config SSOT
+    let cfg = vrift_config::Config::load_for_project(&project_root).unwrap_or_default();
+    let shim_env = cfg.shim_env();
+
     // Output shell script to stdout (for eval)
     println!("# Velo Rift Inception Mode - Enter the Dream");
-    println!("export VRIFT_PROJECT_ROOT=\"{}\"", project_root_str);
+    for (key, value) in &shim_env {
+        println!("export {}=\"{}\"", key, value);
+    }
     println!("export VRIFT_INCEPTION=1");
-    println!(
-        "export VRIFT_MANIFEST=\"{}/.vrift/manifest.lmdb\"",
-        project_root_str
-    );
     // Add both .vrift/bin (wrappers) and vrift binary dir to PATH
     if !vrift_bin_dir.is_empty() {
         println!(
