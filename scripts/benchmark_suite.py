@@ -39,6 +39,7 @@ DATASETS = {
     "small": {"package": "small_package.json", "tier": "quick"},
     "medium": {"package": "medium_package.json", "tier": "full"},
     "large": {"package": "large_package.json", "tier": "full"},
+    "xxlarge": {"package": "xxlarge_package.json", "tier": "full"},
 }
 
 

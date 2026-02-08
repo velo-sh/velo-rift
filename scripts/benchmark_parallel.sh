@@ -91,11 +91,13 @@ case "$SIZE" in
     medium) run_benchmark "Medium" "$PROJECT_ROOT/examples/benchmarks/medium_package.json" ;;
     large)  run_benchmark "Large" "$PROJECT_ROOT/examples/benchmarks/large_package.json" ;;
     xlarge) run_benchmark "XLarge (Real Project)" "$PROJECT_ROOT/examples/benchmarks/xlarge_package.json" ;;
+    xxlarge) run_benchmark "XXLarge (Mega Monorepo)" "$PROJECT_ROOT/examples/benchmarks/xxlarge_package.json" ;;
     all)
         run_benchmark "Small" "$PROJECT_ROOT/examples/benchmarks/small_package.json"
         run_benchmark "Medium" "$PROJECT_ROOT/examples/benchmarks/medium_package.json"
         run_benchmark "Large" "$PROJECT_ROOT/examples/benchmarks/large_package.json"
         run_benchmark "XLarge (Real Project)" "$PROJECT_ROOT/examples/benchmarks/xlarge_package.json"
+        run_benchmark "XXLarge (Mega Monorepo)" "$PROJECT_ROOT/examples/benchmarks/xxlarge_package.json"
         ;;
     *)
         echo "Usage: $0 [--size small|medium|large|xlarge|all]"
