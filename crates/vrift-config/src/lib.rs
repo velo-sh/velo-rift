@@ -203,10 +203,9 @@ impl Config {
         }
 
         // Security (replace entire list if section is present)
-        if has_section("security")
-            && has_key("security", "exclude_patterns") {
-                self.security.exclude_patterns = other.security.exclude_patterns;
-            }
+        if has_section("security") && has_key("security", "exclude_patterns") {
+            self.security.exclude_patterns = other.security.exclude_patterns;
+        }
     }
 
     /// Apply environment variable overrides (highest priority)

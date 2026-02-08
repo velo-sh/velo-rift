@@ -50,15 +50,7 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
 
     let manifest_path = vpath.manifest_key.as_str();
 
-    // DEBUG: Log first 3 lookups
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if count < 3 {
-        eprintln!(
-            "[DEBUG] stat: path='{}' manifest_key='{}'",
-            path_str, manifest_path
-        );
-    }
+    // PSFS: hot path — zero alloc, zero lock, zero syscall. Hit/Miss recorded below.
 
     // M4: Dirty Check - if file is being written to, bypass mmap cache
     if DIRTY_TRACKER.is_dirty(manifest_path) {
@@ -88,9 +80,7 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     } else {
         // Try Hot Stat Cache (O(1) mmap lookup)
         if let Some(entry) = mmap_lookup(state.mmap_ptr, state.mmap_size, manifest_path) {
-            if count < 3 {
-                eprintln!("[DEBUG] mmap HIT for '{}'", manifest_path);
-            }
+            inception_record!(EventType::StatHit, vpath.manifest_key_hash, 1); // 1 = mmap hit
             std::ptr::write_bytes(buf, 0, 1);
             (*buf).st_size = entry.size as _;
             #[cfg(target_os = "macos")]
@@ -111,9 +101,7 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
         }
     }
 
-    if count < 3 {
-        eprintln!("[DEBUG] mmap MISS for '{}', trying IPC", manifest_path);
-    }
+    inception_record!(EventType::StatMiss, vpath.manifest_key_hash, 2); // 2 = mmap miss, trying IPC
 
     // Try IPC query (also use manifest path format)
     if let Some(entry) = state.query_manifest(&vpath) {

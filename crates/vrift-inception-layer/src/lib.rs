@@ -1,4 +1,9 @@
-#![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stderr,
+    clippy::print_stdout
+)]
 // Phase 4: BUG-007b regression guard — warn on functions with large stack frames.
 // init()/open_manifest_mmap() are already #[inline(never)] #[cold] to keep get()'s
 // stack small. This lint catches NEW functions that might break the invariant.
