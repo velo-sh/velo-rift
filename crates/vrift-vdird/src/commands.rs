@@ -54,6 +54,8 @@ impl CommandHandler {
                 info!(project_root = %project_root, "Workspace registered");
                 VeloResponse::RegisterAck {
                     workspace_id: self.config.project_id.clone(),
+                    vdird_socket: self.config.socket_path.to_string_lossy().to_string(),
+                    vdir_mmap_path: self.config.vdir_path.to_string_lossy().to_string(),
                 }
             }
 
@@ -64,6 +66,16 @@ impl CommandHandler {
             }
 
             VeloRequest::ManifestRemove { path } => self.handle_manifest_remove(&path),
+
+            VeloRequest::ManifestRename { old_path, new_path } => {
+                self.handle_manifest_rename(&old_path, &new_path)
+            }
+
+            VeloRequest::ManifestUpdateMtime { path, mtime_ns } => {
+                self.handle_manifest_update_mtime(&path, mtime_ns)
+            }
+
+            VeloRequest::ManifestListDir { path } => self.handle_manifest_list_dir(&path),
 
             VeloRequest::ManifestReingest { vpath, temp_path } => {
                 self.handle_reingest(&vpath, &temp_path).await
@@ -168,6 +180,162 @@ impl CommandHandler {
         } else {
             VeloResponse::ManifestAck { entry: None }
         }
+    }
+
+    /// Handle ManifestRename: remove old path, upsert under new path
+    fn handle_manifest_rename(&mut self, old_path: &str, new_path: &str) -> VeloResponse {
+        let old_hash = fnv1a_hash(old_path);
+        let new_hash = fnv1a_hash(new_path);
+
+        // Lookup old entry (VDir first, then LMDB)
+        let old_entry = if let Some(entry) = self.vdir.lookup(old_hash) {
+            Some(*entry)
+        } else if let Ok(Some(lmdb_entry)) = self.manifest.get(old_path) {
+            Some(VDirEntry {
+                path_hash: old_hash,
+                cas_hash: lmdb_entry.vnode.content_hash,
+                size: lmdb_entry.vnode.size,
+                mtime_sec: lmdb_entry.vnode.mtime as i64,
+                mtime_nsec: 0,
+                mode: lmdb_entry.vnode.mode,
+                flags: lmdb_entry.vnode.flags,
+                _pad: [0; 3],
+            })
+        } else {
+            None
+        };
+
+        match old_entry {
+            Some(entry) => {
+                // Mark old path as removed
+                self.vdir.mark_dirty(old_hash, false);
+
+                // Insert under new path hash
+                let new_entry = VDirEntry {
+                    path_hash: new_hash,
+                    ..entry
+                };
+                match self.vdir.upsert(new_entry) {
+                    Ok(_) => {
+                        debug!(old = %old_path, new = %new_path, "Manifest rename");
+                        VeloResponse::ManifestAck { entry: None }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Rename upsert failed");
+                        VeloResponse::Error(VeloError::internal(format!("{}", e)))
+                    }
+                }
+            }
+            None => {
+                debug!(path = %old_path, "Rename: source not found, treating as no-op");
+                VeloResponse::ManifestAck { entry: None }
+            }
+        }
+    }
+
+    /// Handle ManifestUpdateMtime: update mtime on existing entry
+    fn handle_manifest_update_mtime(&mut self, path: &str, mtime_ns: u64) -> VeloResponse {
+        let path_hash = fnv1a_hash(path);
+        let mtime_sec = (mtime_ns / 1_000_000_000) as i64;
+        let mtime_nsec = (mtime_ns % 1_000_000_000) as u32;
+
+        // Look up existing entry (VDir first, then LMDB)
+        let existing = if let Some(entry) = self.vdir.lookup(path_hash) {
+            Some(*entry)
+        } else if let Ok(Some(lmdb_entry)) = self.manifest.get(path) {
+            Some(VDirEntry {
+                path_hash,
+                cas_hash: lmdb_entry.vnode.content_hash,
+                size: lmdb_entry.vnode.size,
+                mtime_sec: lmdb_entry.vnode.mtime as i64,
+                mtime_nsec: 0,
+                mode: lmdb_entry.vnode.mode,
+                flags: lmdb_entry.vnode.flags,
+                _pad: [0; 3],
+            })
+        } else {
+            None
+        };
+
+        match existing {
+            Some(entry) => {
+                let updated = VDirEntry {
+                    mtime_sec,
+                    mtime_nsec,
+                    ..entry
+                };
+                match self.vdir.upsert(updated) {
+                    Ok(_) => {
+                        debug!(path = %path, mtime_sec, "Updated mtime");
+                        VeloResponse::ManifestAck { entry: None }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "UpdateMtime upsert failed");
+                        VeloResponse::Error(VeloError::internal(format!("{}", e)))
+                    }
+                }
+            }
+            None => {
+                debug!(path = %path, "UpdateMtime: entry not found");
+                VeloResponse::ManifestAck { entry: None }
+            }
+        }
+    }
+
+    /// Handle ManifestListDir: list direct children of a directory path
+    fn handle_manifest_list_dir(&self, path: &str) -> VeloResponse {
+        // Build prefix for direct children lookup
+        let prefix = if path.is_empty() || path == "/" {
+            String::new()
+        } else if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{}/", path)
+        };
+
+        let mut entries = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // Query LMDB for all entries, filter by prefix
+        if let Ok(all_entries) = self.manifest.iter() {
+            for (entry_path, manifest_entry) in &all_entries {
+                if !entry_path.starts_with(&prefix) {
+                    continue;
+                }
+                // Extract direct child name (strip prefix, take first component)
+                let relative = &entry_path[prefix.len()..];
+                let child_name = if let Some(slash_pos) = relative.find('/') {
+                    // This is a deeper path → the direct child is a directory
+                    let name = &relative[..slash_pos];
+                    if !seen.insert(name.to_string()) {
+                        continue; // Already seen this directory
+                    }
+                    entries.push(vrift_ipc::DirEntry {
+                        name: name.to_string(),
+                        is_dir: true,
+                    });
+                    continue;
+                } else {
+                    relative
+                };
+
+                if child_name.is_empty() {
+                    continue;
+                }
+                if !seen.insert(child_name.to_string()) {
+                    continue;
+                }
+
+                let is_dir = manifest_entry.vnode.flags & FLAG_DIR != 0;
+                entries.push(vrift_ipc::DirEntry {
+                    name: child_name.to_string(),
+                    is_dir,
+                });
+            }
+        }
+
+        debug!(path = %path, count = entries.len(), "ListDir");
+        VeloResponse::ManifestListAck { entries }
     }
 
     /// Handle ManifestReingest (CoW commit)
@@ -481,7 +649,7 @@ mod tests {
             .await;
 
         match response {
-            VeloResponse::RegisterAck { workspace_id } => {
+            VeloResponse::RegisterAck { workspace_id, .. } => {
                 assert!(!workspace_id.is_empty());
             }
             _ => panic!("Expected RegisterAck"),
@@ -734,6 +902,133 @@ mod tests {
                 assert!(err.message.contains("Ingest error"));
             }
             _ => panic!("Expected Error for nonexistent file"),
+        }
+    }
+
+    // ==================== ManifestRename Tests ====================
+
+    #[tokio::test]
+    async fn test_manifest_rename_moves_entry() {
+        let (mut handler, _temp) = create_test_handler();
+
+        // Insert a file
+        let entry = VnodeEntry {
+            content_hash: [42; 32],
+            size: 1000,
+            mtime: 12345,
+            mode: 0o644,
+            flags: 0,
+            _pad: 0,
+        };
+        handler
+            .handle_request(VeloRequest::ManifestUpsert {
+                path: "old/path.txt".to_string(),
+                entry: entry.clone(),
+            })
+            .await;
+
+        // Rename it
+        let response = handler
+            .handle_request(VeloRequest::ManifestRename {
+                old_path: "old/path.txt".to_string(),
+                new_path: "new/path.txt".to_string(),
+            })
+            .await;
+        assert!(matches!(response, VeloResponse::ManifestAck { .. }));
+
+        // New path should exist with same data
+        let response = handler
+            .handle_request(VeloRequest::ManifestGet {
+                path: "new/path.txt".to_string(),
+            })
+            .await;
+        match response {
+            VeloResponse::ManifestAck { entry: Some(e) } => {
+                assert_eq!(e.content_hash, [42; 32]);
+                assert_eq!(e.size, 1000);
+            }
+            _ => panic!("Expected entry at new path"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manifest_rename_nonexistent_is_noop() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let response = handler
+            .handle_request(VeloRequest::ManifestRename {
+                old_path: "nonexistent.txt".to_string(),
+                new_path: "new.txt".to_string(),
+            })
+            .await;
+        assert!(matches!(
+            response,
+            VeloResponse::ManifestAck { entry: None }
+        ));
+    }
+
+    // ==================== ManifestUpdateMtime Tests ====================
+
+    #[tokio::test]
+    async fn test_manifest_update_mtime() {
+        let (mut handler, _temp) = create_test_handler();
+
+        // Insert a file
+        handler
+            .handle_request(VeloRequest::ManifestUpsert {
+                path: "test.txt".to_string(),
+                entry: VnodeEntry {
+                    content_hash: [0; 32],
+                    size: 100,
+                    mtime: 1000,
+                    mode: 0o644,
+                    flags: 0,
+                    _pad: 0,
+                },
+            })
+            .await;
+
+        // Update mtime (nanoseconds)
+        let new_mtime_ns: u64 = 5_000_000_000 + 500_000_000; // 5.5 seconds
+        let response = handler
+            .handle_request(VeloRequest::ManifestUpdateMtime {
+                path: "test.txt".to_string(),
+                mtime_ns: new_mtime_ns,
+            })
+            .await;
+        assert!(matches!(response, VeloResponse::ManifestAck { .. }));
+
+        // Verify mtime was updated
+        let response = handler
+            .handle_request(VeloRequest::ManifestGet {
+                path: "test.txt".to_string(),
+            })
+            .await;
+        match response {
+            VeloResponse::ManifestAck { entry: Some(e) } => {
+                assert_eq!(e.mtime, 5); // 5 seconds
+                assert_eq!(e.size, 100); // size preserved
+            }
+            _ => panic!("Expected entry"),
+        }
+    }
+
+    // ==================== ManifestListDir Tests ====================
+
+    #[tokio::test]
+    async fn test_manifest_list_dir_empty() {
+        let (mut handler, _temp) = create_test_handler();
+
+        let response = handler
+            .handle_request(VeloRequest::ManifestListDir {
+                path: "nonexistent".to_string(),
+            })
+            .await;
+        match response {
+            VeloResponse::ManifestListAck { entries } => {
+                assert!(entries.is_empty());
+            }
+            _ => panic!("Expected ManifestListAck"),
         }
     }
 

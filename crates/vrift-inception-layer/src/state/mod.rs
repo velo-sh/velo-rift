@@ -880,6 +880,9 @@ pub(crate) struct InceptionLayerState {
     pub cas_root: FixedString<1024>,
     pub vfs_prefix: FixedString<256>,
     pub socket_path: FixedString<1024>,
+    /// Phase 1.2: vDird socket path, populated from RegisterAck.
+    /// Manifest operations are routed here instead of to vriftd.
+    pub vdird_socket_path: FixedString<1024>,
     pub open_fds: crate::sync::FdTable,
     pub active_mmaps: RecursiveMutex<HashMap<usize, MmapInfo, IdentityBuildHasher>>,
     pub open_dirs: RecursiveMutex<HashMap<usize, SyntheticDir, IdentityBuildHasher>>,
@@ -1005,14 +1008,14 @@ impl InceptionLayerState {
             });
         }
         // Fall back to IPC query
-        unsafe { sync_ipc_manifest_get(&self.socket_path, vpath.manifest_key.as_str()) }
+        unsafe { sync_ipc_manifest_get(&self.vdird_socket_path, vpath.manifest_key.as_str()) }
     }
 
     /// Query manifest directly via IPC (bypasses mmap cache)
     /// Required for open() which needs content_hash to locate CAS blob
     pub(crate) fn query_manifest_ipc(&self, vpath: &VfsPath) -> Option<vrift_ipc::VnodeEntry> {
         // Use the centrally resolved manifest key
-        unsafe { sync_ipc_manifest_get(&self.socket_path, &vpath.manifest_key) }
+        unsafe { sync_ipc_manifest_get(&self.vdird_socket_path, &vpath.manifest_key) }
     }
 
     /// Resolve an incoming path into a VfsPath if it belongs to the VFS.
@@ -1040,7 +1043,7 @@ impl InceptionLayerState {
         let request = vrift_ipc::VeloRequest::ManifestRemove {
             path: path.to_string(),
         };
-        if unsafe { fire_and_forget_ipc(&self.socket_path, &request) } {
+        if unsafe { fire_and_forget_ipc(&self.vdird_socket_path, &request) } {
             Ok(())
         } else {
             Err(())
@@ -1054,7 +1057,7 @@ impl InceptionLayerState {
             old_path: old.to_string(),
             new_path: new.to_string(),
         };
-        if unsafe { fire_and_forget_ipc(&self.socket_path, &request) } {
+        if unsafe { fire_and_forget_ipc(&self.vdird_socket_path, &request) } {
             Ok(())
         } else {
             Err(())
@@ -1080,7 +1083,7 @@ impl InceptionLayerState {
                 _pad: 0,
             },
         };
-        if unsafe { fire_and_forget_ipc(&self.socket_path, &request) } {
+        if unsafe { fire_and_forget_ipc(&self.vdird_socket_path, &request) } {
             Ok(())
         } else {
             Err(())
@@ -1105,7 +1108,7 @@ impl InceptionLayerState {
                 _pad: 0,
             },
         };
-        if unsafe { fire_and_forget_ipc(&self.socket_path, &request) } {
+        if unsafe { fire_and_forget_ipc(&self.vdird_socket_path, &request) } {
             Ok(())
         } else {
             Err(())
@@ -1128,7 +1131,7 @@ impl InceptionLayerState {
             return Some(entries);
         }
         // Fall back to IPC
-        unsafe { sync_ipc_manifest_list_dir(&self.socket_path, path) }
+        unsafe { sync_ipc_manifest_list_dir(&self.vdird_socket_path, path) }
     }
 
     fn try_connect(&self) -> i32 {

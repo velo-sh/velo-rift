@@ -108,9 +108,10 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
         // Connect to daemon and send sweep request
         use vrift_ipc::{VeloRequest, VeloResponse};
         let project_root = std::env::current_dir().context("Failed to get current directory")?;
-        let mut stream = crate::daemon::connect_to_daemon(&project_root)
+        let conn = crate::daemon::connect_to_daemon(&project_root)
             .await
             .context("Daemon not running or unreachable")?;
+        let mut stream = conn.stream;
         crate::daemon::send_request(
             &mut stream,
             VeloRequest::CasSweep {

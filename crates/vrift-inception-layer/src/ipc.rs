@@ -181,7 +181,12 @@ unsafe fn sync_rpc(
     if !project_root.is_empty() {
         let register_req = vrift_ipc::VeloRequest::RegisterWorkspace { project_root };
         if send_request_on_fd(fd, &register_req) {
-            let _ = recv_response_on_fd(fd);
+            // Phase 1.2: Parse RegisterAck to extract vDird socket path
+            if let Some(vrift_ipc::VeloResponse::RegisterAck { vdird_socket, .. }) =
+                recv_response_on_fd(fd)
+            {
+                cache_vdird_socket(&vdird_socket);
+            }
         }
     }
 
@@ -196,29 +201,125 @@ unsafe fn sync_rpc(
     response
 }
 
-pub(crate) unsafe fn sync_ipc_manifest_remove(socket_path: &str, path: &str) -> bool {
+/// Phase 1.2: Cache the vDird socket path into InceptionLayerState.
+/// Called when RegisterAck is received with a vdird_socket field.
+unsafe fn cache_vdird_socket(vdird_socket: &str) {
+    if vdird_socket.is_empty() {
+        return;
+    }
+    let ptr = crate::state::INCEPTION_LAYER_STATE.load(std::sync::atomic::Ordering::Acquire);
+    if !ptr.is_null() {
+        // Safety: We only write to vdird_socket_path which is a FixedString (Copy, no alloc).
+        // This is inherently racy but FixedString::set is a memcpy of bounded size,
+        // and all callers write the same value (deterministic from project root).
+        let state = &mut *ptr;
+        if state.vdird_socket_path.is_empty() {
+            state.vdird_socket_path.set(vdird_socket);
+            inception_info!("Cached vDird socket: {}", vdird_socket);
+        }
+    }
+}
+
+/// Phase 1.2: Send RPC directly to vDird socket (no RegisterWorkspace needed).
+/// vDird is already project-scoped, so no workspace registration is required.
+unsafe fn sync_rpc_vdird(
+    vdird_socket_path: &str,
+    request: &vrift_ipc::VeloRequest,
+) -> Option<vrift_ipc::VeloResponse> {
+    use crate::state::{
+        EventType, CIRCUIT_BREAKER_FAILED_COUNT, CIRCUIT_BREAKER_THRESHOLD, CIRCUIT_RECOVERY_DELAY,
+        CIRCUIT_TRIPPED, CIRCUIT_TRIP_TIME,
+    };
+    use std::sync::atomic::Ordering;
+
+    // If no vDird socket cached yet, fall back to daemon socket via sync_rpc
+    if vdird_socket_path.is_empty() {
+        // Fallback: use the daemon socket (which will trigger RegisterAck caching)
+        if let Some(state) = crate::state::InceptionLayerState::get_no_spawn() {
+            return sync_rpc(&state.socket_path, request);
+        }
+        return None;
+    }
+
+    // Check circuit breaker (shared with daemon connection)
+    if CIRCUIT_TRIPPED.load(Ordering::Relaxed) {
+        let trip_time = CIRCUIT_TRIP_TIME.load(Ordering::Relaxed);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let recovery_delay = CIRCUIT_RECOVERY_DELAY.load(Ordering::Relaxed);
+
+        if now >= trip_time + recovery_delay {
+            inception_info!(
+                "Circuit breaker recovery attempt after {}s",
+                now - trip_time
+            );
+            CIRCUIT_TRIPPED.store(false, Ordering::SeqCst);
+            CIRCUIT_BREAKER_FAILED_COUNT.store(0, Ordering::Relaxed);
+        } else {
+            return None;
+        }
+    }
+
+    let fd = raw_unix_connect(vdird_socket_path);
+    if fd < 0 {
+        let count = CIRCUIT_BREAKER_FAILED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        let threshold = CIRCUIT_BREAKER_THRESHOLD.load(Ordering::Relaxed);
+        inception_record!(EventType::IpcFail, 0, count as i32);
+        if count >= threshold && !CIRCUIT_TRIPPED.swap(true, Ordering::SeqCst) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            CIRCUIT_TRIP_TIME.store(now, Ordering::Relaxed);
+            inception_error!(
+                "VDIRD CONNECTION FAILED {} TIMES. CIRCUIT BREAKER TRIPPED.",
+                count
+            );
+            inception_record!(EventType::CircuitTripped, 0, count as i32);
+        }
+        return None;
+    }
+
+    inception_record!(EventType::IpcSuccess, 0, fd);
+    CIRCUIT_BREAKER_FAILED_COUNT.store(0, Ordering::Relaxed);
+
+    // No RegisterWorkspace needed — vDird is already project-scoped
+    // Send request directly
+    if !send_request_on_fd(fd, request) {
+        ipc_raw_close(fd);
+        return None;
+    }
+
+    let response = recv_response_on_fd(fd);
+    ipc_raw_close(fd);
+    response
+}
+
+pub(crate) unsafe fn sync_ipc_manifest_remove(vdird_socket: &str, path: &str) -> bool {
     let request = vrift_ipc::VeloRequest::ManifestRemove {
         path: path.to_string(),
     };
     matches!(
-        sync_rpc(socket_path, &request),
+        sync_rpc_vdird(vdird_socket, &request),
         Some(vrift_ipc::VeloResponse::ManifestAck { .. })
     )
 }
 
-pub(crate) unsafe fn sync_ipc_manifest_rename(socket_path: &str, old: &str, new: &str) -> bool {
+pub(crate) unsafe fn sync_ipc_manifest_rename(vdird_socket: &str, old: &str, new: &str) -> bool {
     let request = vrift_ipc::VeloRequest::ManifestRename {
         old_path: old.to_string(),
         new_path: new.to_string(),
     };
     matches!(
-        sync_rpc(socket_path, &request),
+        sync_rpc_vdird(vdird_socket, &request),
         Some(vrift_ipc::VeloResponse::ManifestAck { .. })
     )
 }
 
 pub(crate) unsafe fn sync_ipc_manifest_update_mtime(
-    socket_path: &str,
+    vdird_socket: &str,
     path: &str,
     mtime: u64,
 ) -> bool {
@@ -227,12 +328,12 @@ pub(crate) unsafe fn sync_ipc_manifest_update_mtime(
         mtime_ns: mtime,
     };
     matches!(
-        sync_rpc(socket_path, &request),
+        sync_rpc_vdird(vdird_socket, &request),
         Some(vrift_ipc::VeloResponse::ManifestAck { .. })
     )
 }
 
-pub(crate) unsafe fn sync_ipc_manifest_mkdir(socket_path: &str, path: &str, _mode: u32) -> bool {
+pub(crate) unsafe fn sync_ipc_manifest_mkdir(vdird_socket: &str, path: &str, _mode: u32) -> bool {
     // Create a directory entry in the manifest
     let request = vrift_ipc::VeloRequest::ManifestUpsert {
         path: path.to_string(),
@@ -249,13 +350,13 @@ pub(crate) unsafe fn sync_ipc_manifest_mkdir(socket_path: &str, path: &str, _mod
         },
     };
     matches!(
-        sync_rpc(socket_path, &request),
+        sync_rpc_vdird(vdird_socket, &request),
         Some(vrift_ipc::VeloResponse::ManifestAck { .. })
     )
 }
 
 pub(crate) unsafe fn sync_ipc_manifest_symlink(
-    socket_path: &str,
+    vdird_socket: &str,
     path: &str,
     _target: &str,
 ) -> bool {
@@ -275,13 +376,13 @@ pub(crate) unsafe fn sync_ipc_manifest_symlink(
         },
     };
     matches!(
-        sync_rpc(socket_path, &request),
+        sync_rpc_vdird(vdird_socket, &request),
         Some(vrift_ipc::VeloResponse::ManifestAck { .. })
     )
 }
 
 pub(crate) unsafe fn sync_ipc_manifest_reingest(
-    socket_path: &str,
+    vdird_socket: &str,
     vpath: &str,
     temp: &str,
 ) -> bool {
@@ -290,7 +391,7 @@ pub(crate) unsafe fn sync_ipc_manifest_reingest(
         temp_path: temp.to_string(),
     };
     matches!(
-        sync_rpc(socket_path, &request),
+        sync_rpc_vdird(vdird_socket, &request),
         Some(vrift_ipc::VeloResponse::ManifestAck { .. })
     )
 }
@@ -351,7 +452,12 @@ pub(crate) unsafe fn send_fire_and_forget_sync(socket_path: &str, payload: &[u8]
     if !project_root.is_empty() {
         let register_req = vrift_ipc::VeloRequest::RegisterWorkspace { project_root };
         if send_request_on_fd(fd, &register_req) {
-            let _ = recv_response_on_fd(fd);
+            // Phase 1.2: Parse RegisterAck to cache vDird socket
+            if let Some(vrift_ipc::VeloResponse::RegisterAck { vdird_socket, .. }) =
+                recv_response_on_fd(fd)
+            {
+                cache_vdird_socket(&vdird_socket);
+            }
         }
     }
 
@@ -448,16 +554,16 @@ pub(crate) unsafe fn sync_ipc_fcntl_lock(
     false
 }
 
-/// Query manifest for a single path (with workspace registration)
-/// Daemon requires RegisterWorkspace before ManifestGet on same connection
+/// Query manifest for a single path via vDird
+/// Phase 1.2: Routes directly to vDird socket (no RegisterWorkspace needed)
 pub(crate) unsafe fn sync_ipc_manifest_get(
-    socket_path: &str,
+    vdird_socket: &str,
     path: &str,
 ) -> Option<vrift_ipc::VnodeEntry> {
     let request = vrift_ipc::VeloRequest::ManifestGet {
         path: path.to_string(),
     };
-    match sync_rpc(socket_path, &request) {
+    match sync_rpc_vdird(vdird_socket, &request) {
         Some(vrift_ipc::VeloResponse::ManifestAck { entry }) => entry,
         _ => None,
     }
@@ -511,15 +617,16 @@ unsafe fn recv_response_on_fd(fd: libc::c_int) -> Option<vrift_ipc::VeloResponse
     rkyv::from_bytes::<vrift_ipc::VeloResponse, rkyv::rancor::Error>(&payload).ok()
 }
 
-/// Query directory listing from daemon
+/// Query directory listing from vDird
+/// Phase 1.2: Routes directly to vDird socket
 pub(crate) unsafe fn sync_ipc_manifest_list_dir(
-    socket_path: &str,
+    vdird_socket: &str,
     path: &str,
 ) -> Option<Vec<vrift_ipc::DirEntry>> {
     let request = vrift_ipc::VeloRequest::ManifestListDir {
         path: path.to_string(),
     };
-    match sync_rpc(socket_path, &request) {
+    match sync_rpc_vdird(vdird_socket, &request) {
         Some(vrift_ipc::VeloResponse::ManifestListAck { entries }) => Some(entries),
         _ => None,
     }

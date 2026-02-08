@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::os::unix::fs::PermissionsExt;
 
 use tokio::signal;
 
@@ -79,8 +78,6 @@ fn load_registered_workspaces() -> Vec<PathBuf> {
     }
     Vec::new()
 }
-
-use vrift_ipc::{bloom_hashes, BLOOM_SIZE};
 
 #[derive(Debug, Clone, Copy)]
 struct PeerCredentials {
@@ -165,39 +162,6 @@ impl PeerCredentials {
             gid: cred.cr_groups[0],
             pid: if ret_pid == 0 { Some(pid) } else { None },
         })
-    }
-}
-
-struct BloomFilter {
-    shm_ptr: *mut u8,
-}
-
-unsafe impl Send for BloomFilter {}
-unsafe impl Sync for BloomFilter {}
-
-impl BloomFilter {
-    fn new(shm_ptr: *mut u8) -> Self {
-        Self { shm_ptr }
-    }
-
-    fn clear(&self) {
-        unsafe { std::ptr::write_bytes(self.shm_ptr, 0, BLOOM_SIZE) };
-    }
-
-    fn add(&self, path: &str) {
-        let (h1, h2) = self.hashes(path);
-        let b1 = h1 % (BLOOM_SIZE * 8);
-        let b2 = h2 % (BLOOM_SIZE * 8);
-        unsafe {
-            let p1 = self.shm_ptr.add(b1 / 8);
-            *p1 |= 1 << (b1 % 8);
-            let p2 = self.shm_ptr.add(b2 / 8);
-            *p2 |= 1 << (b2 % 8);
-        }
-    }
-
-    fn hashes(&self, s: &str) -> (usize, usize) {
-        bloom_hashes(s)
     }
 }
 
@@ -296,91 +260,27 @@ impl LockManager {
     }
 }
 
-struct WorkspaceState {
+/// Phase 1.1: Tracks a spawned vDird subprocess for a project
+struct VDirdProcess {
     project_root: PathBuf,
-    // VFS Manifest (LMDB-backed for ACID persistence)
-    manifest: std::sync::Mutex<LmdbManifest>,
-    bloom: BloomFilter,
-    // Offset in Bloom Filter shared memory is handled by WorkspaceState
-    shm_name: String,
+    project_id: String,
+    socket_path: PathBuf,
+    vdir_mmap_path: PathBuf,
+    #[allow(dead_code)] // will be used for process lifecycle management
+    child_pid: u32,
 }
 
 struct DaemonState {
     // In-memory index of CAS blobs (Hash -> Size) - Shared across all workspaces for global dedup
     cas_index: Mutex<HashMap<[u8; 32], u64>>,
-    // Workspaces indexed by project root path
-    workspaces: Mutex<HashMap<PathBuf, Arc<WorkspaceState>>>,
+    // Per-project vDird subprocess tracking
+    vdird_processes: Mutex<HashMap<PathBuf, Arc<VDirdProcess>>>,
     // Content-Addressable Storage store
     cas: vrift_cas::CasStore,
     // Lock Manager for flock virtualization
     lock_manager: LockManager,
     // Daemon start time (for uptime reporting)
     start_time: std::time::Instant,
-}
-
-/// RFC-0044 Hot Stat Cache: Export manifest to mmap file for O(1) shim access
-fn export_mmap_cache(manifest: &LmdbManifest, project_root: &Path) {
-    use vrift_ipc::ManifestMmapBuilder;
-
-    let mut builder = ManifestMmapBuilder::new();
-
-    // RFC-0044: Use standardized VDir mmap path managed by daemon
-    let project_id = vrift_config::path::compute_project_id(project_root);
-    let mmap_path = vrift_config::path::get_vdir_mmap_path(&project_id)
-        .unwrap_or_else(|| project_root.join(".vrift").join("manifest.mmap"));
-
-    if let Some(parent) = mmap_path.parent() {
-        if !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                tracing::warn!("Failed to create parent dir for mmap: {}", e);
-                return;
-            }
-        }
-    }
-    let mmap_path_str = mmap_path.to_string_lossy();
-
-    // Iterate all manifest entries and add to builder
-    let mut entry_count = 0;
-    if let Ok(entries) = manifest.iter() {
-        for (path, entry) in entries {
-            let flags = entry.vnode.mode;
-            let is_dir = entry.vnode.is_dir();
-            let is_symlink = entry.vnode.is_symlink();
-
-            // DEBUG: Log first 3 paths
-            if entry_count < 3 {
-                tracing::info!("[DEBUG-DAEMON] Adding to mmap: path='{}'", path);
-            }
-
-            builder.add_entry(
-                &path,
-                entry.vnode.size,
-                entry.vnode.mtime as i64,
-                flags,
-                is_dir,
-                is_symlink,
-            );
-            entry_count += 1;
-        }
-    }
-
-    if builder.is_empty() {
-        return;
-    }
-
-    // Write mmap file atomically
-    match builder.write_to_file(&mmap_path_str) {
-        Ok(()) => {
-            tracing::info!(
-                "RFC-0044 Hot Stat Cache: Exported {} entries to {}",
-                builder.len(),
-                mmap_path_str
-            );
-        }
-        Err(e) => {
-            tracing::warn!("Failed to export mmap cache to {}: {}", mmap_path_str, e);
-        }
-    }
 }
 
 async fn start_daemon() -> Result<()> {
@@ -415,7 +315,7 @@ async fn start_daemon() -> Result<()> {
 
     let state = Arc::new(DaemonState {
         cas_index: Mutex::new(HashMap::new()),
-        workspaces: Mutex::new(HashMap::new()),
+        vdird_processes: Mutex::new(HashMap::new()),
         cas: cas.clone(),
         lock_manager: LockManager::new(),
         start_time: std::time::Instant::now(),
@@ -479,28 +379,7 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
     tracing::info!("[DAEMON] New connection accepted");
     let peer_creds = PeerCredentials::from_stream(&stream);
     let daemon_uid = unsafe { libc::getuid() };
-    let mut current_workspace: Option<Arc<WorkspaceState>> = {
-        let cfg = vrift_config::Config::load().unwrap_or_else(|e| {
-            tracing::warn!(
-                "Config load in handle_connection failed: {}. Using defaults.",
-                e
-            );
-            vrift_config::Config::default()
-        });
-        let manifest = cfg.project.manifest.clone();
-        if manifest.as_os_str() != ".vrift/manifest.lmdb" {
-            // Non-default manifest path set via config/env — derive project root
-            let p = manifest.parent().unwrap_or(Path::new("/"));
-            let root = if p.ends_with(".vrift") {
-                p.parent().unwrap_or(p).to_path_buf()
-            } else {
-                p.to_path_buf()
-            };
-            get_or_create_workspace(&state, root).await.ok()
-        } else {
-            None
-        }
-    };
+    let mut current_vdird: Option<Arc<VDirdProcess>> = None;
 
     loop {
         tracing::debug!("[DAEMON] Waiting for request...");
@@ -531,7 +410,7 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
                 std::mem::discriminant(&req)
             );
             let resp =
-                handle_request(req, &state, peer_creds, daemon_uid, &mut current_workspace).await;
+                handle_request(req, &state, peer_creds, daemon_uid, &mut current_vdird).await;
             tracing::info!(
                 "[DAEMON] Request processed, response: {:?}",
                 std::mem::discriminant(&resp)
@@ -555,7 +434,7 @@ async fn handle_request(
     state: &DaemonState,
     peer_creds: Option<PeerCredentials>,
     daemon_uid: u32,
-    current_workspace: &mut Option<Arc<WorkspaceState>>,
+    current_vdird: &mut Option<Arc<VDirdProcess>>,
 ) -> VeloResponse {
     tracing::debug!("Received request: {:?}", req);
     match req {
@@ -569,7 +448,7 @@ async fn handle_request(
         },
         VeloRequest::Status => {
             let blob_count = state.cas_index.lock().unwrap().len();
-            let workspace_count = state.workspaces.lock().unwrap().len();
+            let vdird_count = state.vdird_processes.lock().unwrap().len();
             let uptime = state.start_time.elapsed();
             let uptime_str = if uptime.as_secs() >= 3600 {
                 format!(
@@ -584,8 +463,8 @@ async fn handle_request(
             };
             VeloResponse::StatusAck {
                 status: format!(
-                    "Multi-tenant Operational (Global Blobs: {}, Workspaces: {}, Uptime: {})",
-                    blob_count, workspace_count, uptime_str
+                    "Multi-tenant Operational (Global Blobs: {}, vDird Processes: {}, Uptime: {})",
+                    blob_count, vdird_count, uptime_str
                 ),
             }
         }
@@ -607,16 +486,19 @@ async fn handle_request(
                 return VeloResponse::Error(VeloError::not_found("Project root does not exist"));
             }
 
-            match get_or_create_workspace(state, project_root).await {
-                Ok(ws) => {
+            match spawn_or_get_vdird(state, project_root).await {
+                Ok(vdird) => {
                     tracing::info!(
-                        "vriftd: Workspace registered: shm={}, root={:?}",
-                        ws.shm_name,
-                        ws.project_root
+                        "vriftd: Workspace registered: id={}, socket={:?}, root={:?}",
+                        vdird.project_id,
+                        vdird.socket_path,
+                        vdird.project_root
                     );
-                    *current_workspace = Some(ws.clone());
+                    *current_vdird = Some(vdird.clone());
                     VeloResponse::RegisterAck {
-                        workspace_id: ws.shm_name.clone(),
+                        workspace_id: vdird.project_id.clone(),
+                        vdird_socket: vdird.socket_path.to_string_lossy().to_string(),
+                        vdir_mmap_path: vdird.vdir_mmap_path.to_string_lossy().to_string(),
                     }
                 }
                 Err(e) => {
@@ -657,8 +539,8 @@ async fn handle_request(
             owner,
         } => {
             // Sandboxing check using centralized path utilities
-            if let Some(ref ws) = current_workspace {
-                if !is_within_directory(&path, &ws.project_root) {
+            if let Some(ref vdird) = current_vdird {
+                if !is_within_directory(&path, &vdird.project_root) {
                     return VeloResponse::Error(VeloError::permission_denied(
                         "Path outside project root",
                     ));
@@ -668,194 +550,67 @@ async fn handle_request(
             }
             handle_protect(path, immutable, owner).await
         }
+        // Phase 1.1: Manifest operations are now handled by vDird subprocess.
+        // Clients should route these to the vDird socket returned in RegisterAck.
         VeloRequest::ManifestGet { path } => {
-            if let Some(ref ws) = current_workspace {
-                let manifest = ws.manifest.lock().unwrap();
-                tracing::debug!(
-                    "vriftd: ManifestGet lookup for '{}' in workspace '{}'",
-                    path,
-                    ws.shm_name
-                );
-                let entry = match manifest.get(&path) {
-                    Ok(Some(manifest_entry)) => {
-                        tracing::info!(
-                            "vriftd: ManifestGet FOUND for '{}' ({:?})",
-                            path,
-                            manifest_entry.vnode.content_hash
-                        );
-                        Some(manifest_entry.vnode.clone())
-                    }
-                    Ok(None) => {
-                        tracing::info!(
-                            "vriftd: ManifestGet NOT FOUND for '{}' in manifest with {} entries",
-                            path,
-                            manifest.len().unwrap_or(0)
-                        );
-                        None
-                    }
-                    Err(e) => {
-                        tracing::error!("vriftd: ManifestGet ERROR for '{}': {}", path, e);
-                        None
-                    }
-                };
-                VeloResponse::ManifestAck { entry }
-            } else {
-                tracing::warn!(
-                    "vriftd: ManifestGet '{}' without registered workspace",
-                    path
-                );
-                VeloResponse::Error(VeloError::workspace_not_registered())
-            }
+            tracing::warn!(
+                "vriftd: ManifestGet '{}' received — route to vDird instead",
+                path
+            );
+            VeloResponse::Error(VeloError::new(
+                VeloErrorKind::WorkspaceNotRegistered,
+                "Manifest operations must be routed to vDird. Use the vdird_socket from RegisterAck.",
+            ))
         }
-        VeloRequest::ManifestUpsert { path, entry } => {
-            if let Some(ref ws) = current_workspace {
-                let manifest = ws.manifest.lock().unwrap();
-                manifest.insert(&path, entry, AssetTier::Tier2Mutable);
-                ws.bloom.add(&path);
-                let _ = manifest.commit();
-                export_mmap_cache(&manifest, &ws.project_root);
-                VeloResponse::ManifestAck { entry: None }
-            } else {
-                VeloResponse::Error(VeloError::workspace_not_registered())
-            }
+        VeloRequest::ManifestUpsert { path, .. } => {
+            tracing::warn!(
+                "vriftd: ManifestUpsert '{}' received — route to vDird instead",
+                path
+            );
+            VeloResponse::Error(VeloError::new(
+                VeloErrorKind::WorkspaceNotRegistered,
+                "Manifest operations must be routed to vDird. Use the vdird_socket from RegisterAck.",
+            ))
         }
-        // RFC-0047: ManifestRemove for unlink/rmdir operations
         VeloRequest::ManifestRemove { path } => {
-            if let Some(ref ws) = current_workspace {
-                let manifest = ws.manifest.lock().unwrap();
-                manifest.remove(&path);
-                let _ = manifest.commit();
-                export_mmap_cache(&manifest, &ws.project_root);
-                tracing::info!("vriftd: ManifestRemove '{}' -> SUCCESS", path);
-                VeloResponse::ManifestAck { entry: None }
-            } else {
-                VeloResponse::Error(VeloError::workspace_not_registered())
-            }
+            tracing::warn!(
+                "vriftd: ManifestRemove '{}' received — route to vDird instead",
+                path
+            );
+            VeloResponse::Error(VeloError::new(
+                VeloErrorKind::WorkspaceNotRegistered,
+                "Manifest operations must be routed to vDird. Use the vdird_socket from RegisterAck.",
+            ))
         }
-        // RFC-0047: ManifestRename for rename operations
-        VeloRequest::ManifestRename { old_path, new_path } => {
-            if let Some(ref ws) = current_workspace {
-                let manifest = ws.manifest.lock().unwrap();
-                // Get the entry at old_path
-                let entry_opt = match manifest.get(&old_path) {
-                    Ok(Some(e)) => Some(e.vnode.clone()),
-                    _ => None,
-                };
-                if let Some(entry) = entry_opt {
-                    // Remove old, insert new
-                    manifest.remove(&old_path);
-                    manifest.insert(&new_path, entry, AssetTier::Tier2Mutable);
-                    ws.bloom.add(&new_path);
-                    let _ = manifest.commit();
-                    export_mmap_cache(&manifest, &ws.project_root);
-                    tracing::info!(
-                        "vriftd: ManifestRename '{}' -> '{}' SUCCESS",
-                        old_path,
-                        new_path
-                    );
-                    VeloResponse::ManifestAck { entry: None }
-                } else {
-                    tracing::warn!("vriftd: ManifestRename '{}' -> NOT FOUND", old_path);
-                    VeloResponse::Error(VeloError::not_found(format!(
-                        "Entry not found: {}",
-                        old_path
-                    )))
-                }
-            } else {
-                VeloResponse::Error(VeloError::workspace_not_registered())
-            }
+        VeloRequest::ManifestRename { old_path, .. } => {
+            tracing::warn!(
+                "vriftd: ManifestRename '{}' received — route to vDird instead",
+                old_path
+            );
+            VeloResponse::Error(VeloError::new(
+                VeloErrorKind::WorkspaceNotRegistered,
+                "Manifest operations must be routed to vDird. Use the vdird_socket from RegisterAck.",
+            ))
         }
-        // RFC-0047: ManifestUpdateMtime for utimes/utimensat operations
-        VeloRequest::ManifestUpdateMtime { path, mtime_ns } => {
-            if let Some(ref ws) = current_workspace {
-                let manifest = ws.manifest.lock().unwrap();
-                // Get current entry, update mtime, reinsert
-                if let Ok(Some(mut entry)) = manifest.get(&path) {
-                    entry.vnode.mtime = mtime_ns;
-                    manifest.insert(&path, entry.vnode, AssetTier::Tier2Mutable);
-                    let _ = manifest.commit();
-                    export_mmap_cache(&manifest, &ws.project_root);
-                    tracing::info!(
-                        "vriftd: ManifestUpdateMtime '{}' -> {} ns SUCCESS",
-                        path,
-                        mtime_ns
-                    );
-                    VeloResponse::ManifestAck { entry: None }
-                } else {
-                    tracing::warn!("vriftd: ManifestUpdateMtime '{}' -> NOT FOUND", path);
-                    VeloResponse::Error(VeloError::not_found(format!("Entry not found: {}", path)))
-                }
-            } else {
-                VeloResponse::Error(VeloError::workspace_not_registered())
-            }
+        VeloRequest::ManifestUpdateMtime { path, .. } => {
+            tracing::warn!(
+                "vriftd: ManifestUpdateMtime '{}' received — route to vDird instead",
+                path
+            );
+            VeloResponse::Error(VeloError::new(
+                VeloErrorKind::WorkspaceNotRegistered,
+                "Manifest operations must be routed to vDird. Use the vdird_socket from RegisterAck.",
+            ))
         }
-        // RFC-0047: ManifestReingest for CoW close path
-        VeloRequest::ManifestReingest { vpath, temp_path } => {
-            if let Some(ref ws) = current_workspace {
-                // Get metadata before moving
-                let meta = std::fs::metadata(&temp_path).ok();
-                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-
-                // Store to CAS via MOVE (Zero-Copy)
-                let hash_bytes = match state.cas.store_by_move(&temp_path) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        tracing::warn!(
-                            "vriftd: ManifestReingest CAS move failed: {} (path={})",
-                            e,
-                            temp_path
-                        );
-                        return VeloResponse::Error(VeloError::io_error(format!(
-                            "CAS move failed: {}",
-                            e
-                        )));
-                    }
-                };
-
-                // Update CAS index
-                {
-                    let mut index = state.cas_index.lock().unwrap();
-                    index.insert(hash_bytes, size);
-                }
-
-                // Get current mtime and mode, or use defaults
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0);
-                let mtime = meta
-                    .as_ref()
-                    .map(|m| {
-                        m.modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_nanos() as u64)
-                            .unwrap_or(now)
-                    })
-                    .unwrap_or(now);
-                let mode = meta
-                    .as_ref()
-                    .map(|m| m.permissions().mode())
-                    .unwrap_or(0o644);
-
-                // Create new VnodeEntry and update Manifest
-                let entry = vrift_manifest::VnodeEntry::new_file(hash_bytes, size, mtime, mode);
-                let manifest = ws.manifest.lock().unwrap();
-                manifest.insert(&vpath, entry, AssetTier::Tier2Mutable);
-                ws.bloom.add(&vpath);
-                let _ = manifest.commit();
-                export_mmap_cache(&manifest, &ws.project_root);
-
-                tracing::info!(
-                    "vriftd: ManifestReingest '{}' -> {} bytes, hash {:?}",
-                    vpath,
-                    size,
-                    &hash_bytes[..4]
-                );
-                VeloResponse::ManifestAck { entry: None }
-            } else {
-                VeloResponse::Error(VeloError::workspace_not_registered())
-            }
+        VeloRequest::ManifestReingest { vpath, .. } => {
+            tracing::warn!(
+                "vriftd: ManifestReingest '{}' received — route to vDird instead",
+                vpath
+            );
+            VeloResponse::Error(VeloError::new(
+                VeloErrorKind::WorkspaceNotRegistered,
+                "Manifest operations must be routed to vDird. Use the vdird_socket from RegisterAck.",
+            ))
         }
         // RFC-0049: Flock Virtualization
         VeloRequest::FlockAcquire { path, operation } => {
@@ -929,36 +684,14 @@ async fn handle_request(
             }
         }
         VeloRequest::ManifestListDir { path } => {
-            if let Some(ref ws) = current_workspace {
-                let manifest = ws.manifest.lock().unwrap();
-                let mut entries = Vec::new();
-                let prefix = if path.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}/", path.trim_end_matches('/'))
-                };
-                let prefix_len = prefix.len();
-                let mut seen = std::collections::HashSet::new();
-                if let Ok(all_entries) = manifest.iter() {
-                    for (entry_path, manifest_entry) in all_entries {
-                        if entry_path.starts_with(&prefix) {
-                            let remainder = &entry_path[prefix_len..];
-                            let child_name = remainder.split('/').next().unwrap_or(remainder);
-                            if !child_name.is_empty() && seen.insert(child_name.to_string()) {
-                                let is_dir =
-                                    manifest_entry.vnode.is_dir() || remainder.contains('/');
-                                entries.push(vrift_ipc::DirEntry {
-                                    name: child_name.to_string(),
-                                    is_dir,
-                                });
-                            }
-                        }
-                    }
-                }
-                VeloResponse::ManifestListAck { entries }
-            } else {
-                VeloResponse::Error(VeloError::workspace_not_registered())
-            }
+            tracing::warn!(
+                "vriftd: ManifestListDir '{}' received — route to vDird instead",
+                path
+            );
+            VeloResponse::Error(VeloError::new(
+                VeloErrorKind::WorkspaceNotRegistered,
+                "Manifest operations must be routed to vDird. Use the vdird_socket from RegisterAck.",
+            ))
         }
         // IngestFullScan: Unified ingest architecture
         // CLI becomes thin client, daemon handles all ingest logic
@@ -1149,8 +882,7 @@ fn write_ingest_manifest(
     // Commit delta layer to LMDB base layer (required for persistence!)
     manifest.commit()?;
 
-    // RFC-0044: Export mmap cache so shims see the new data immediately
-    export_mmap_cache(&manifest, source_root);
+    // Phase 1.1: mmap cache is now managed by vDird subprocess, not vriftd
 
     Ok(())
 }
@@ -1293,107 +1025,123 @@ async fn scan_cas_root(state: &DaemonState, cas_root_path: &str) -> Result<()> {
     Ok(())
 }
 
-async fn get_or_create_workspace(
+/// Phase 1.1: Spawn or reuse a vDird subprocess for the given project root.
+/// vDird handles all manifest operations, VDir mmap, and fs watching.
+async fn spawn_or_get_vdird(
     state: &DaemonState,
     project_root: PathBuf,
-) -> Result<Arc<WorkspaceState>> {
-    let mut workspaces = state.workspaces.lock().unwrap();
-    if let Some(ws) = workspaces.get(&project_root) {
-        return Ok(ws.clone());
-    }
-
-    tracing::info!("Initializing new workspace for: {:?}", project_root);
-
-    // 1. Setup LMDB manifest - use the SAME manifest.lmdb that CLI writes to
-    let vrift_dir = project_root.join(".vrift");
-    if !vrift_dir.exists() {
-        std::fs::create_dir_all(&vrift_dir)?;
-    }
-
-    // RFC-0047: Ensure staging directory exists for COW
-    let staging_dir = vrift_dir.join("staging");
-    if !staging_dir.exists() {
-        std::fs::create_dir_all(&staging_dir)?;
-    }
-
-    // RFC-0049: Ensure locks directory exists for logical flock
-    let locks_dir = vrift_dir.join("locks");
-    if !locks_dir.exists() {
-        std::fs::create_dir_all(&locks_dir)?;
-    }
-
-    let manifest_path = vrift_dir.join("manifest.lmdb");
-    let manifest = LmdbManifest::open(manifest_path.to_str().unwrap())?;
-
-    // RFC-0039: Initial import from legacy flat manifest if this is a new workspace
-    // Note: CLI now writes directly to manifest.lmdb, so this is for backwards compat
-    if manifest.is_empty()? {
-        let flat_path = project_root.join("vrift.manifest");
-        if flat_path.exists() {
-            tracing::info!("vriftd: Importing flat manifest from {:?}", flat_path);
-            let flat = vrift_manifest::Manifest::load(&flat_path)?;
-            for (path, vnode) in flat.iter() {
-                // Using Tier2Mutable (Solid Tier-2) as the default for ingested files
-                manifest.insert(path, vnode.clone(), vrift_manifest::AssetTier::Tier2Mutable);
+) -> Result<Arc<VDirdProcess>> {
+    // Check if already running
+    {
+        let processes = state.vdird_processes.lock().unwrap();
+        if let Some(vdird) = processes.get(&project_root) {
+            // Verify socket still exists (basic health check)
+            if vdird.socket_path.exists() {
+                return Ok(vdird.clone());
             }
-            manifest.commit()?;
-            manifest.sync()?;
+            tracing::warn!(
+                "vriftd: vDird socket missing for {:?}, respawning...",
+                project_root
+            );
         }
     }
 
-    // 2. Setup Shared Memory Bloom Filter
-    use nix::fcntl::OFlag;
-    use nix::sys::mman::{mmap, shm_open, shm_unlink, MapFlags, ProtFlags};
-    use nix::sys::stat::Mode;
+    tracing::info!("vriftd: Spawning vDird for: {:?}", project_root);
 
-    let root_str = project_root.to_string_lossy();
-    let root_hash = blake3::hash(root_str.as_bytes());
-    let shm_name = format!("/vrift_bloom_{}", &root_hash.to_hex()[..16]);
+    // Compute project ID and paths
+    let project_id = vrift_config::path::compute_project_id(&project_root);
+    let socket_path = vrift_config::path::get_vdird_socket_path(&project_id).unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        PathBuf::from(home)
+            .join(".vrift")
+            .join("sockets")
+            .join(format!("{}.sock", &project_id[..16.min(project_id.len())]))
+    });
+    let vdir_mmap_path = vrift_config::path::get_vdir_mmap_path(&project_id)
+        .unwrap_or_else(|| project_root.join(".vrift").join("vdir.mmap"));
 
-    let _ = shm_unlink(shm_name.as_str());
-    let shm_fd = shm_open(
-        shm_name.as_str(),
-        OFlag::O_CREAT | OFlag::O_RDWR,
-        Mode::S_IRUSR | Mode::S_IWUSR,
-    )?;
-    nix::unistd::ftruncate(&shm_fd, BLOOM_SIZE as i64)?;
-
-    let shm_ptr = unsafe {
-        mmap(
-            None,
-            std::num::NonZeroUsize::new(BLOOM_SIZE).unwrap(),
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-            MapFlags::MAP_SHARED,
-            &shm_fd,
-            0,
-        )?
-    }
-    .as_ptr() as *mut u8;
-
-    let bloom = BloomFilter::new(shm_ptr);
-    bloom.clear();
-
-    // Populate bloom
-    if let Ok(entries) = manifest.iter() {
-        for (path, _) in entries {
-            bloom.add(&path);
+    // Ensure socket parent directory exists
+    if let Some(parent) = socket_path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
         }
     }
 
-    let ws = Arc::new(WorkspaceState {
+    // Find vdir_d binary: same directory as vriftd, then PATH
+    let vdird_bin = find_vdird_binary()?;
+
+    // Spawn vDird subprocess
+    let child = std::process::Command::new(&vdird_bin)
+        .arg(project_root.to_string_lossy().as_ref())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn vDird: {}", e))?;
+
+    let child_pid = child.id();
+    tracing::info!(
+        "vriftd: vDird spawned: pid={}, socket={:?}",
+        child_pid,
+        socket_path
+    );
+
+    // Wait for vDird socket to appear (poll with timeout)
+    let max_wait = std::time::Duration::from_secs(10);
+    let poll_interval = std::time::Duration::from_millis(100);
+    let start = std::time::Instant::now();
+    while !socket_path.exists() {
+        if start.elapsed() > max_wait {
+            return Err(anyhow::anyhow!(
+                "vDird socket did not appear within {:?}: {:?}",
+                max_wait,
+                socket_path
+            ));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+
+    tracing::info!(
+        "vriftd: vDird ready: pid={}, socket={:?}",
+        child_pid,
+        socket_path
+    );
+
+    let vdird = Arc::new(VDirdProcess {
         project_root: project_root.clone(),
-        manifest: std::sync::Mutex::new(manifest),
-        bloom,
-        shm_name,
+        project_id,
+        socket_path,
+        vdir_mmap_path,
+        child_pid,
     });
 
-    workspaces.insert(project_root, ws.clone());
+    let mut processes = state.vdird_processes.lock().unwrap();
+    processes.insert(project_root, vdird.clone());
 
-    // Export initial mmap cache
-    {
-        let manifest = ws.manifest.lock().unwrap();
-        export_mmap_cache(&manifest, &ws.project_root);
+    Ok(vdird)
+}
+
+/// Find the vdir_d binary. Looks in same directory as vriftd, then falls back to PATH.
+fn find_vdird_binary() -> Result<PathBuf> {
+    let current_exe = std::env::current_exe()?;
+    if let Some(bin_dir) = current_exe.parent() {
+        let candidate = bin_dir.join("vdir_d");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
     }
 
-    Ok(ws)
+    // Fallback: search PATH
+    if let Ok(output) = std::process::Command::new("which").arg("vdir_d").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Could not find vdir_d binary. Ensure it is built and in the same directory as vriftd."
+    ))
 }

@@ -218,6 +218,17 @@ pub fn get_vdir_mmap_path(project_id: &str) -> Option<PathBuf> {
     })
 }
 
+/// Get the standardized vDird socket path for a given project ID.
+///
+/// Standard path: ~/.vrift/sockets/<project_id>.sock (using first 16 chars of ID)
+pub fn get_vdird_socket_path(project_id: &str) -> Option<PathBuf> {
+    dirs::home_dir().map(|h| {
+        h.join(".vrift")
+            .join("sockets")
+            .join(format!("{}.sock", &project_id[..16]))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

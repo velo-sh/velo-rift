@@ -178,15 +178,36 @@ impl VDir {
         }
     }
 
-    /// Increment generation counter (with release ordering) and update CRC
-    pub fn bump_generation(&mut self) {
-        let header = self.header_mut();
-        let gen_ptr = &mut header.generation as *mut u64;
+    /// Seqlock writer: begin a write transaction.
+    /// Stores current_gen + 1 (odd) with Release ordering to signal "write in progress".
+    /// Readers seeing an odd generation will spin-wait.
+    pub fn begin_write(&mut self) {
+        let gen_ptr = &self.header().generation as *const u64;
         let atomic = unsafe { &*(gen_ptr as *const AtomicU64) };
-        atomic.fetch_add(1, Ordering::Release);
+        let current = atomic.load(Ordering::Relaxed);
+        debug_assert!(
+            current & 1 == 0,
+            "begin_write called while already writing (gen={})",
+            current
+        );
+        atomic.store(current + 1, Ordering::Release);
+    }
 
-        // Update CRC after generation change
-        header.crc32 = Self::compute_header_crc(header);
+    /// Seqlock writer: end a write transaction.
+    /// Stores current_gen + 1 (even) with Release ordering to signal "data stable".
+    /// Also recomputes header CRC.
+    pub fn end_write(&mut self) {
+        // Recompute CRC before bumping to even (readers validate CRC after gen check)
+        self.header_mut().crc32 = Self::compute_header_crc(self.header());
+        let gen_ptr = &self.header().generation as *const u64;
+        let atomic = unsafe { &*(gen_ptr as *const AtomicU64) };
+        let current = atomic.load(Ordering::Relaxed);
+        debug_assert!(
+            current & 1 == 1,
+            "end_write called without begin_write (gen={})",
+            current
+        );
+        atomic.store(current + 1, Ordering::Release);
     }
 
     /// Find slot for path hash (linear probing)
@@ -225,27 +246,33 @@ impl VDir {
         let existing = &self.entries()[slot];
         let is_new = existing.is_empty();
 
+        self.begin_write();
         self.entries_mut()[slot] = entry;
 
         if is_new {
             self.header_mut().entry_count += 1;
         }
 
-        self.bump_generation();
+        self.end_write();
         Ok(())
     }
 
     /// Mark entry as dirty
     pub fn mark_dirty(&mut self, path_hash: u64, dirty: bool) -> bool {
         if let Some(slot) = self.find_slot(path_hash) {
-            let entry = &mut self.entries_mut()[slot];
+            let entries = self.entries_mut();
+            let entry = &mut entries[slot];
             if !entry.is_empty() && entry.path_hash == path_hash {
+                self.begin_write();
+                // Re-acquire mutable entry after begin_write borrows self
+                let entries = self.entries_mut();
+                let entry = &mut entries[slot];
                 if dirty {
                     entry.flags |= FLAG_DIRTY;
                 } else {
                     entry.flags &= !FLAG_DIRTY;
                 }
-                self.bump_generation();
+                self.end_write();
                 return true;
             }
         }
@@ -424,7 +451,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(vdir.header().generation, gen_before + 1);
+        assert_eq!(vdir.header().generation, gen_before + 2);
     }
 
     #[test]
@@ -442,7 +469,7 @@ mod tests {
 
         let gen_before = vdir.header().generation;
         vdir.mark_dirty(fnv1a_hash("file.txt"), true);
-        assert_eq!(vdir.header().generation, gen_before + 1);
+        assert_eq!(vdir.header().generation, gen_before + 2);
     }
 
     // ==================== Persistence ====================
@@ -500,7 +527,7 @@ mod tests {
             assert_eq!(header.magic, VDIR_MAGIC);
             assert_eq!(header.version, VDIR_VERSION);
             assert_eq!(header.entry_count, 10);
-            assert!(header.generation >= 10);
+            assert!(header.generation >= 20);
         }
     }
 
@@ -637,5 +664,143 @@ mod tests {
         let long_path = "a/".repeat(500) + "file.txt";
         let hash = fnv1a_hash(&long_path);
         assert_ne!(hash, 0);
+    }
+
+    // ==================== Seqlock Protocol ====================
+
+    #[test]
+    fn test_seqlock_begin_end_bracket() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+        assert_eq!(vdir.header().generation, 0); // starts even
+
+        vdir.begin_write();
+        assert_eq!(vdir.header().generation & 1, 1); // odd = writing
+
+        vdir.end_write();
+        assert_eq!(vdir.header().generation & 1, 0); // even = stable
+        assert_eq!(vdir.header().generation, 2);
+    }
+
+    #[test]
+    fn test_seqlock_generation_always_even_after_write() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+
+        for i in 0..50 {
+            vdir.upsert(VDirEntry {
+                path_hash: fnv1a_hash(&format!("file_{}.rs", i)),
+                size: i as u64,
+                ..Default::default()
+            })
+            .unwrap();
+            // After every upsert, generation must be even
+            assert_eq!(
+                vdir.header().generation & 1,
+                0,
+                "generation odd after upsert #{}",
+                i
+            );
+        }
+
+        // mark_dirty also leaves generation even
+        for i in 0..10 {
+            vdir.mark_dirty(fnv1a_hash(&format!("file_{}.rs", i)), true);
+            assert_eq!(
+                vdir.header().generation & 1,
+                0,
+                "generation odd after mark_dirty #{}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_seqlock_concurrent_reader_writer() {
+        use std::sync::atomic::AtomicBool;
+
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("test.vdir");
+
+        // Setup: create VDir with initial entries
+        {
+            let mut vdir = VDir::create_or_open(&path).unwrap();
+            for i in 0..100 {
+                vdir.upsert(VDirEntry {
+                    path_hash: fnv1a_hash(&format!("file_{}", i)),
+                    size: i as u64,
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+            vdir.flush().unwrap();
+        }
+
+        let done = Arc::new(AtomicBool::new(false));
+        let path_arc = Arc::new(path);
+
+        // Writer thread: continuously upsert entries
+        let done_w = done.clone();
+        let path_w = path_arc.clone();
+        let writer = thread::spawn(move || {
+            let mut vdir = VDir::create_or_open(&path_w).unwrap();
+            let mut round = 0u64;
+            while !done_w.load(Ordering::Relaxed) {
+                let idx = (round % 100) as usize;
+                vdir.upsert(VDirEntry {
+                    path_hash: fnv1a_hash(&format!("file_{}", idx)),
+                    size: round,
+                    ..Default::default()
+                })
+                .unwrap();
+                round += 1;
+            }
+            round
+        });
+
+        // Reader threads: observe generation values
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let d = done.clone();
+                let p = path_arc.clone();
+                thread::spawn(move || {
+                    let vdir = VDir::create_or_open(&p).unwrap();
+                    let mut reads = 0u64;
+                    let mut retries = 0u64;
+                    while !d.load(Ordering::Relaxed) {
+                        let gen = vdir.header().generation;
+                        if gen & 1 == 1 {
+                            // Writer is active — expected under concurrency
+                            retries += 1;
+                            core::hint::spin_loop();
+                            continue;
+                        }
+                        // Read a sample entry while gen is even
+                        let _entry = vdir.lookup(fnv1a_hash("file_0"));
+                        reads += 1;
+                    }
+                    (reads, retries)
+                })
+            })
+            .collect();
+
+        // Let it run for ~200ms
+        thread::sleep(std::time::Duration::from_millis(200));
+        done.store(true, Ordering::Relaxed);
+
+        let write_rounds = writer.join().unwrap();
+        let mut total_reads = 0u64;
+        for r in readers {
+            let (reads, _retries) = r.join().unwrap();
+            total_reads += reads;
+        }
+
+        // Basic sanity: writer did work, readers succeeded
+        assert!(write_rounds > 0, "writer did no work");
+        assert!(total_reads > 0, "readers did no reads");
     }
 }

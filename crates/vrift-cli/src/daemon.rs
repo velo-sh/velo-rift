@@ -4,12 +4,22 @@ use tokio::net::UnixStream;
 use vrift_config::path::{normalize_nonexistent, normalize_or_original};
 use vrift_ipc::{VeloRequest, VeloResponse, PROTOCOL_VERSION};
 
+/// Phase 1.2: Connection state returned by connect_to_daemon.
+/// Contains the vriftd stream plus vDird connection info from RegisterAck.
+#[allow(dead_code)]
+pub struct DaemonConnection {
+    pub stream: UnixStream,
+    pub vdird_socket: String,
+    pub vdir_mmap_path: String,
+}
+
 fn get_socket_path() -> PathBuf {
     vrift_config::config().socket_path().to_path_buf()
 }
 
 pub async fn check_status(project_root: &Path) -> Result<()> {
-    let mut stream = connect_to_daemon(project_root).await?;
+    let conn = connect_to_daemon(project_root).await?;
+    let mut stream = conn.stream;
 
     // Status request
     let req = VeloRequest::Status;
@@ -28,7 +38,8 @@ pub async fn check_status(project_root: &Path) -> Result<()> {
 }
 
 pub async fn spawn_command(command: &[String], cwd: PathBuf, project_root: &Path) -> Result<()> {
-    let mut stream = connect_to_daemon(project_root).await?;
+    let conn = connect_to_daemon(project_root).await?;
+    let mut stream = conn.stream;
 
     // Construct environment with explicit Strings
     let env: Vec<(String, String)> = std::env::vars().collect();
@@ -61,7 +72,8 @@ pub async fn spawn_command(command: &[String], cwd: PathBuf, project_root: &Path
 #[allow(dead_code)]
 pub async fn check_blob(hash: [u8; 32], project_root: &Path) -> Result<bool> {
     match connect_to_daemon(project_root).await {
-        Ok(mut stream) => {
+        Ok(conn) => {
+            let mut stream = conn.stream;
             let req = VeloRequest::CasGet { hash };
             send_request(&mut stream, req).await?;
             match read_response(&mut stream).await? {
@@ -77,7 +89,8 @@ pub async fn check_blob(hash: [u8; 32], project_root: &Path) -> Result<bool> {
 
 #[allow(dead_code)]
 pub async fn notify_blob(hash: [u8; 32], size: u64, project_root: &Path) -> Result<()> {
-    if let Ok(mut stream) = connect_to_daemon(project_root).await {
+    if let Ok(conn) = connect_to_daemon(project_root).await {
+        let mut stream = conn.stream;
         let req = VeloRequest::CasInsert { hash, size };
         let _ = send_request(&mut stream, req).await;
     }
@@ -91,7 +104,8 @@ pub async fn protect_file(
     project_root: &Path,
 ) -> Result<()> {
     match connect_to_daemon(project_root).await {
-        Ok(mut stream) => {
+        Ok(conn) => {
+            let mut stream = conn.stream;
             let req = VeloRequest::Protect {
                 path: path.to_string_lossy().to_string(),
                 immutable,
@@ -111,7 +125,7 @@ pub async fn protect_file(
     }
 }
 
-pub async fn connect_to_daemon(project_root: &Path) -> Result<UnixStream> {
+pub async fn connect_to_daemon(project_root: &Path) -> Result<DaemonConnection> {
     let socket_path = get_socket_path();
     let mut stream = match UnixStream::connect(&socket_path).await {
         Ok(s) => s,
@@ -147,7 +161,15 @@ pub async fn connect_to_daemon(project_root: &Path) -> Result<UnixStream> {
     let resp = read_response(&mut stream).await?;
 
     match resp {
-        VeloResponse::RegisterAck { .. } => Ok(stream),
+        VeloResponse::RegisterAck {
+            workspace_id: _,
+            vdird_socket,
+            vdir_mmap_path,
+        } => Ok(DaemonConnection {
+            stream,
+            vdird_socket,
+            vdir_mmap_path,
+        }),
         VeloResponse::Error(e) => anyhow::bail!("Workspace registration failed: {}", e),
         _ => anyhow::bail!("Unexpected registration response"),
     }

@@ -864,6 +864,10 @@ pub enum VeloResponse {
     /// Acknowledge workspace registration
     RegisterAck {
         workspace_id: String,
+        /// Per-project vDird socket path for manifest operations
+        vdird_socket: String,
+        /// VDir mmap file path for O(1) stat lookups
+        vdir_mmap_path: String,
     },
     /// Ingest completion acknowledgement
     IngestAck {

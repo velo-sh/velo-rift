@@ -283,6 +283,7 @@ impl InceptionLayerState {
                     cas_root,
                     vfs_prefix,
                     socket_path,
+                    vdird_socket_path: FixedString::new(),
                     open_fds: crate::sync::FdTable::new(),
                     active_mmaps: RecursiveMutex::new(HashMap::with_hasher(IdentityBuildHasher)),
                     open_dirs: RecursiveMutex::new(HashMap::with_hasher(IdentityBuildHasher)),
