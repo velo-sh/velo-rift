@@ -14,6 +14,7 @@ pub use vrift_ipc::vdir_types::*;
 pub struct VDir {
     mmap: MmapMut,
     capacity: usize,
+    path: std::path::PathBuf,
 }
 
 impl VDir {
@@ -97,7 +98,11 @@ impl VDir {
             }
         }
 
-        Ok(Self { mmap, capacity })
+        Ok(Self {
+            mmap,
+            capacity,
+            path: path.to_path_buf(),
+        })
     }
 
     /// Compute CRC32 of header fields (excluding crc32 field itself)
@@ -142,6 +147,33 @@ impl VDir {
                 self.capacity,
             )
         }
+    }
+
+    /// Open an existing VDir in read-only mode (for observability)
+    pub fn open_readonly(path: &Path) -> Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .context("Failed to open VDir file in read-only mode")?;
+
+        let mmap_ro = unsafe { memmap2::Mmap::map(&file)? };
+        let header = unsafe { &*(mmap_ro.as_ptr() as *const VDirHeader) };
+
+        if header.magic != VDIR_MAGIC {
+            anyhow::bail!("Invalid VDir magic: {:x}", header.magic);
+        }
+
+        let capacity = header.table_capacity as usize;
+
+        // For read-only mode, we still store it in the MmapMut field via transition.
+        // We MUST NOT call mutable methods if opened this way.
+        let mmap = unsafe { std::mem::transmute::<memmap2::Mmap, MmapMut>(mmap_ro) };
+
+        Ok(Self {
+            mmap,
+            capacity,
+            path: path.to_path_buf(),
+        })
     }
 
     /// Seqlock writer: begin a write transaction.
@@ -207,6 +239,15 @@ impl VDir {
 
     /// Insert or update entry
     pub fn upsert(&mut self, entry: VDirEntry) -> Result<()> {
+        // Dynamic Resize: Check if resulting load factor would exceed 75%
+        let current_count = self.header().entry_count as usize;
+        let existing_entry = self.lookup(entry.path_hash);
+        let is_new = existing_entry.is_none();
+
+        if is_new && (current_count + 1) as f64 / self.capacity as f64 > 0.75 {
+            self.resize(self.capacity * 2)?;
+        }
+
         let slot = self.find_slot(entry.path_hash).context("VDir full")?;
 
         let existing = &self.entries()[slot];
@@ -250,6 +291,120 @@ impl VDir {
         self.mmap.flush()?;
         Ok(())
     }
+
+    /// Calculate VDir statistics for observability
+    pub fn get_stats(&self) -> VDirStats {
+        let entries = self.entries();
+        let capacity = self.capacity;
+        let mut occupied = 0;
+        let mut max_chain = 0;
+        let mut total_chain = 0;
+
+        for (i, entry) in entries.iter().enumerate().take(capacity) {
+            if !entry.is_empty() {
+                occupied += 1;
+
+                // Calculate collision chain length for this entry
+                let ideal_slot = (entry.path_hash as usize) % capacity;
+                let actual_slot = i;
+                let chain_len = if actual_slot >= ideal_slot {
+                    actual_slot - ideal_slot + 1
+                } else {
+                    (capacity - ideal_slot) + actual_slot + 1
+                };
+
+                max_chain = max_chain.max(chain_len);
+                total_chain += chain_len;
+            }
+        }
+
+        let load_factor = if capacity > 0 {
+            occupied as f64 / capacity as f64
+        } else {
+            0.0
+        };
+
+        let avg_chain = if occupied > 0 {
+            total_chain as f64 / occupied as f64
+        } else {
+            0.0
+        };
+
+        VDirStats {
+            capacity,
+            entry_count: occupied,
+            load_factor,
+            max_collision_chain: max_chain,
+            avg_collision_chain: avg_chain,
+            generation: self.header().generation,
+        }
+    }
+
+    /// Resize VDir to a new capacity.
+    /// Rehashes all existing entries into a larger table.
+    pub fn resize(&mut self, new_capacity: usize) -> Result<()> {
+        info!(
+            "vdir: Resizing from {} to {} entries...",
+            self.capacity, new_capacity
+        );
+
+        // 1. Snapshot existing entries
+        // We use a Vec because we're about to unmap/remap.
+        let entries_snapshot: Vec<VDirEntry> = self
+            .entries()
+            .iter()
+            .filter(|e| !e.is_empty())
+            .cloned()
+            .collect();
+
+        // 2. Resize file and remap
+        let file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+        let new_size = VDIR_HEADER_SIZE + (new_capacity * VDIR_ENTRY_SIZE);
+        file.set_len(new_size as u64)?;
+
+        // Re-map MmapMut
+        self.mmap = unsafe { MmapMut::map_mut(&file)? };
+        self.capacity = new_capacity;
+
+        // 3. Update header
+        self.begin_write();
+        let header = self.header_mut();
+        header.table_capacity = new_capacity as u32;
+        header.entry_count = 0; // Reset count, re-increment during insertion
+
+        // 4. Clear table (zero out)
+        let entries_ptr = unsafe { self.mmap.as_mut_ptr().add(VDIR_HEADER_SIZE) };
+        unsafe {
+            std::ptr::write_bytes(entries_ptr, 0, new_capacity * VDIR_ENTRY_SIZE);
+        }
+
+        // 5. Re-insert (rehash)
+        for entry in entries_snapshot {
+            // Internal upsert-like logic without seqlock wrapping (already in seqlock)
+            let slot = self
+                .find_slot(entry.path_hash)
+                .context("VDir full after resize")?;
+            self.entries_mut()[slot] = entry;
+            self.header_mut().entry_count += 1;
+        }
+
+        self.end_write();
+        self.flush()?;
+
+        info!("vdir: Resize complete.");
+        Ok(())
+    }
+}
+
+/// VDir statistics for observability
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct VDirStats {
+    pub capacity: usize,
+    pub entry_count: usize,
+    pub load_factor: f64,
+    pub max_collision_chain: usize,
+    pub avg_collision_chain: f64,
+    pub generation: u64,
 }
 
 /// FNV-1a hash for paths
@@ -587,7 +742,7 @@ mod tests {
             .map(|_| {
                 let p = Arc::clone(&path);
                 thread::spawn(move || {
-                    let vdir = VDir::create_or_open(&p).unwrap();
+                    let vdir = VDir::open_readonly(&p).unwrap();
                     for i in 0..100 {
                         let entry = vdir.lookup(fnv1a_hash(&format!("file_{}", i)));
                         assert!(entry.is_some());
@@ -734,7 +889,7 @@ mod tests {
                 let d = done.clone();
                 let p = path_arc.clone();
                 thread::spawn(move || {
-                    let vdir = VDir::create_or_open(&p).unwrap();
+                    let vdir = VDir::open_readonly(&p).unwrap();
                     let mut reads = 0u64;
                     let mut retries = 0u64;
                     while !d.load(Ordering::Relaxed) {
@@ -952,5 +1107,131 @@ mod tests {
             assert!(entry.is_some(), "Entry should survive crash recovery");
             assert_eq!(entry.unwrap().size, 42);
         }
+    }
+
+    /// Test automatic resizing when load factor > 0.75
+    #[test]
+    fn test_vdir_resize() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("resize_test.vdir");
+
+        // Use real VDir (starts at VDIR_DEFAULT_CAPACITY = 65536)
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+        let initial_capacity = vdir.capacity;
+
+        // Insert until it exceeds 75%
+        // Using a loop to insert many entries
+        let target = (initial_capacity as f64 * 0.76) as usize;
+        info!("Inserting {} entries to trigger resize...", target);
+
+        for i in 0..target {
+            vdir.upsert(VDirEntry {
+                path_hash: i as u64 + 1001,
+                size: i as u64,
+                ..Default::default()
+            })
+            .unwrap();
+        }
+
+        // Capacity should have doubled
+        assert_eq!(vdir.capacity, initial_capacity * 2);
+        assert_eq!(vdir.header().table_capacity as usize, initial_capacity * 2);
+
+        // Verify we can still find the first entry
+        let entry = vdir
+            .lookup(1001)
+            .expect("Entry 1001 not found after resize");
+        assert_eq!(entry.size, 0);
+
+        // Verify we can find the last entry
+        let entry = vdir
+            .lookup(target as u64 + 1001 - 1)
+            .expect("Last entry not found after resize");
+        assert_eq!(entry.size, target as u64 - 1);
+
+        // Statistics should reflect growth
+        let stats = vdir.get_stats();
+        assert_eq!(stats.capacity, initial_capacity * 2);
+        assert!(stats.load_factor < 0.5); // 0.76 / 2
+    }
+
+    /// Test resizing exactly at the threshold
+    #[test]
+    fn test_vdir_resize_threshold_boundary() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("threshold_test.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+        let initial_capacity = vdir.capacity;
+
+        let threshold = (initial_capacity as f64 * 0.75) as usize;
+
+        // Fill up to threshold
+        for i in 0..threshold {
+            vdir.upsert(VDirEntry {
+                path_hash: i as u64 + 1,
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        // Our check is > 0.75. 49152 / 65536 is exactly 0.75.
+        assert_eq!(
+            vdir.capacity, initial_capacity,
+            "Should NOT resize at exactly 75% load"
+        );
+
+        // Add one more to exceed 75%
+        vdir.upsert(VDirEntry {
+            path_hash: threshold as u64 + 1,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            vdir.capacity,
+            initial_capacity * 2,
+            "Should resize after exceeding 75% load"
+        );
+    }
+
+    /// Test multiple sequential resizes
+    #[test]
+    fn test_vdir_multi_resize() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("multi_resize.vdir");
+
+        let mut vdir = VDir::create_or_open(&path).unwrap();
+        let initial_capacity = vdir.capacity;
+
+        // Trigger 1st resize (65k -> 131k)
+        let target1 = (initial_capacity as f64 * 0.76) as usize;
+        for i in 0..target1 {
+            vdir.upsert(VDirEntry {
+                path_hash: i as u64 + 1,
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        assert_eq!(vdir.capacity, initial_capacity * 2);
+
+        // Trigger 2nd resize (131k -> 262k)
+        let target2 = (vdir.capacity as f64 * 0.76) as usize;
+        for i in target1..target2 {
+            vdir.upsert(VDirEntry {
+                path_hash: i as u64 + 1,
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        assert_eq!(vdir.capacity, initial_capacity * 4);
+
+        // Verify lookups across the range
+        assert!(vdir.lookup(1).is_some());
+        assert!(vdir.lookup(target1 as u64).is_some());
+        assert!(vdir.lookup(target2 as u64).is_some());
+
+        // Verify statistics
+        let stats = vdir.get_stats();
+        assert_eq!(stats.capacity, initial_capacity * 4);
+        assert_eq!(stats.entry_count, target2);
     }
 }

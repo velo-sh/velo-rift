@@ -25,6 +25,7 @@ nix.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 vrift-ipc.workspace = true
+vrift-vdird.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { workspace = true }

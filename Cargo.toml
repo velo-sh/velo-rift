@@ -72,6 +72,7 @@ vrift-inception-layer = { path = "crates/vrift-inception-layer" }
 vrift-fuse = { path = "crates/vrift-fuse" }
 vrift-lock = { path = "crates/vrift-lock" }
 vrift-ipc = { path = "crates/vrift-ipc" }
+vrift-vdird = { path = "crates/vrift-vdird" }
 
 [profile.dev]
 panic = "abort"

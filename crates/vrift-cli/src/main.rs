@@ -253,6 +253,12 @@ enum Commands {
         #[arg(value_name = "DIR")]
         directory: Option<PathBuf>,
     },
+
+    /// Debugging and observability tools (internal use)
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -329,6 +335,20 @@ enum ManifestCommands {
     Stats {
         /// Project directory (default: current directory)
         #[arg(value_name = "DIR")]
+        directory: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DebugCommands {
+    /// Analyze VDir hash table health (collisions, load factor)
+    Vdir {
+        /// Path to .vdir file (default: auto-detect from project)
+        #[arg(value_name = "FILE")]
+        file: Option<PathBuf>,
+
+        /// Project directory (for auto-detect)
+        #[arg(short, long, value_name = "DIR")]
         directory: Option<PathBuf>,
     },
 }
@@ -559,6 +579,9 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
             doctor::cmd_doctor(&dir)
         }
+        Commands::Debug { command } => match command {
+            DebugCommands::Vdir { file, directory } => cmd_debug_vdir(file, directory),
+        },
     }
 }
 
@@ -2174,5 +2197,63 @@ fn cmd_service_restart() -> Result<()> {
         println!("✅ vriftd service restarted.");
     }
 
+    Ok(())
+}
+
+/// Debug VDir health
+fn cmd_debug_vdir(file: Option<PathBuf>, directory: Option<PathBuf>) -> Result<()> {
+    use console::style;
+    use vrift_vdird::vdir::VDir;
+
+    let vdir_path = if let Some(f) = file {
+        f
+    } else {
+        let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
+        let project_id = vrift_config::path::compute_project_id(&dir);
+        vrift_config::path::get_vdir_mmap_path(&project_id)
+            .context("Cannot determine VDir mmap path for project")?
+    };
+
+    if !vdir_path.exists() {
+        anyhow::bail!("VDir file not found: {}", vdir_path.display());
+    }
+
+    println!();
+    println!("{}", style("🔍 VDir Analysis").bold().cyan());
+    println!("{}", style("─".repeat(40)).dim());
+    println!("File: {}", vdir_path.display());
+
+    // Open read-only
+    let vdir = VDir::open_readonly(&vdir_path)?;
+    let stats = vdir.get_stats();
+
+    println!();
+    println!("  {:<20} {}", "Generation:", style(stats.generation).bold());
+    println!("  {:<20} {}", "Capacity:", stats.capacity);
+    println!("  {:<20} {}", "Entries:", stats.entry_count);
+
+    let load_color = if stats.load_factor > 0.8 {
+        style(format!("{:.1}%", stats.load_factor * 100.0)).red()
+    } else if stats.load_factor > 0.6 {
+        style(format!("{:.1}%", stats.load_factor * 100.0)).yellow()
+    } else {
+        style(format!("{:.1}%", stats.load_factor * 100.0)).green()
+    };
+    println!("  {:<20} {}", "Load Factor:", load_color);
+
+    println!();
+    println!("{}", style("Collisions").bold());
+    println!("  {:<20} {}", "Max Chain:", stats.max_collision_chain);
+    println!("  {:<20} {:.2}", "Avg Chain:", stats.avg_collision_chain);
+
+    if stats.max_collision_chain > 50 {
+        println!();
+        println!(
+            "  {}",
+            style("⚠️ High collision chain detected. Resizing may be needed.").yellow()
+        );
+    }
+
+    println!();
     Ok(())
 }

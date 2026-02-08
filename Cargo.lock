@@ -2157,6 +2157,7 @@ dependencies = [
  "vrift-lock",
  "vrift-manifest",
  "vrift-runtime",
+ "vrift-vdird",
  "walkdir",
 ]
 
