@@ -1,3 +1,4 @@
+pub mod vdir_types;
 use rkyv::Archive;
 use serde::{Deserialize, Serialize};
 

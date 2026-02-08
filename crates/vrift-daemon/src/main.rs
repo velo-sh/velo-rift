@@ -347,6 +347,49 @@ async fn start_daemon() -> Result<()> {
     //     }
     // }
 
+    // vDird health monitor: periodically check child processes via waitpid(WNOHANG)
+    // If a vDird crashes, remove stale entry so next request triggers respawn
+    {
+        let health_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                let mut stale_keys = Vec::new();
+                {
+                    let processes = health_state.vdird_processes.lock().unwrap();
+                    for (key, vdird) in processes.iter() {
+                        let pid = vdird.child_pid as libc::pid_t;
+                        let mut status: libc::c_int = 0;
+                        let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                        if ret > 0 {
+                            // Process has exited
+                            tracing::warn!(
+                                "vriftd: vDird pid={} for {:?} exited (status={}), removing stale entry",
+                                pid, key, status
+                            );
+                            stale_keys.push(key.clone());
+                        } else if ret < 0 {
+                            // ECHILD: not our child / already reaped
+                            stale_keys.push(key.clone());
+                        }
+                        // ret == 0: still running, OK
+                    }
+                }
+                if !stale_keys.is_empty() {
+                    let mut processes = health_state.vdird_processes.lock().unwrap();
+                    for key in &stale_keys {
+                        if let Some(vdird) = processes.remove(key) {
+                            let _ = std::fs::remove_file(&vdird.socket_path);
+                            tracing::info!("vriftd: Cleaned up stale vDird for {:?}", key);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     loop {
         tokio::select! {
             accept_result = listener.accept() => {

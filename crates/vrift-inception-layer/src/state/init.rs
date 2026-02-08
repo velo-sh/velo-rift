@@ -533,8 +533,7 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
     }
 
     // Phase 1.3: Validate VDirHeader magic instead of ManifestMmapHeader
-    const VDIR_HEADER_SIZE: usize = 64; // sizeof(VDirHeader)
-    const VDIR_MAGIC: u32 = 0x56524654; // "VRFT"
+    use vrift_ipc::vdir_types::{VDIR_HEADER_SIZE, VDIR_MAGIC};
     if size < VDIR_HEADER_SIZE {
         unsafe { libc::munmap(ptr, size) };
         return (ptr::null(), 0);

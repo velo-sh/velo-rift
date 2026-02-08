@@ -7,60 +7,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
-/// VDir constants
-pub const VDIR_MAGIC: u32 = 0x56524654; // "VRFT"
-pub const VDIR_VERSION: u32 = 2; // v2: Added CRC32 checksum
-pub const VDIR_DEFAULT_CAPACITY: usize = 65536;
-pub const VDIR_ENTRY_SIZE: usize = std::mem::size_of::<VDirEntry>();
-pub const VDIR_HEADER_SIZE: usize = std::mem::size_of::<VDirHeader>();
-
-/// VDir header in shared memory
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct VDirHeader {
-    pub magic: u32,
-    pub version: u32,
-    pub generation: u64, // Atomic counter for synchronization
-    pub entry_count: u32,
-    pub table_capacity: u32,
-    pub table_offset: u32,
-    pub crc32: u32,     // CRC32 checksum of header (computed over fields before crc32)
-    pub _pad: [u8; 32], // Pad to 64 bytes (reduced from 36 to 32)
-}
-
-/// Single VDir entry
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct VDirEntry {
-    pub path_hash: u64,     // FNV-1a hash of path
-    pub cas_hash: [u8; 32], // BLAKE3 content hash
-    pub size: u64,
-    pub mtime_sec: i64,
-    pub mtime_nsec: u32,
-    pub mode: u32,
-    pub flags: u16, // DIRTY, DELETED, SYMLINK, DIR
-    pub _pad: [u16; 3],
-}
-
-/// Flag definitions
-pub const FLAG_DIRTY: u16 = 0x0001;
-pub const FLAG_DELETED: u16 = 0x0002;
-pub const FLAG_SYMLINK: u16 = 0x0004;
-pub const FLAG_DIR: u16 = 0x0008;
-
-impl VDirEntry {
-    pub fn is_empty(&self) -> bool {
-        self.path_hash == 0
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        (self.flags & FLAG_DIRTY) != 0
-    }
-
-    pub fn is_dir(&self) -> bool {
-        (self.flags & FLAG_DIR) != 0
-    }
-}
+// Re-export shared VDir types from vrift-ipc (SSOT)
+pub use vrift_ipc::vdir_types::*;
 
 /// VDir manager
 pub struct VDir {

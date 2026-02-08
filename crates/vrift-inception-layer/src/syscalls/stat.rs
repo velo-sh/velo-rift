@@ -71,7 +71,7 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
                     (*buf).st_dev = 0x52494654; // "RIFT"
                     (*buf).st_ino = vpath.manifest_key_hash as _;
                 }
-                inception_record!(EventType::StatHit, vpath.manifest_key_hash, 0);
+                inception_record!(EventType::StatHit, vpath.manifest_key_hash, 10); // 10 = dirty_hit (temp file stat)
                 return Some(0);
             }
         }
@@ -80,7 +80,7 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     } else {
         // Try Hot Stat Cache — Phase 1.3: seqlock-protected VDir lookup
         if let Some(entry) = vdir_lookup(state.mmap_ptr, state.mmap_size, manifest_path) {
-            inception_record!(EventType::StatHit, vpath.manifest_key_hash, 1); // 1 = vdir hit
+            inception_record!(EventType::StatHit, vpath.manifest_key_hash, 11); // 11 = vdir_hit (seqlock)
             std::ptr::write_bytes(buf, 0, 1);
             (*buf).st_size = entry.size as _;
             #[cfg(target_os = "macos")]
@@ -96,12 +96,12 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
             (*buf).st_dev = 0x52494654; // "RIFT"
             (*buf).st_nlink = 1;
             (*buf).st_ino = vpath.manifest_key_hash as _;
-            inception_record!(EventType::StatHit, vpath.manifest_key_hash, 0);
+            // duplicate record removed — line 83 already records the vdir_hit
             return Some(0);
         }
     }
 
-    inception_record!(EventType::StatMiss, vpath.manifest_key_hash, 2); // 2 = mmap miss, trying IPC
+    inception_record!(EventType::StatMiss, vpath.manifest_key_hash, 20); // 20 = vdir_miss, trying IPC
 
     // Try IPC query (also use manifest path format)
     if let Some(entry) = state.query_manifest(&vpath) {
@@ -120,7 +120,7 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
         (*buf).st_dev = 0x52494654; // "RIFT"
         (*buf).st_nlink = 1;
         (*buf).st_ino = vpath.manifest_key_hash as _;
-        inception_record!(EventType::StatHit, vpath.manifest_key_hash, 0);
+        inception_record!(EventType::StatHit, vpath.manifest_key_hash, 12); // 12 = ipc_hit
         return Some(0);
     }
 
