@@ -34,9 +34,6 @@ pub fn streaming_ingest(
 
     let (tx, rx): (Sender<PathBuf>, Receiver<PathBuf>) = channel::bounded(CHANNEL_CAP);
 
-    let results: Arc<std::sync::Mutex<Vec<Result<IngestResult, CasError>>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
-
     let num_threads = threads.unwrap_or_else(|| std::cmp::min(4, num_cpus::get() / 2).max(1));
     tracing::info!("[INGEST] Using {} worker threads", num_threads);
 
@@ -68,17 +65,16 @@ pub fn streaming_ingest(
         tracing::info!("[INGEST] Scanner complete: {} files found", file_count);
     });
 
-    // Spawn worker threads using std::thread (more predictable than rayon scope)
+    // Phase4-#3: Per-worker local Vec (no Mutex contention)
     let cas = cas_root.to_path_buf();
     tracing::info!("[INGEST] Starting worker threads");
 
     let workers: Vec<_> = (0..num_threads)
         .map(|i| {
             let rx = rx.clone();
-            let r = Arc::clone(&results);
             let cas = cas.clone();
-            std::thread::spawn(move || {
-                tracing::info!("[INGEST] Worker {} started", i);
+            std::thread::spawn(move || -> Vec<Result<IngestResult, CasError>> {
+                let mut local_results = Vec::new();
                 let mut processed = 0;
                 for path in rx {
                     tracing::trace!("[INGEST] Worker {} processing: {:?}", i, path);
@@ -88,7 +84,7 @@ pub fn streaming_ingest(
                         IngestMode::SolidTier2 => ingest_solid_tier2(&path, &cas),
                     };
                     tracing::trace!("[INGEST] Worker {} done: {:?}", i, path);
-                    r.lock().unwrap().push(result);
+                    local_results.push(result);
                     processed += 1;
                 }
                 tracing::info!(
@@ -96,6 +92,7 @@ pub fn streaming_ingest(
                     i,
                     processed
                 );
+                local_results
             })
         })
         .collect();
@@ -107,18 +104,17 @@ pub fn streaming_ingest(
     scanner.join().expect("Scanner thread panicked");
     tracing::info!("[INGEST] Scanner thread joined");
 
-    // Wait for all workers to complete
+    // Collect per-worker results into a single Vec (no lock, just extend)
+    let mut all_results = Vec::new();
     for (i, worker) in workers.into_iter().enumerate() {
-        worker
+        let worker_results = worker
             .join()
             .unwrap_or_else(|_| panic!("Worker {} panicked", i));
+        all_results.extend(worker_results);
     }
     tracing::info!("[INGEST] All workers finished");
 
-    Arc::try_unwrap(results)
-        .expect("Results still referenced")
-        .into_inner()
-        .unwrap()
+    all_results
 }
 
 /// Streaming ingest with mtime+size cache skip (P0 Optimization)
@@ -154,9 +150,6 @@ where
 
     let (tx, rx): (Sender<PathBuf>, Receiver<PathBuf>) = channel::bounded(CHANNEL_CAP);
 
-    let results: Arc<std::sync::Mutex<Vec<Result<IngestResult, CasError>>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
-
     let num_threads = threads.unwrap_or_else(|| std::cmp::min(4, num_cpus::get() / 2).max(1));
     tracing::info!(
         "[INGEST] Using {} worker threads (cached mode)",
@@ -190,18 +183,18 @@ where
         tracing::info!("[INGEST] Scanner complete: {} files found", file_count);
     });
 
-    // Spawn worker threads with cache lookup
+    // Phase4-#3: Per-worker local Vec (no Mutex contention)
     let cas = cas_root.to_path_buf();
     let cache_lookup = Arc::new(cache_lookup);
 
     let workers: Vec<_> = (0..num_threads)
         .map(|i| {
             let rx = rx.clone();
-            let r = Arc::clone(&results);
             let cas = cas.clone();
             let source_root = source_path.clone();
             let cache = Arc::clone(&cache_lookup);
-            std::thread::spawn(move || {
+            std::thread::spawn(move || -> Vec<Result<IngestResult, CasError>> {
+                let mut local_results = Vec::new();
                 let mut processed = 0u64;
                 let mut cache_hits = 0u64;
                 for path in rx {
@@ -227,7 +220,7 @@ where
                         IngestMode::Phantom => ingest_phantom(&path, &cas),
                         IngestMode::SolidTier1 => ingest_solid_tier1(&path, &cas),
                     };
-                    r.lock().unwrap().push(result);
+                    local_results.push(result);
                     processed += 1;
                 }
                 tracing::info!(
@@ -236,6 +229,7 @@ where
                     processed,
                     cache_hits
                 );
+                local_results
             })
         })
         .collect();
@@ -243,16 +237,16 @@ where
     drop(rx);
     scanner.join().expect("Scanner thread panicked");
 
+    // Collect per-worker results (no lock, just extend)
+    let mut all_results = Vec::new();
     for (i, worker) in workers.into_iter().enumerate() {
-        worker
+        let worker_results = worker
             .join()
             .unwrap_or_else(|_| panic!("Worker {} panicked", i));
+        all_results.extend(worker_results);
     }
 
-    Arc::try_unwrap(results)
-        .expect("Results still referenced")
-        .into_inner()
-        .unwrap()
+    all_results
 }
 
 /// Streaming ingest with progress callback

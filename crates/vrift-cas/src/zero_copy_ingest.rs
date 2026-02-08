@@ -54,8 +54,8 @@ use crate::{Blake3Hash, CasError, Result};
 /// Refactored to use LinkStrategy for Inode Decoupling (Reflink Priority).
 fn link_or_clone_or_copy(source: &Path, target: &Path) -> io::Result<bool> {
     if target.exists() {
-        // Idempotency: re-enforce CAS invariant on the TARGET only.
-        let _ = crate::protection::enforce_cas_invariant(target);
+        // Existing CAS file — already protected (0444 + uchg),
+        // skip redundant chmod/chflags (Phase4-#2)
         return Ok(false);
     }
 
@@ -189,11 +189,9 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
     unix_fs::symlink(&cas_target, source)?;
     tracing::debug!("Symlink created successfully");
 
-    // RFC-0039 Iron Law: ALWAYS enforce CAS invariant, even for existing blobs
-    // This fixes the "Iron Law Drift" bug where pre-existing writable blobs
-    // would not be protected on re-ingest.
-    let _ = crate::protection::enforce_cas_invariant(&cas_target);
+    // Phase4-#2: Only enforce on new blobs — existing CAS files are already protected
     if was_new {
+        let _ = crate::protection::enforce_cas_invariant(&cas_target);
         set_immutable_best_effort(&cas_target);
     }
 
@@ -300,9 +298,9 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
 
-    // RFC-0039 Iron Law: ALWAYS enforce CAS invariant, even for existing blobs
-    let _ = crate::protection::enforce_cas_invariant(&cas_target);
+    // Phase4-#2: Only enforce on new blobs — existing CAS files are already protected
     if was_new {
+        let _ = crate::protection::enforce_cas_invariant(&cas_target);
         set_immutable_best_effort(&cas_target);
     }
 
@@ -420,9 +418,9 @@ pub fn ingest_solid_tier2_dedup(
     // Tiered link: hard_link → clonefile → copy (RFC-0040)
     let was_new = link_or_clone_or_copy(source, &cas_target)?;
 
-    // RFC-0039 Iron Law: ALWAYS enforce CAS invariant, even for existing blobs
-    let _ = crate::protection::enforce_cas_invariant(&cas_target);
+    // Phase4-#2: Only enforce on new blobs — existing CAS files are already protected
     if was_new {
+        let _ = crate::protection::enforce_cas_invariant(&cas_target);
         set_immutable_best_effort(&cas_target);
     }
 

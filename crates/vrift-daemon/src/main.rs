@@ -852,6 +852,15 @@ async fn handle_request(
                 None
             };
 
+            // Phase4-#1: Pre-create CAS directory tree so per-file mkdir_all is a fast stat-only path
+            if let Ok(cas_store) = vrift_cas::CasStore::new(&cas_root_path) {
+                if let Err(e) = cas_store.warm_directories() {
+                    tracing::warn!("warm_directories failed (non-fatal): {}", e);
+                } else {
+                    tracing::info!("CAS directory tree warmed");
+                }
+            }
+
             // Run streaming ingest in blocking task
             let source_clone = source_path.clone();
             let cas_clone = cas_root_path.clone();
