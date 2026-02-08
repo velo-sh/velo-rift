@@ -1002,6 +1002,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jwalk"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2735847566356cd2179a2a38264839308f7079fa96e6bd5a42d740460e003c56"
+dependencies = [
+ "crossbeam",
+ "rayon",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2110,6 +2120,7 @@ dependencies = [
  "crossbeam-channel",
  "dashmap",
  "hex",
+ "jwalk",
  "libc",
  "memmap2",
  "nix 0.28.0",
@@ -2186,6 +2197,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "clap",
+ "hex",
  "libc",
  "nix 0.28.0",
  "rkyv",

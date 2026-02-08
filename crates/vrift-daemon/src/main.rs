@@ -823,7 +823,7 @@ async fn handle_request(
             };
 
             // P0: Load existing manifest for mtime+size cache skip (SolidTier2 only)
-            // --force-hash bypasses this entirely
+            // --force-hash bypasses cache skip but loads manifest for audit comparison
             let existing_manifest = if mode == IngestMode::SolidTier2 && !force_hash {
                 match LmdbManifest::open(&manifest_out) {
                     Ok(m) => {
@@ -834,6 +834,19 @@ async fn handle_request(
                         tracing::info!("P0: no existing manifest (first ingest): {}", e);
                         None
                     }
+                }
+            } else {
+                None
+            };
+
+            // --force-hash audit: load old manifest to compare after full re-hash
+            let audit_manifest = if force_hash {
+                match LmdbManifest::open(&manifest_out) {
+                    Ok(m) => {
+                        tracing::info!("--force-hash: loaded manifest for audit comparison");
+                        Some(std::sync::Arc::new(m))
+                    }
+                    Err(_) => None,
                 }
             } else {
                 None
@@ -852,6 +865,7 @@ async fn handle_request(
                             content_hash: entry.vnode.content_hash,
                             size: entry.vnode.size,
                             mtime: entry.vnode.mtime,
+                            mtime_nsec: 0, // VnodeEntry doesn't store nsec yet
                         })
                     };
                     let r = streaming_ingest_cached(
@@ -902,6 +916,45 @@ async fn handle_request(
                 if r.skipped_by_cache {
                     cache_skipped += 1;
                 }
+            }
+
+            // --force-hash audit: compare re-hashed results against old manifest
+            if let Some(ref audit) = audit_manifest {
+                let canon_root = source_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| source_path.clone());
+                let prefix_str = prefix.as_deref().unwrap_or("");
+                let mut verified = 0u64;
+                let mut mismatched = 0u64;
+                for r in results.iter().flatten() {
+                    let canon_src = r
+                        .source_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| r.source_path.clone());
+                    let rel = canon_src.strip_prefix(&canon_root).unwrap_or(&canon_src);
+                    let key = if prefix_str.is_empty() || prefix_str == "/" {
+                        format!("/{}", rel.display())
+                    } else {
+                        format!("{}/{}", prefix_str.trim_end_matches('/'), rel.display())
+                    };
+                    if let Ok(Some(old_entry)) = audit.get(&key) {
+                        if old_entry.vnode.content_hash != r.hash {
+                            tracing::warn!(
+                                "--force-hash MISMATCH: {} old={} new={}",
+                                key,
+                                hex::encode(old_entry.vnode.content_hash),
+                                hex::encode(r.hash),
+                            );
+                            mismatched += 1;
+                        }
+                        verified += 1;
+                    }
+                }
+                tracing::info!(
+                    "--force-hash audit complete: verified={}, mismatched={}",
+                    verified,
+                    mismatched,
+                );
             }
 
             let duration = start.elapsed();
@@ -962,6 +1015,12 @@ fn write_ingest_manifest(
         AssetTier::Tier2Mutable
     };
 
+    // Hoist canonicalize to avoid redundant syscall per file (was O(N) → O(1))
+    let canon_root = source_root
+        .canonicalize()
+        .unwrap_or_else(|_| source_root.to_path_buf());
+    let prefix_str = prefix.unwrap_or("");
+
     for result in results.iter().flatten() {
         // P1: Skip manifest write for cache-hit entries — their hash/mtime/size
         // are already correct in the existing manifest, no need to re-write.
@@ -978,16 +1037,11 @@ fn write_ingest_manifest(
             .source_path
             .canonicalize()
             .unwrap_or_else(|_| result.source_path.clone());
-        let canon_root = source_root
-            .canonicalize()
-            .unwrap_or_else(|_| source_root.to_path_buf());
 
         let relative_path = canon_source
             .strip_prefix(&canon_root)
             .unwrap_or(&canon_source);
 
-        // RFC-0050: Apply prefix correctly
-        let prefix_str = prefix.unwrap_or("");
         let manifest_key = if prefix_str == "/" {
             format!("/{}", relative_path.display())
         } else if prefix_str.is_empty() {

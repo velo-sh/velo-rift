@@ -179,18 +179,14 @@ impl WatchFirstScanner {
         tracing::info!("Watch started, beginning directory scan");
 
         // Step 2: Walk directory tree
-        for entry in walkdir::WalkDir::new(&self.root)
+        for entry in jwalk::WalkDir::new(&self.root)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
             if let Ok(meta) = entry.metadata() {
                 let size = meta.len();
-                if self
-                    .tx
-                    .send(ScanItem::Path(entry.into_path(), size))
-                    .is_err()
-                {
+                if self.tx.send(ScanItem::Path(entry.path(), size)).is_err() {
                     break; // Channel closed
                 }
                 count += 1;

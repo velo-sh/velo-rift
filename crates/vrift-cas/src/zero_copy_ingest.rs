@@ -132,6 +132,9 @@ pub struct CacheHint {
     pub size: u64,
     /// mtime in seconds since Unix epoch (MetadataExt::mtime())
     pub mtime: u64,
+    /// mtime nanosecond component (MetadataExt::mtime_nsec())
+    /// Set to 0 if not available (backwards compat with old manifests)
+    pub mtime_nsec: i64,
 }
 
 // ============================================================================
@@ -336,7 +339,10 @@ where
     // practice (build outputs, source files). A future P1 could add mtime_nsec()
     // for nanosecond precision if needed.
     if let Some(hint) = cache_lookup(manifest_key) {
-        if hint.size == size && hint.mtime == mtime {
+        if hint.size == size
+            && hint.mtime == mtime
+            && (hint.mtime_nsec == 0 || hint.mtime_nsec == metadata.mtime_nsec())
+        {
             return Ok(IngestResult {
                 source_path: source.to_owned(),
                 hash: hint.content_hash,
@@ -695,6 +701,7 @@ mod tests {
             content_hash: first.hash,
             size: first.size,
             mtime,
+            mtime_nsec: 0,
         };
 
         // Re-ingest with matching cache → should skip
@@ -727,6 +734,7 @@ mod tests {
             content_hash: first.hash,
             size: first.size + 999,
             mtime,
+            mtime_nsec: 0,
         };
 
         let result =
@@ -753,6 +761,7 @@ mod tests {
             content_hash: first.hash,
             size: first.size,
             mtime: 9999999,
+            mtime_nsec: 0,
         };
 
         let result =

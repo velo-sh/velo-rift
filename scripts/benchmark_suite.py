@@ -37,7 +37,7 @@ REPORT_DIR = PROJECT_ROOT / "docs"
 DATASETS = {
     "xsmall": {"package": "xsmall_package.json", "tier": "quick"},
     "small": {"package": "small_package.json", "tier": "quick"},
-    "medium": {"package": "medium_package.json", "tier": "full"},
+    "medium": {"package": "medium_package.json", "tier": "quick"},
     "large": {"package": "large_package.json", "tier": "full"},
     "xxlarge": {"package": "xxlarge_package.json", "tier": "full"},
 }
@@ -362,7 +362,7 @@ def main() -> None:
     # Select datasets
     if quick_mode:
         datasets = {k: v for k, v in DATASETS.items() if v["tier"] == "quick"}
-        print("Mode: QUICK (small + medium only)")
+        print("Mode: QUICK (xsmall + small + medium)")
     else:
         datasets = DATASETS
         print("Mode: FULL (all datasets)")

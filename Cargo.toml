@@ -57,6 +57,7 @@ nix = { version = "0.28", features = ["fs", "mount", "sched", "signal", "user", 
 
 # File operations
 walkdir = "2.5"
+jwalk = "0.8"
 memmap2 = "0.9"
 tempfile = "3.14"
 notify = "6.1.1"

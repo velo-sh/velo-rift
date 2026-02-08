@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam::channel::{self, Receiver, Sender};
-use walkdir::WalkDir;
+use jwalk::WalkDir;
 
 use crate::{CasError, IngestMode, IngestResult};
 
@@ -46,16 +46,19 @@ pub fn streaming_ingest(
     let scanner = std::thread::spawn(move || {
         let mut file_count = 0;
         for entry in WalkDir::new(&source_path)
-            .into_iter()
-            // Skip .vrift and .git directories entirely (avoids flock deadlock on LMDB lock files)
-            .filter_entry(|e| {
-                let name = e.file_name().to_str().unwrap_or("");
-                name != ".vrift" && name != ".git"
+            .process_read_dir(|_depth, _path, _state, children| {
+                children.retain(|entry| {
+                    entry.as_ref().map_or(true, |e| {
+                        let name = e.file_name.to_str().unwrap_or("");
+                        name != ".vrift" && name != ".git"
+                    })
+                });
             })
+            .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
-            let path = entry.into_path();
+            let path = entry.path();
             file_count += 1;
             if tx.send(path).is_err() {
                 tracing::warn!("[INGEST] Scanner: receivers dropped, stopping");
@@ -166,15 +169,19 @@ where
     let scanner = std::thread::spawn(move || {
         let mut file_count = 0;
         for entry in WalkDir::new(&scanner_source)
-            .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_str().unwrap_or("");
-                name != ".vrift" && name != ".git"
+            .process_read_dir(|_depth, _path, _state, children| {
+                children.retain(|entry| {
+                    entry.as_ref().map_or(true, |e| {
+                        let name = e.file_name.to_str().unwrap_or("");
+                        name != ".vrift" && name != ".git"
+                    })
+                });
             })
+            .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
-            let path = entry.into_path();
+            let path = entry.path();
             file_count += 1;
             if tx.send(path).is_err() {
                 break;
@@ -283,7 +290,7 @@ where
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
-            let path = entry.into_path();
+            let path = entry.path();
             if tx.send(path).is_err() {
                 break;
             }

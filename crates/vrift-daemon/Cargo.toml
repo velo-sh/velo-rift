@@ -24,5 +24,6 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 nix = { workspace = true, features = ["user", "fs"] }
 libc = "0.2"
 blake3 = { workspace = true }
+hex = "0.4"
 walkdir = "2"
 # We'll use tokio::net::UnixListener, which is available in tokio "full" or "net" + "rt"
