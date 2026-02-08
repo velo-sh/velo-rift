@@ -116,6 +116,10 @@ pub struct IngestResult {
     pub was_new: bool,
     /// True if this result was returned from mtime+size cache (no file read/hash)
     pub skipped_by_cache: bool,
+    /// File mtime in seconds since epoch (carried from ingest stat, avoids redundant stat in manifest write)
+    pub mtime: u64,
+    /// File mode bits (carried from ingest stat)
+    pub mode: u32,
 }
 
 /// Cache hint from manifest for mtime+size skip optimization (P0)
@@ -183,6 +187,8 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
         size,
         was_new,
         skipped_by_cache: false,
+        mtime: metadata.mtime() as u64,
+        mode: metadata.mode(),
     })
 }
 
@@ -246,8 +252,10 @@ pub fn ingest_solid_tier1_dedup(
         source_path: source.to_owned(),
         hash,
         size,
-        was_new: is_new, // is_new from insert() tells us if this was first time
+        was_new: is_new,
         skipped_by_cache: false,
+        mtime: metadata.mtime() as u64,
+        mode: metadata.mode(),
     })
 }
 
@@ -289,6 +297,8 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
         size,
         was_new,
         skipped_by_cache: false,
+        mtime: metadata.mtime() as u64,
+        mode: metadata.mode(),
     })
 }
 
@@ -333,6 +343,8 @@ where
                 size,
                 was_new: false,
                 skipped_by_cache: true,
+                mtime,
+                mode: metadata.mode(),
             });
         }
     }
@@ -382,8 +394,10 @@ pub fn ingest_solid_tier2_dedup(
             source_path: source.to_owned(),
             hash,
             size,
-            was_new: false, // Duplicate - already processed
+            was_new: false,
             skipped_by_cache: false,
+            mtime: metadata.mtime() as u64,
+            mode: metadata.mode(),
         });
     }
 
@@ -409,6 +423,8 @@ pub fn ingest_solid_tier2_dedup(
         size,
         was_new,
         skipped_by_cache: false,
+        mtime: metadata.mtime() as u64,
+        mode: metadata.mode(),
     })
 }
 
@@ -443,6 +459,8 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
             size,
             was_new: false,
             skipped_by_cache: false,
+            mtime: metadata.mtime() as u64,
+            mode: metadata.mode(),
         });
     }
 
@@ -466,6 +484,8 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
                     size,
                     was_new: false,
                     skipped_by_cache: false,
+                    mtime: metadata.mtime() as u64,
+                    mode: metadata.mode(),
                 });
             }
             return Err(e.into());
@@ -477,8 +497,10 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
         source_path: source.to_owned(),
         hash,
         size,
-        was_new: true, // Phantom always creates new (rename)
+        was_new: true,
         skipped_by_cache: false,
+        mtime: metadata.mtime() as u64,
+        mode: metadata.mode(),
     })
 }
 

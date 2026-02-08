@@ -950,7 +950,6 @@ fn write_ingest_manifest(
     tier1: bool,
     prefix: Option<&str>,
 ) -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
     use vrift_manifest::VnodeEntry;
 
     // Open or create LMDB manifest
@@ -964,17 +963,15 @@ fn write_ingest_manifest(
     };
 
     for result in results.iter().flatten() {
-        // Get file metadata for mtime and mode
-        let metadata = match std::fs::metadata(&result.source_path) {
-            Ok(m) => m,
-            Err(_) => {
-                // File might have been moved (phantom mode) - try symlink metadata
-                match std::fs::symlink_metadata(&result.source_path) {
-                    Ok(m) => m,
-                    Err(_) => continue, // Skip files we can't stat
-                }
-            }
-        };
+        // P1: Skip manifest write for cache-hit entries — their hash/mtime/size
+        // are already correct in the existing manifest, no need to re-write.
+        if result.skipped_by_cache {
+            continue;
+        }
+
+        // P2: Use mtime/mode carried from ingest stat (avoids redundant fs::metadata())
+        let mtime = result.mtime;
+        let mode = result.mode;
 
         // Compute manifest path: relative to source_root with optional prefix
         let canon_source = result
@@ -1004,10 +1001,6 @@ fn write_ingest_manifest(
                 relative_path.display()
             )
         };
-
-        // Extract mtime and mode
-        let mtime = metadata.mtime() as u64;
-        let mode = metadata.mode();
 
         // Create VnodeEntry
         let vnode = VnodeEntry::new_file(result.hash, result.size, mtime, mode);
