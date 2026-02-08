@@ -23,6 +23,7 @@ use walkdir::WalkDir;
 
 mod active;
 mod daemon;
+mod doctor;
 pub mod gc;
 mod inception;
 mod isolation;
@@ -241,6 +242,13 @@ enum Commands {
 
     /// Synchronize project files with manifest (compensation scan)
     Sync {
+        /// Project directory (default: current directory)
+        #[arg(value_name = "DIR")]
+        directory: Option<PathBuf>,
+    },
+
+    /// Run diagnostic checks on the Velo Rift environment
+    Doctor {
         /// Project directory (default: current directory)
         #[arg(value_name = "DIR")]
         directory: Option<PathBuf>,
@@ -543,6 +551,10 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
             let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
             cmd_sync(&dir).await
         }
+        Commands::Doctor { directory } => {
+            let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
+            doctor::cmd_doctor(&dir)
+        }
     }
 }
 
@@ -579,7 +591,10 @@ async fn cmd_init(directory: &Path) -> Result<()> {
     }
 
     // 2. Ensure ~/.vrift/the_source/ exists (global CAS — managed by vriftd)
-    let cfg = vrift_config::Config::load().unwrap_or_default();
+    let cfg = vrift_config::Config::load().unwrap_or_else(|e| {
+        eprintln!("Warning: Config load failed: {}. Using defaults.", e);
+        vrift_config::Config::default()
+    });
     let the_source = cfg.cas_root();
     let the_source_resolved = vrift_manifest::normalize_path(&the_source.to_string_lossy());
     fs::create_dir_all(&the_source_resolved).with_context(|| {

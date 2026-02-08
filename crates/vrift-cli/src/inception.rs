@@ -115,7 +115,10 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
     let new_path = format!("{}/.vrift/bin:{}", project_root_str, current_path);
 
     // Derive shim environment from Config SSOT
-    let cfg = vrift_config::Config::load_for_project(&project_root).unwrap_or_default();
+    let cfg = vrift_config::Config::load_for_project(&project_root).unwrap_or_else(|e| {
+        eprintln!("Warning: Config load failed: {}. Using defaults.", e);
+        vrift_config::Config::default()
+    });
     let shim_env = cfg.shim_env();
 
     // Spawn subshell with VFS environment
@@ -215,7 +218,10 @@ pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
         .unwrap_or_default();
 
     // Derive shim environment from Config SSOT
-    let cfg = vrift_config::Config::load_for_project(&project_root).unwrap_or_default();
+    let cfg = vrift_config::Config::load_for_project(&project_root).unwrap_or_else(|e| {
+        eprintln!("Warning: Config load failed: {}. Using defaults.", e);
+        vrift_config::Config::default()
+    });
     let shim_env = cfg.shim_env();
 
     // Output shell script to stdout (for eval)
@@ -289,6 +295,10 @@ pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
 /// Generate shell script for exiting inception mode
 pub fn cmd_wake() -> Result<()> {
     // RFC-0052: Deactivate persistent session
+    // NOTE: raw env::var is intentional here. `cmd_wake` runs inside an
+    // inception subshell where VRIFT_PROJECT_ROOT was set by `cmd_inception`
+    // or `cmd_shell`. Config layer should NOT be used here — we need the
+    // shell-level value that was exported, not a fresh TOML load.
     let project_root = env::var("VRIFT_PROJECT_ROOT").unwrap_or_else(|_| ".".to_string());
     let _ = crate::active::deactivate(Path::new(&project_root));
 

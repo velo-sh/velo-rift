@@ -384,7 +384,10 @@ fn export_mmap_cache(manifest: &LmdbManifest, project_root: &Path) {
 async fn start_daemon() -> Result<()> {
     tracing::info!("vriftd: Starting multi-tenant daemon...");
 
-    let cfg = vrift_config::Config::load().unwrap_or_default();
+    let cfg = vrift_config::Config::load().unwrap_or_else(|e| {
+        tracing::warn!("Config load failed: {}. Using defaults.", e);
+        vrift_config::Config::default()
+    });
     let socket_str = cfg.socket_path().to_string_lossy().to_string();
     let path = Path::new(&socket_str);
 
@@ -474,7 +477,13 @@ async fn handle_connection(mut stream: UnixStream, state: Arc<DaemonState>) {
     let peer_creds = PeerCredentials::from_stream(&stream);
     let daemon_uid = unsafe { libc::getuid() };
     let mut current_workspace: Option<Arc<WorkspaceState>> = {
-        let cfg = vrift_config::Config::load().unwrap_or_default();
+        let cfg = vrift_config::Config::load().unwrap_or_else(|e| {
+            tracing::warn!(
+                "Config load in handle_connection failed: {}. Using defaults.",
+                e
+            );
+            vrift_config::Config::default()
+        });
         let manifest = cfg.project.manifest.clone();
         if manifest.as_os_str() != ".vrift/manifest.lmdb" {
             // Non-default manifest path set via config/env — derive project root

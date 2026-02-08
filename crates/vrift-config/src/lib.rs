@@ -18,7 +18,15 @@ use std::sync::RwLock;
 use tracing::debug;
 
 /// Global config instance
-static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| RwLock::new(Config::load().unwrap_or_default()));
+static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| {
+    RwLock::new(Config::load().unwrap_or_else(|e| {
+        eprintln!(
+            "[vrift-config] WARNING: Failed to load config: {}. Using defaults.",
+            e
+        );
+        Config::default()
+    }))
+});
 
 /// Default CAS root path
 pub const DEFAULT_CAS_ROOT: &str = vrift_ipc::DEFAULT_CAS_ROOT;
@@ -45,16 +53,35 @@ pub enum ConfigError {
     Toml(#[from] toml::de::Error),
 }
 
+/// Current config schema version
+pub const CONFIG_VERSION: u32 = 1;
+
 /// Main configuration structure
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Config schema version (for forward compatibility)
+    pub config_version: u32,
     pub project: ProjectConfig,
     pub storage: StorageConfig,
     pub ingest: IngestConfig,
     pub tiers: TierConfig,
     pub security: SecurityConfig,
     pub daemon: DaemonConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            config_version: CONFIG_VERSION,
+            project: ProjectConfig::default(),
+            storage: StorageConfig::default(),
+            ingest: IngestConfig::default(),
+            tiers: TierConfig::default(),
+            security: SecurityConfig::default(),
+            daemon: DaemonConfig::default(),
+        }
+    }
 }
 
 impl Config {
@@ -102,14 +129,16 @@ impl Config {
         //    be created, fall back to default /tmp/vrift.sock so all
         //    components (CLI, daemon, tests) resolve to the same socket.
         if let Some(parent) = config.daemon.socket.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists()
-                && std::fs::create_dir_all(parent).is_err() {
-                    debug!(
-                        "Socket directory {:?} unavailable, falling back to /tmp/vrift.sock",
-                        parent
-                    );
-                    config.daemon.socket = PathBuf::from("/tmp/vrift.sock");
-                }
+            if !parent.as_os_str().is_empty()
+                && !parent.exists()
+                && std::fs::create_dir_all(parent).is_err()
+            {
+                debug!(
+                    "Socket directory {:?} unavailable, falling back to /tmp/vrift.sock",
+                    parent
+                );
+                config.daemon.socket = PathBuf::from("/tmp/vrift.sock");
+            }
         }
 
         Ok(config)
@@ -255,6 +284,7 @@ impl Config {
         format!(
             r#"# Velo Rift project configuration
 # Documentation: https://github.com/velo-sh/velo-rift
+config_version = 1
 
 [project]
 vfs_prefix = "{vfs_prefix}"
