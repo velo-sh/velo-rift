@@ -49,7 +49,8 @@ pub use streaming_ingest::{
 pub use streaming_pipeline::{IngestPipeline, IngestStats, PipelineConfig};
 pub use zero_copy_ingest::{
     ingest_phantom, ingest_solid_tier1, ingest_solid_tier1_dedup, ingest_solid_tier2,
-    ingest_solid_tier2_cached, ingest_solid_tier2_dedup, CacheHint, IngestResult,
+    ingest_solid_tier2_cached, ingest_solid_tier2_dedup, mtime_nsec_from_metadata, CacheHint,
+    IngestResult,
 };
 
 use serde::{Deserialize, Serialize};

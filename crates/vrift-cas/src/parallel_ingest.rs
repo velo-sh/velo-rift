@@ -304,7 +304,7 @@ pub fn parallel_ingest_with_fallback(
                                         size,
                                         was_new: true,
                                         skipped_by_cache: false,
-                                        mtime: 0,
+                                        mtime: 0, // fallback path: no metadata available
                                         mode: 0o644,
                                     })
                                 }

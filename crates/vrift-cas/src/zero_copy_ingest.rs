@@ -116,10 +116,26 @@ pub struct IngestResult {
     pub was_new: bool,
     /// True if this result was returned from mtime+size cache (no file read/hash)
     pub skipped_by_cache: bool,
-    /// File mtime in seconds since epoch (carried from ingest stat, avoids redundant stat in manifest write)
+    /// File modification time in **nanoseconds** since Unix epoch.
+    /// Computed via `mtime_nsec_from_metadata()` for consistency.
     pub mtime: u64,
     /// File mode bits (carried from ingest stat)
     pub mode: u32,
+}
+
+/// Compute nanosecond-precision mtime from filesystem metadata.
+///
+/// Combines `MetadataExt::mtime()` (seconds) and `MetadataExt::mtime_nsec()`
+/// (nanosecond component) into a single `u64` value.
+///
+/// **All code that stores mtime MUST use this function** to avoid
+/// accidentally storing seconds instead of nanoseconds.
+#[inline]
+pub fn mtime_nsec_from_metadata(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    (metadata.mtime() as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(metadata.mtime_nsec() as u64)
 }
 
 /// Cache hint from manifest for mtime+size skip optimization (P0)
@@ -130,11 +146,8 @@ pub struct IngestResult {
 pub struct CacheHint {
     pub content_hash: Blake3Hash,
     pub size: u64,
-    /// mtime in seconds since Unix epoch (MetadataExt::mtime())
+    /// Modification time in **nanoseconds** since Unix epoch (matches VnodeEntry.mtime)
     pub mtime: u64,
-    /// mtime nanosecond component (MetadataExt::mtime_nsec())
-    /// Set to 0 if not available (backwards compat with old manifests)
-    pub mtime_nsec: i64,
 }
 
 // ============================================================================
@@ -190,7 +203,7 @@ pub fn ingest_solid_tier1(source: &Path, cas_root: &Path) -> Result<IngestResult
         size,
         was_new,
         skipped_by_cache: false,
-        mtime: metadata.mtime() as u64,
+        mtime: mtime_nsec_from_metadata(&metadata),
         mode: metadata.mode(),
     })
 }
@@ -257,7 +270,7 @@ pub fn ingest_solid_tier1_dedup(
         size,
         was_new: is_new,
         skipped_by_cache: false,
-        mtime: metadata.mtime() as u64,
+        mtime: mtime_nsec_from_metadata(&metadata),
         mode: metadata.mode(),
     })
 }
@@ -300,7 +313,7 @@ pub fn ingest_solid_tier2(source: &Path, cas_root: &Path) -> Result<IngestResult
         size,
         was_new,
         skipped_by_cache: false,
-        mtime: metadata.mtime() as u64,
+        mtime: mtime_nsec_from_metadata(&metadata),
         mode: metadata.mode(),
     })
 }
@@ -328,21 +341,11 @@ where
 {
     let metadata = fs::metadata(source)?;
     let size = metadata.len();
-    let mtime = metadata.mtime() as u64;
+    let mtime = mtime_nsec_from_metadata(&metadata);
 
-    // Cache hit: mtime+size match → skip read+hash+link entirely
-    //
-    // Safety: MetadataExt::mtime() returns seconds since epoch on all Unix
-    // platforms (POSIX st_mtime). This is consistent between macOS and Linux.
-    // Sub-second modifications with identical size could cause false cache hits,
-    // but this is an acceptable tradeoff — such scenarios are extremely rare in
-    // practice (build outputs, source files). A future P1 could add mtime_nsec()
-    // for nanosecond precision if needed.
+    // Cache hit: mtime(nsec)+size match → skip read+hash+link entirely
     if let Some(hint) = cache_lookup(manifest_key) {
-        if hint.size == size
-            && hint.mtime == mtime
-            && (hint.mtime_nsec == 0 || hint.mtime_nsec == metadata.mtime_nsec())
-        {
+        if hint.size == size && hint.mtime == mtime {
             return Ok(IngestResult {
                 source_path: source.to_owned(),
                 hash: hint.content_hash,
@@ -402,7 +405,7 @@ pub fn ingest_solid_tier2_dedup(
             size,
             was_new: false,
             skipped_by_cache: false,
-            mtime: metadata.mtime() as u64,
+            mtime: mtime_nsec_from_metadata(&metadata),
             mode: metadata.mode(),
         });
     }
@@ -429,7 +432,7 @@ pub fn ingest_solid_tier2_dedup(
         size,
         was_new,
         skipped_by_cache: false,
-        mtime: metadata.mtime() as u64,
+        mtime: mtime_nsec_from_metadata(&metadata),
         mode: metadata.mode(),
     })
 }
@@ -465,7 +468,7 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
             size,
             was_new: false,
             skipped_by_cache: false,
-            mtime: metadata.mtime() as u64,
+            mtime: mtime_nsec_from_metadata(&metadata),
             mode: metadata.mode(),
         });
     }
@@ -490,7 +493,7 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
                     size,
                     was_new: false,
                     skipped_by_cache: false,
-                    mtime: metadata.mtime() as u64,
+                    mtime: mtime_nsec_from_metadata(&metadata),
                     mode: metadata.mode(),
                 });
             }
@@ -505,7 +508,7 @@ pub fn ingest_phantom(source: &Path, cas_root: &Path) -> Result<IngestResult> {
         size,
         was_new: true,
         skipped_by_cache: false,
-        mtime: metadata.mtime() as u64,
+        mtime: mtime_nsec_from_metadata(&metadata),
         mode: metadata.mode(),
     })
 }
@@ -696,12 +699,11 @@ mod tests {
 
         // Build cache hint from first result
         let metadata = fs::metadata(&test_file).unwrap();
-        let mtime = metadata.mtime() as u64;
+        let mtime = mtime_nsec_from_metadata(&metadata);
         let hint = CacheHint {
             content_hash: first.hash,
             size: first.size,
             mtime,
-            mtime_nsec: 0,
         };
 
         // Re-ingest with matching cache → should skip
@@ -727,14 +729,13 @@ mod tests {
         let first = ingest_solid_tier2(&test_file, cas_dir.path()).unwrap();
 
         let metadata = fs::metadata(&test_file).unwrap();
-        let mtime = metadata.mtime() as u64;
+        let mtime = mtime_nsec_from_metadata(&metadata);
 
         // Wrong size → cache miss
         let hint = CacheHint {
             content_hash: first.hash,
             size: first.size + 999,
             mtime,
-            mtime_nsec: 0,
         };
 
         let result =
@@ -761,7 +762,6 @@ mod tests {
             content_hash: first.hash,
             size: first.size,
             mtime: 9999999,
-            mtime_nsec: 0,
         };
 
         let result =

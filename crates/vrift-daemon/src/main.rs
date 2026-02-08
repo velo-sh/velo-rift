@@ -865,7 +865,6 @@ async fn handle_request(
                             content_hash: entry.vnode.content_hash,
                             size: entry.vnode.size,
                             mtime: entry.vnode.mtime,
-                            mtime_nsec: 0, // VnodeEntry doesn't store nsec yet
                         })
                     };
                     let r = streaming_ingest_cached(

@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
 
     let entry = VnodeEntry::new_file(
         [0u8; 32], // dummy hash
-        1024, now, 0o644,
+        1024, now, 0, 0o644,
     );
 
     println!("Sending 1,000 ManifestUpserts to daemon (including /vrift/subdir)...");

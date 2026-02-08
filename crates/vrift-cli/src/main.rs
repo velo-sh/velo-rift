@@ -13,7 +13,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -1246,12 +1246,7 @@ async fn cmd_ingest(
         };
 
         let metadata = fs::symlink_metadata(path)?;
-        let mtime = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+        let mtime = vrift_cas::mtime_nsec_from_metadata(&metadata);
 
         if metadata.is_dir() {
             let vnode = VnodeEntry::new_directory(mtime, metadata.mode());

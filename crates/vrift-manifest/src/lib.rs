@@ -136,7 +136,7 @@ impl VnodeEntry {
             content_hash: target_hash,
             size: target_len,
             mtime,
-            mode: 0o777, // Symlinks usually have dummy permissions
+            mode: 0o777,
             flags: VnodeFlags::Symlink as u16,
             _pad: 0,
         }
