@@ -81,13 +81,13 @@ pub fn streaming_ingest(
                 tracing::info!("[INGEST] Worker {} started", i);
                 let mut processed = 0;
                 for path in rx {
-                    tracing::info!("[INGEST] Worker {} processing: {:?}", i, path);
+                    tracing::trace!("[INGEST] Worker {} processing: {:?}", i, path);
                     let result = match mode {
                         IngestMode::Phantom => ingest_phantom(&path, &cas),
                         IngestMode::SolidTier1 => ingest_solid_tier1(&path, &cas),
                         IngestMode::SolidTier2 => ingest_solid_tier2(&path, &cas),
                     };
-                    tracing::info!("[INGEST] Worker {} done: {:?}", i, path);
+                    tracing::trace!("[INGEST] Worker {} done: {:?}", i, path);
                     r.lock().unwrap().push(result);
                     processed += 1;
                 }

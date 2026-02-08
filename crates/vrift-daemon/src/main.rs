@@ -857,16 +857,40 @@ async fn handle_request(
             let cas_clone = cas_root_path.clone();
             let results = match tokio::task::spawn_blocking(move || {
                 if let Some(manifest_arc) = existing_manifest {
-                    // P0: Cached path — use mtime+size skip
-                    tracing::info!("spawn_blocking: starting streaming_ingest_cached");
-                    let cache_lookup = move |key: &str| -> Option<CacheHint> {
-                        let entry = manifest_arc.get(key).ok()??;
-                        Some(CacheHint {
-                            content_hash: entry.vnode.content_hash,
-                            size: entry.vnode.size,
-                            mtime: entry.vnode.mtime,
-                        })
+                    // P0: Pre-load manifest into HashMap for O(1) cache lookups
+                    // (avoids per-file LMDB get() with transaction overhead)
+                    tracing::info!("spawn_blocking: pre-loading manifest into HashMap");
+                    let cache_map: std::collections::HashMap<String, CacheHint> = {
+                        match manifest_arc.iter() {
+                            Ok(entries) => entries
+                                .into_iter()
+                                .map(|(key, entry)| {
+                                    (
+                                        key,
+                                        CacheHint {
+                                            content_hash: entry.vnode.content_hash,
+                                            size: entry.vnode.size,
+                                            mtime: entry.vnode.mtime,
+                                        },
+                                    )
+                                })
+                                .collect(),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to pre-load manifest: {}, falling back to empty cache",
+                                    e
+                                );
+                                std::collections::HashMap::new()
+                            }
+                        }
                     };
+                    tracing::info!(
+                        "spawn_blocking: loaded {} entries into cache HashMap",
+                        cache_map.len()
+                    );
+                    let cache_map = std::sync::Arc::new(cache_map);
+                    let cache_lookup =
+                        move |key: &str| -> Option<CacheHint> { cache_map.get(key).cloned() };
                     let r = streaming_ingest_cached(
                         &source_clone,
                         &cas_clone,
@@ -1018,7 +1042,14 @@ fn write_ingest_manifest(
     let canon_root = source_root
         .canonicalize()
         .unwrap_or_else(|_| source_root.to_path_buf());
+    // Reusable buffer for manifest key (avoids per-file allocation)
+    let mut manifest_key = String::with_capacity(256);
     let prefix_str = prefix.unwrap_or("");
+    let prefix_trimmed = if prefix_str.is_empty() || prefix_str == "/" {
+        ""
+    } else {
+        prefix_str.trim_end_matches('/')
+    };
 
     for result in results.iter().flatten() {
         // P1: Skip manifest write for cache-hit entries — their hash/mtime/size
@@ -1031,29 +1062,20 @@ fn write_ingest_manifest(
         let mtime = result.mtime;
         let mode = result.mode;
 
-        // Compute manifest path: relative to source_root with optional prefix
-        let canon_source = result
+        // #1: Use strip_prefix directly — jwalk yields absolute paths,
+        // no need for per-file canonicalize() syscall
+        let relative_path = result
             .source_path
-            .canonicalize()
-            .unwrap_or_else(|_| result.source_path.clone());
-
-        let relative_path = canon_source
             .strip_prefix(&canon_root)
-            .unwrap_or(&canon_source);
+            .unwrap_or(&result.source_path);
 
-        let manifest_key = if prefix_str == "/" {
-            format!("/{}", relative_path.display())
-        } else if prefix_str.is_empty() {
-            // Default behavior or empty prefix: relative path with leading /
-            format!("/{}", relative_path.display())
-        } else {
-            // User provided a custom prefix, e.g. "/vrift"
-            format!(
-                "{}/{}",
-                prefix_str.trim_end_matches('/'),
-                relative_path.display()
-            )
-        };
+        // #2: Reuse manifest_key buffer (clear + push instead of format! alloc)
+        manifest_key.clear();
+        if !prefix_trimmed.is_empty() {
+            manifest_key.push_str(prefix_trimmed);
+        }
+        manifest_key.push('/');
+        manifest_key.push_str(&relative_path.to_string_lossy());
 
         // Create VnodeEntry
         let vnode = VnodeEntry::new_file(result.hash, result.size, mtime, mode);
