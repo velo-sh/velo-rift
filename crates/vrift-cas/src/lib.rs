@@ -528,11 +528,23 @@ impl CasStore {
     /// Creates the 3-level layout: blake3/{00..ff}/{00..ff}/
     /// This is ~65,536 directories but creation is fast and only done once.
     ///
+    /// Phase5-#1: Probes `blake3/ff/ff/` first — if it exists, all dirs
+    /// are already created and we skip entirely (1 stat instead of 65K).
+    ///
     /// Call this after creating a new CasStore for batch ingest workloads.
     pub fn warm_directories(&self) -> Result<()> {
         use rayon::prelude::*;
 
         let blake3_root = self.root.join("blake3");
+
+        // Phase5-#1: Probe the LAST shard directory. If it exists,
+        // all 65K dirs were already created — skip entirely.
+        let probe = blake3_root.join("ff").join("ff");
+        if probe.is_dir() {
+            tracing::debug!("warm_directories: probe hit (blake3/ff/ff exists), skipping");
+            return Ok(());
+        }
+
         fs::create_dir_all(&blake3_root)?;
 
         // Parallel directory creation using rayon

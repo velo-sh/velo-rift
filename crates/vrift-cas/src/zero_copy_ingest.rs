@@ -360,6 +360,42 @@ where
     ingest_solid_tier2(source, cas_root)
 }
 
+/// Phase5-#2: Pre-stat variant — scanner already stat'd the file, so cache hits
+/// require ZERO syscalls (no stat, no open, no read).
+///
+/// Cache misses still fall through to full `ingest_solid_tier2()` which re-opens
+/// the file for hashing.
+pub fn ingest_solid_tier2_cached_prestat<F>(
+    source: &Path,
+    cas_root: &Path,
+    manifest_key: &str,
+    cache_lookup: &F,
+    prestat_size: u64,
+    prestat_mtime: u64,
+    prestat_mode: u32,
+) -> Result<IngestResult>
+where
+    F: Fn(&str) -> Option<CacheHint>,
+{
+    // Cache hit: mtime(nsec)+size match → ZERO syscalls
+    if let Some(hint) = cache_lookup(manifest_key) {
+        if hint.size == prestat_size && hint.mtime == prestat_mtime {
+            return Ok(IngestResult {
+                source_path: source.to_owned(),
+                hash: hint.content_hash,
+                size: prestat_size,
+                was_new: false,
+                skipped_by_cache: true,
+                mtime: prestat_mtime,
+                mode: prestat_mode,
+            });
+        }
+    }
+
+    // Cache miss: full ingest path (re-opens + re-stats file)
+    ingest_solid_tier2(source, cas_root)
+}
+
 /// Ingest Solid Mode Tier-2 with in-memory deduplication
 ///
 /// Uses DashSet to track already-seen hashes, skipping filesystem

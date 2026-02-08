@@ -123,6 +123,10 @@ pub fn streaming_ingest(
 /// (mtime, size) against a cache before hashing. On cache hit, returns the
 /// cached content_hash without reading the file.
 ///
+/// Phase5-#2: Scanner stat's files once, sends (path, size, mtime, mode) so
+/// cache-hit workers do ZERO syscalls.
+/// Phase5-#3: Workers reuse a String buffer for manifest_key (no per-file alloc).
+///
 /// # Arguments
 ///
 /// * `source` - Source directory to scan
@@ -140,7 +144,9 @@ pub fn streaming_ingest_cached<F>(
 where
     F: Fn(&str) -> Option<crate::zero_copy_ingest::CacheHint> + Send + Sync + 'static,
 {
-    use crate::zero_copy_ingest::{ingest_phantom, ingest_solid_tier1, ingest_solid_tier2_cached};
+    use crate::zero_copy_ingest::{
+        ingest_phantom, ingest_solid_tier1, ingest_solid_tier2_cached_prestat,
+    };
 
     tracing::info!(
         "[INGEST] streaming_ingest_cached starting: source={:?}, cas={:?}",
@@ -148,7 +154,9 @@ where
         cas_root
     );
 
-    let (tx, rx): (Sender<PathBuf>, Receiver<PathBuf>) = channel::bounded(CHANNEL_CAP);
+    // Phase5-#2: Channel sends (PathBuf, size, mtime_nsec, mode) — metadata from scanner stat
+    type FileEntry = (PathBuf, u64, u64, u32);
+    let (tx, rx): (Sender<FileEntry>, Receiver<FileEntry>) = channel::bounded(CHANNEL_CAP);
 
     let num_threads = threads.unwrap_or_else(|| std::cmp::min(4, num_cpus::get() / 2).max(1));
     tracing::info!(
@@ -156,10 +164,11 @@ where
         num_threads
     );
 
-    // Scanner thread
+    // Scanner thread — stat's each file and sends metadata
     let source_path = source.to_path_buf();
     let scanner_source = source_path.clone();
     let scanner = std::thread::spawn(move || {
+        use std::os::unix::fs::MetadataExt;
         let mut file_count = 0;
         for entry in WalkDir::new(&scanner_source)
             .process_read_dir(|_depth, _path, _state, children| {
@@ -175,8 +184,16 @@ where
             .filter(|e| e.file_type().is_file())
         {
             let path = entry.path();
+            // Phase5-#2: stat once in scanner, avoid re-stat in worker
+            let (size, mtime, mode) = match std::fs::metadata(&path) {
+                Ok(m) => {
+                    let mtime = crate::zero_copy_ingest::mtime_nsec_from_metadata(&m);
+                    (m.len(), mtime, m.mode())
+                }
+                Err(_) => continue, // skip unreadable files
+            };
             file_count += 1;
-            if tx.send(path).is_err() {
+            if tx.send((path, size, mtime, mode)).is_err() {
                 break;
             }
         }
@@ -197,19 +214,38 @@ where
                 let mut local_results = Vec::new();
                 let mut processed = 0u64;
                 let mut cache_hits = 0u64;
-                for path in rx {
+                // Phase5-#3: Reusable String buffer for manifest_key
+                let mut key_buf = String::with_capacity(256);
+                for (path, size, mtime, file_mode) in rx {
                     let result = match mode {
                         IngestMode::SolidTier2 => {
-                            // Compute manifest key: /relative/path from source root
-                            let manifest_key = match path.strip_prefix(&source_root) {
-                                Ok(rel) => format!("/{}", rel.display()),
-                                Err(_) => format!(
-                                    "/{}",
-                                    path.file_name().unwrap_or_default().to_string_lossy()
-                                ),
-                            };
-                            let res =
-                                ingest_solid_tier2_cached(&path, &cas, &manifest_key, &*cache);
+                            // Phase5-#3: Reuse key_buf instead of format!() allocation
+                            key_buf.clear();
+                            key_buf.push('/');
+                            match path.strip_prefix(&source_root) {
+                                Ok(rel) => {
+                                    use std::fmt::Write;
+                                    let _ = write!(key_buf, "{}", rel.display());
+                                }
+                                Err(_) => {
+                                    key_buf.push_str(
+                                        &path
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy(),
+                                    );
+                                }
+                            }
+                            // Phase5-#2: Use prestat variant — zero syscalls on cache hit
+                            let res = ingest_solid_tier2_cached_prestat(
+                                &path,
+                                &cas,
+                                &key_buf,
+                                &*cache,
+                                size,
+                                mtime,
+                                file_mode,
+                            );
                             if let Ok(ref r) = res {
                                 if r.skipped_by_cache {
                                     cache_hits += 1;
