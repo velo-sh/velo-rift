@@ -42,11 +42,9 @@ use vrift_manifest::{Manifest, VnodeEntry};
 #[command(version, about, long_about = None)]
 struct Cli {
     /// TheSource™ storage root directory (global CAS)
-    #[arg(
-        long = "the-source-root",
-        default_value = vrift_config::DEFAULT_CAS_ROOT
-    )]
-    the_source_root: PathBuf,
+    /// Only pass explicitly to override daemon's env/config resolution.
+    #[arg(long = "the-source-root")]
+    the_source_root: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -371,8 +369,16 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    // RFC-0043: Normalize global CAS root early (expands tilde)
-    let cas_root = vrift_manifest::normalize_path(&cli.the_source_root.to_string_lossy());
+    // RFC-0043: Resolve CAS root with proper precedence:
+    // Explicit CLI arg > VR_THE_SOURCE env > config.toml > default (~/.vrift/the_source)
+    // cli_cas_root_override is Some only when user explicitly passes --the-source-root
+    let cli_cas_root_override = cli
+        .the_source_root
+        .as_ref()
+        .map(|p| vrift_manifest::normalize_path(&p.to_string_lossy()));
+    let cas_root = cli_cas_root_override
+        .clone()
+        .unwrap_or_else(|| vrift_manifest::normalize_path(vrift_config::DEFAULT_CAS_ROOT));
 
     // Isolation check MUST happen before Tokio runtime starts (single-threaded requirement)
     if let Some(Commands::Run {
@@ -393,10 +399,14 @@ fn main() -> Result<()> {
         .enable_all()
         .build()?;
 
-    rt.block_on(async_main(cli, cas_root))
+    rt.block_on(async_main(cli, cas_root, cli_cas_root_override))
 }
 
-async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
+async fn async_main(
+    cli: Cli,
+    cas_root: std::path::PathBuf,
+    cli_cas_root_override: Option<std::path::PathBuf>,
+) -> Result<()> {
     // If no command specified, enter shell mode (VFS subshell)
     let command = match cli.command {
         Some(cmd) => cmd,
@@ -452,7 +462,7 @@ async fn async_main(cli: Cli, cas_root: std::path::PathBuf) -> Result<()> {
                 is_phantom,
                 is_tier1,
                 Some(prefix_val),
-                Some(&cas_root),
+                cli_cas_root_override.as_deref(),
             )
             .await
             {
