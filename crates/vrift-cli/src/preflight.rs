@@ -66,11 +66,14 @@ pub fn run_preflight(project_dir: &Path) -> PreflightResult {
         return result;
     }
 
-    // Check 2: VDir file exists
-    let vdir_path = vrift_dir.join("vdir.mmap");
+    // Check 2: VDir file exists (use standardized path from vrift-config)
+    let project_id = vrift_config::path::compute_project_id(&project_root);
+    let vdir_path = vrift_config::path::get_vdir_mmap_path(&project_id)
+        .unwrap_or_else(|| vrift_dir.join("vdir.mmap"));
     if !vdir_path.exists() {
         result.errors.push(format!(
-            "VDir not found. Daemon may not be running. Run: {}",
+            "VDir not found at {}. Daemon may not be running. Run: {}",
+            vdir_path.display(),
             style("vrift daemon start").cyan()
         ));
         return result;

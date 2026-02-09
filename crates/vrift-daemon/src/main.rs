@@ -1338,27 +1338,35 @@ async fn spawn_or_get_vdird(
     Ok(vdird)
 }
 
-/// Find the vdir_d binary. Looks in same directory as vriftd, then falls back to PATH.
+/// Find the vrift-vdird binary. Looks in same directory as vriftd, then falls back to PATH.
 fn find_vdird_binary() -> Result<PathBuf> {
     let current_exe = std::env::current_exe()?;
     if let Some(bin_dir) = current_exe.parent() {
-        let candidate = bin_dir.join("vdir_d");
+        // Primary name: matches Cargo.toml package name
+        let candidate = bin_dir.join("vrift-vdird");
         if candidate.exists() {
             return Ok(candidate);
+        }
+        // Legacy fallback name
+        let legacy = bin_dir.join("vdir_d");
+        if legacy.exists() {
+            return Ok(legacy);
         }
     }
 
     // Fallback: search PATH
-    if let Ok(output) = std::process::Command::new("which").arg("vdir_d").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
+    for name in &["vrift-vdird", "vdir_d"] {
+        if let Ok(output) = std::process::Command::new("which").arg(name).output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return Ok(PathBuf::from(path));
+                }
             }
         }
     }
 
     Err(anyhow::anyhow!(
-        "Could not find vdir_d binary. Ensure it is built and in the same directory as vriftd."
+        "Could not find vrift-vdird binary. Ensure it is built and in the same directory as vriftd."
     ))
 }

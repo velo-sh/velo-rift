@@ -41,17 +41,25 @@ const BOX_V: &str = "│";
 pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
     use std::process::Command;
 
+    // Phase 1.2: Connect to daemon FIRST — this triggers RegisterWorkspace which
+    // spawns vDird and creates vdir.mmap. Must happen before preflight checks.
+    let daemon_conn = match crate::daemon::connect_to_daemon(project_dir).await {
+        Ok(conn) => Some(conn),
+        Err(e) => {
+            eprintln!("{} Daemon connection warning: {}", style("⚠").yellow(), e);
+            None
+        }
+    };
+
     // =========================================================================
     // Preflight Check: Fail-fast, fail-early (RFC: Inception Preflight)
+    // Now runs AFTER daemon connection so vdir.mmap exists.
     // =========================================================================
     let preflight = crate::preflight::run_preflight(project_dir);
     if !preflight.can_activate {
         crate::preflight::print_preflight_errors(&preflight);
         std::process::exit(1);
     }
-
-    // Phase 1.2: Capture DaemonConnection to inject vDird env vars
-    let daemon_conn = crate::daemon::connect_to_daemon(project_dir).await.ok();
 
     // RFC-0052: Manage session persistence
     let _session = crate::active::activate(project_dir, crate::active::ProjectionMode::Solid)?;
@@ -179,18 +187,25 @@ pub async fn cmd_shell(project_dir: &Path) -> Result<()> {
 
 /// Generate shell script for `eval "$(vrift inception)"`
 pub async fn cmd_inception(project_dir: &Path) -> Result<()> {
+    // Phase 1.2: Connect to daemon FIRST — this triggers RegisterWorkspace which
+    // spawns vDird and creates vdir.mmap. Must happen before preflight checks.
+    let daemon_conn = match crate::daemon::connect_to_daemon(project_dir).await {
+        Ok(conn) => Some(conn),
+        Err(e) => {
+            eprintln!("{} Daemon connection warning: {}", style("⚠").yellow(), e);
+            None
+        }
+    };
+
     // =========================================================================
     // Preflight Check: Fail-fast, fail-early (RFC: Inception Preflight)
+    // Now runs AFTER daemon connection so vdir.mmap exists.
     // =========================================================================
     let preflight = crate::preflight::run_preflight(project_dir);
     if !preflight.can_activate {
         crate::preflight::print_preflight_errors(&preflight);
         std::process::exit(1);
     }
-
-    // RFC-0052: Ensure daemon is running
-    // Phase 1.2: Capture DaemonConnection to inject vDird env vars
-    let daemon_conn = crate::daemon::connect_to_daemon(project_dir).await.ok();
 
     // RFC-0052: Manage session persistence
     let _session = crate::active::activate(project_dir, crate::active::ProjectionMode::Solid)?;

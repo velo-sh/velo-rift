@@ -209,12 +209,13 @@ pub fn get_manifest_db_path(project_id: &str) -> Option<PathBuf> {
 
 /// Get the standardized VDir mmap path for a given project ID.
 ///
-/// Standard path: ~/.vrift/vdir/<project_id>.mmap (using first 16 chars of ID)
+/// Standard path: ~/.vrift/vdir/<project_id>.vdir (using first 16 chars of ID)
+/// NOTE: Extension is .vdir to match what vrift-vdird actually creates.
 pub fn get_vdir_mmap_path(project_id: &str) -> Option<PathBuf> {
     dirs::home_dir().map(|h| {
         h.join(".vrift")
             .join("vdir")
-            .join(format!("{}.mmap", &project_id[..16]))
+            .join(format!("{}.vdir", &project_id[..16]))
     })
 }
 
