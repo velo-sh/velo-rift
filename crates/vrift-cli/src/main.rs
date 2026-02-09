@@ -9,7 +9,6 @@
 //! - `vrift status` - Display CAS statistics
 
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};

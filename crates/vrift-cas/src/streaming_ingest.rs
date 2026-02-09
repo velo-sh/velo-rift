@@ -229,22 +229,13 @@ where
                                 }
                                 Err(_) => {
                                     key_buf.push_str(
-                                        &path
-                                            .file_name()
-                                            .unwrap_or_default()
-                                            .to_string_lossy(),
+                                        &path.file_name().unwrap_or_default().to_string_lossy(),
                                     );
                                 }
                             }
                             // Phase5-#2: Use prestat variant — zero syscalls on cache hit
                             let res = ingest_solid_tier2_cached_prestat(
-                                &path,
-                                &cas,
-                                &key_buf,
-                                &*cache,
-                                size,
-                                mtime,
-                                file_mode,
+                                &path, &cas, &key_buf, &*cache, size, mtime, file_mode,
                             );
                             if let Ok(ref r) = res {
                                 if r.skipped_by_cache {

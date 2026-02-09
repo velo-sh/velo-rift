@@ -107,6 +107,7 @@ pub async fn notify_blob(hash: [u8; 32], size: u64, project_root: &Path) -> Resu
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn protect_file(
     path: std::path::PathBuf,
     immutable: bool,
@@ -138,27 +139,23 @@ pub async fn protect_file(
 pub async fn connect_to_daemon(project_root: &Path) -> Result<DaemonConnection> {
     let socket_path = get_socket_path();
     let connect_fut = UnixStream::connect(&socket_path);
-    let mut stream = match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        connect_fut,
-    )
-    .await
-    {
-        Ok(Ok(s)) => s,
-        _ => {
-            tracing::info!("Daemon not running. Attempting to start...");
-            spawn_daemon()?;
-            let mut s = None;
-            for _ in 0..10 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                if let Ok(conn) = UnixStream::connect(&socket_path).await {
-                    s = Some(conn);
-                    break;
+    let mut stream =
+        match tokio::time::timeout(std::time::Duration::from_secs(5), connect_fut).await {
+            Ok(Ok(s)) => s,
+            _ => {
+                tracing::info!("Daemon not running. Attempting to start...");
+                spawn_daemon()?;
+                let mut s = None;
+                for _ in 0..10 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    if let Ok(conn) = UnixStream::connect(&socket_path).await {
+                        s = Some(conn);
+                        break;
+                    }
                 }
+                s.context("Failed to connect to daemon after starting it")?
             }
-            s.context("Failed to connect to daemon after starting it")?
-        }
-    };
+        };
 
     // 1. Handshake
     let handshake = VeloRequest::Handshake {
@@ -202,8 +199,10 @@ async fn connect_simple() -> Result<UnixStream> {
         UnixStream::connect(&socket_path),
     )
     .await
-    .unwrap_or(Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")))
-    {
+    .unwrap_or(Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "timeout",
+    ))) {
         let handshake = VeloRequest::Handshake {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             protocol_version: PROTOCOL_VERSION,

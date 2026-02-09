@@ -241,6 +241,61 @@ impl InceptionLayerState {
                 } else {
                     project_root_fs.set(root_path);
                 }
+
+                // Resolve symlinks (e.g. /tmp → /private/tmp on macOS).
+                // Critical: getcwd returns kernel-canonicalized paths, so project_root
+                // must also be canonicalized for starts_with() reverse-mapping to work.
+                //
+                // NOTE: Cannot use raw_realpath() here because INITIALIZING is Busy (3)
+                // during init(), which triggers raw_realpath's bootstrap guard that just
+                // copies the path unchanged. Instead, use raw open+fcntl(F_GETPATH)+close
+                // syscalls directly — the same technique raw_realpath uses internally.
+                let root_cstr =
+                    std::ffi::CString::new(project_root_fs.as_str()).unwrap_or_default();
+                #[cfg(target_os = "macos")]
+                {
+                    let fd = unsafe {
+                        crate::syscalls::macos_raw::raw_open(
+                            root_cstr.as_ptr(),
+                            libc::O_RDONLY | libc::O_CLOEXEC,
+                            0,
+                        )
+                    };
+                    if fd >= 0 {
+                        let mut resolved_buf = [0u8; libc::PATH_MAX as usize];
+                        let ret = unsafe {
+                            crate::syscalls::macos_raw::raw_fcntl(
+                                fd,
+                                libc::F_GETPATH,
+                                resolved_buf.as_mut_ptr() as i64,
+                            )
+                        };
+                        unsafe { crate::syscalls::macos_raw::raw_close(fd) };
+                        if ret >= 0 {
+                            if let Ok(s) = unsafe {
+                                CStr::from_ptr(resolved_buf.as_ptr() as *const libc::c_char)
+                                    .to_str()
+                            } {
+                                project_root_fs.set(s);
+                            }
+                        }
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let mut resolved_buf = [0u8; libc::PATH_MAX as usize];
+                    let resolved_ptr = unsafe {
+                        libc::realpath(
+                            root_cstr.as_ptr(),
+                            resolved_buf.as_mut_ptr() as *mut libc::c_char,
+                        )
+                    };
+                    if !resolved_ptr.is_null() {
+                        if let Ok(s) = unsafe { CStr::from_ptr(resolved_ptr).to_str() } {
+                            project_root_fs.set(s);
+                        }
+                    }
+                }
             }
         }
 
