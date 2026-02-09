@@ -154,12 +154,13 @@ unsafe fn stat_impl(
 
 #[no_mangle]
 pub unsafe extern "C" fn velo_stat_impl(path: *const c_char, buf: *mut libc_stat) -> c_int {
-    profile_count!(stat_calls);
-    stat_impl(path, buf, true).unwrap_or_else(|| {
-        #[cfg(target_os = "macos")]
-        return crate::syscalls::macos_raw::raw_stat(path, buf);
-        #[cfg(target_os = "linux")]
-        return crate::syscalls::linux_raw::raw_stat(path, buf);
+    profile_timed!(stat_calls, stat_ns, {
+        stat_impl(path, buf, true).unwrap_or_else(|| {
+            #[cfg(target_os = "macos")]
+            return crate::syscalls::macos_raw::raw_stat(path, buf);
+            #[cfg(target_os = "linux")]
+            return crate::syscalls::linux_raw::raw_stat(path, buf);
+        })
     })
 }
 
@@ -178,12 +179,13 @@ pub unsafe extern "C" fn stat_inception(path: *const c_char, buf: *mut libc_stat
 
 #[no_mangle]
 pub unsafe extern "C" fn velo_lstat_impl(path: *const c_char, buf: *mut libc_stat) -> c_int {
-    profile_count!(lstat_calls);
-    stat_impl(path, buf, false).unwrap_or_else(|| {
-        #[cfg(target_os = "macos")]
-        return crate::syscalls::macos_raw::raw_lstat(path, buf);
-        #[cfg(target_os = "linux")]
-        return crate::syscalls::linux_raw::raw_lstat(path, buf);
+    profile_timed!(lstat_calls, lstat_ns, {
+        stat_impl(path, buf, false).unwrap_or_else(|| {
+            #[cfg(target_os = "macos")]
+            return crate::syscalls::macos_raw::raw_lstat(path, buf);
+            #[cfg(target_os = "linux")]
+            return crate::syscalls::linux_raw::raw_lstat(path, buf);
+        })
     })
 }
 
@@ -201,76 +203,81 @@ pub unsafe extern "C" fn lstat_inception(path: *const c_char, buf: *mut libc_sta
 
 #[no_mangle]
 pub unsafe extern "C" fn velo_fstat_impl(fd: c_int, buf: *mut libc_stat) -> c_int {
-    profile_count!(fstat_calls);
-    // 🔥 ULTRA-FAST PATH: Lock-free, Allocation-free, TLS-free logic
-    // This supports usage inside malloc() without deadlock.
+    profile_timed!(fstat_calls, fstat_ns, {
+        // 🔥 ULTRA-FAST PATH: Lock-free, Allocation-free, TLS-free logic
+        // This supports usage inside malloc() without deadlock.
 
-    // 1. Check FdTable (if initialized)
-    // Note: We use InceptionLayerState directly instead of Reactor to ensure consistency
-    if let Some(state) = InceptionLayerState::get() {
-        let entry_ptr = state.open_fds.get(fd as u32);
-        if !entry_ptr.is_null() {
-            let entry = &*entry_ptr;
+        // 1. Check FdTable (if initialized)
+        // Note: We use InceptionLayerState directly instead of Reactor to ensure consistency
+        if let Some(state) = InceptionLayerState::get() {
+            let entry_ptr = state.open_fds.get(fd as u32);
+            if !entry_ptr.is_null() {
+                let entry = &*entry_ptr;
 
-            // M4: If this is a COW file with a temp_path, return live metadata from temp file
-            if !entry.temp_path.is_empty() {
-                let temp_path_cstr = match std::ffi::CString::new(entry.temp_path.as_str()) {
-                    Ok(c) => c,
-                    Err(_) => return -1,
-                };
-                #[cfg(target_os = "macos")]
-                let res = crate::syscalls::macos_raw::raw_stat(temp_path_cstr.as_ptr(), buf);
-                #[cfg(target_os = "linux")]
-                let res = crate::syscalls::linux_raw::raw_stat(temp_path_cstr.as_ptr(), buf);
+                // M4: If this is a COW file with a temp_path, return live metadata from temp file
+                if !entry.temp_path.is_empty() {
+                    let temp_path_cstr = match std::ffi::CString::new(entry.temp_path.as_str()) {
+                        Ok(c) => c,
+                        Err(_) => return -1,
+                    };
+                    #[cfg(target_os = "macos")]
+                    let res = crate::syscalls::macos_raw::raw_stat(temp_path_cstr.as_ptr(), buf);
+                    #[cfg(target_os = "linux")]
+                    let res = crate::syscalls::linux_raw::raw_stat(temp_path_cstr.as_ptr(), buf);
 
-                if res == 0 {
-                    // Virtualize the dev/ino to match VFS expectations
-                    (*buf).st_dev = 0x52494654;
-                    (*buf).st_ino = entry.manifest_key_hash as _;
+                    if res == 0 {
+                        // Virtualize the dev/ino to match VFS expectations
+                        (*buf).st_dev = 0x52494654;
+                        (*buf).st_ino = entry.manifest_key_hash as _;
+                        return 0;
+                    }
+                }
+
+                // If we have a cached stat (standard case for VFS files)
+                if let Some(ref cached) = entry.cached_stat {
+                    *buf = *cached;
                     return 0;
                 }
-            }
 
-            // If we have a cached stat (standard case for VFS files)
-            if let Some(ref cached) = entry.cached_stat {
-                *buf = *cached;
-                return 0;
-            }
-
-            // Fallback for VFS files without cached stat (rare?)
-            if entry.is_vfs {
-                // BUG FIX: Use resolve_path to get a VfsPath for query_manifest
-                if let Some(vpath) = state.resolve_path(entry.vpath.as_str()) {
-                    if let Some(vnode) = state.query_manifest(&vpath) {
-                        std::ptr::write_bytes(buf, 0, 1);
-                        (*buf).st_size = vnode.size as _;
-                        #[cfg(target_os = "macos")]
-                        {
-                            (*buf).st_mode = vnode.mode as u16;
+                // Fallback for VFS files without cached stat (rare?)
+                if entry.is_vfs {
+                    // BUG FIX: Use resolve_path to get a VfsPath for query_manifest
+                    if let Some(vpath) = state.resolve_path(entry.vpath.as_str()) {
+                        if let Some(vnode) = state.query_manifest(&vpath) {
+                            std::ptr::write_bytes(buf, 0, 1);
+                            (*buf).st_size = vnode.size as _;
+                            #[cfg(target_os = "macos")]
+                            {
+                                (*buf).st_mode = vnode.mode as u16;
+                            }
+                            #[cfg(target_os = "linux")]
+                            {
+                                (*buf).st_mode = vnode.mode as _;
+                            }
+                            (*buf).st_mtime = vnode.mtime as _;
+                            (*buf).st_dev = 0x52494654;
+                            (*buf).st_nlink = 1;
+                            (*buf).st_ino = vpath.manifest_key_hash as _;
+                            inception_record!(EventType::StatHit, vpath.manifest_key_hash, 0);
+                            return 0;
                         }
-                        #[cfg(target_os = "linux")]
-                        {
-                            (*buf).st_mode = vnode.mode as _;
-                        }
-                        (*buf).st_mtime = vnode.mtime as _;
-                        (*buf).st_dev = 0x52494654;
-                        (*buf).st_nlink = 1;
-                        (*buf).st_ino = vpath.manifest_key_hash as _;
-                        inception_record!(EventType::StatHit, vpath.manifest_key_hash, 0);
-                        return 0;
                     }
                 }
             }
         }
-    }
 
-    // 2. Not tracked or state not ready -> Raw Syscall
-    // We do NOT use InceptionLayerGuard here because fstat is used by malloc/TLS init.
-    // If it's not in FdTable, it's not a VFS file (Closed World Assumption).
-    #[cfg(target_os = "macos")]
-    return crate::syscalls::macos_raw::raw_fstat64(fd, buf);
-    #[cfg(target_os = "linux")]
-    return crate::syscalls::linux_raw::raw_fstat(fd, buf);
+        // 2. Not tracked or state not ready -> Raw Syscall
+        // We do NOT use InceptionLayerGuard here because fstat is used by malloc/TLS init.
+        // If it's not in FdTable, it's not a VFS file (Closed World Assumption).
+        #[cfg(target_os = "macos")]
+        {
+            crate::syscalls::macos_raw::raw_fstat64(fd, buf)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            crate::syscalls::linux_raw::raw_fstat(fd, buf)
+        }
+    }) // profile_timed! close
 }
 
 #[no_mangle]
@@ -287,39 +294,44 @@ pub unsafe extern "C" fn fstat_inception(fd: c_int, buf: *mut libc_stat) -> c_in
 
 #[no_mangle]
 pub unsafe extern "C" fn velo_access_impl(path: *const c_char, mode: c_int) -> c_int {
-    profile_count!(access_calls);
-    // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
-    let _guard = match InceptionLayerGuard::enter() {
-        Some(g) => g,
-        None => {
-            #[cfg(target_os = "macos")]
-            return crate::syscalls::macos_raw::raw_access(path, mode);
-            #[cfg(target_os = "linux")]
-            return crate::syscalls::linux_raw::raw_access(path, mode);
+    profile_timed!(access_calls, access_ns, {
+        // Use raw syscall for fallback to avoid dlsym deadlock (Pattern 2682.v2)
+        let _guard = match InceptionLayerGuard::enter() {
+            Some(g) => g,
+            None => {
+                #[cfg(target_os = "macos")]
+                return crate::syscalls::macos_raw::raw_access(path, mode);
+                #[cfg(target_os = "linux")]
+                return crate::syscalls::linux_raw::raw_access(path, mode);
+            }
+        };
+
+        let path_str = match CStr::from_ptr(path).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                #[cfg(target_os = "macos")]
+                return crate::syscalls::macos_raw::raw_access(path, mode);
+                #[cfg(target_os = "linux")]
+                return crate::syscalls::linux_raw::raw_access(path, mode);
+            }
+        };
+
+        if InceptionLayerState::get()
+            .map(|s| s.inception_applicable(path_str))
+            .unwrap_or(false)
+        {
+            return 0;
         }
-    };
 
-    let path_str = match CStr::from_ptr(path).to_str() {
-        Ok(s) => s,
-        Err(_) => {
-            #[cfg(target_os = "macos")]
-            return crate::syscalls::macos_raw::raw_access(path, mode);
-            #[cfg(target_os = "linux")]
-            return crate::syscalls::linux_raw::raw_access(path, mode);
+        #[cfg(target_os = "macos")]
+        {
+            crate::syscalls::macos_raw::raw_access(path, mode)
         }
-    };
-
-    if InceptionLayerState::get()
-        .map(|s| s.inception_applicable(path_str))
-        .unwrap_or(false)
-    {
-        return 0;
-    }
-
-    #[cfg(target_os = "macos")]
-    return crate::syscalls::macos_raw::raw_access(path, mode);
-    #[cfg(target_os = "linux")]
-    return crate::syscalls::linux_raw::raw_access(path, mode);
+        #[cfg(target_os = "linux")]
+        {
+            crate::syscalls::linux_raw::raw_access(path, mode)
+        }
+    }) // profile_timed! close
 }
 
 #[no_mangle]

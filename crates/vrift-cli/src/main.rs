@@ -359,6 +359,9 @@ enum ProfileCommands {
         /// PID of the process (default: auto-detect latest)
         #[arg(short, long)]
         pid: Option<u32>,
+        /// Aggregate all profile files from /tmp
+        #[arg(short, long)]
+        aggregate: bool,
     },
 }
 
@@ -606,7 +609,7 @@ async fn async_main(
             DebugCommands::Vdir { file, directory } => cmd_debug_vdir(file, directory),
         },
         Commands::Profile { command } => match command {
-            ProfileCommands::Show { pid } => cmd_profile_show(pid),
+            ProfileCommands::Show { pid, aggregate } => cmd_profile_show(pid, aggregate),
         },
     }
 }
@@ -1718,9 +1721,11 @@ fn cmd_debug_vdir(file: Option<PathBuf>, directory: Option<PathBuf>) -> Result<(
     Ok(())
 }
 
-/// RFC-0045: Display profiling statistics
-fn cmd_profile_show(pid: Option<u32>) -> Result<()> {
-    use console::style;
+/// RFC-0045 Phase 2: Display profiling statistics with latency tracking
+fn cmd_profile_show(pid: Option<u32>, aggregate: bool) -> Result<()> {
+    if aggregate {
+        return cmd_profile_aggregate();
+    }
 
     let profile_path = if let Some(p) = pid {
         PathBuf::from(format!("/tmp/vrift-profile-{}.json", p))
@@ -1744,16 +1749,14 @@ fn cmd_profile_show(pid: Option<u32>) -> Result<()> {
         match latest {
             Some((path, _)) => path,
             None => anyhow::bail!(
-                "No profile data found. Run with VRIFT_PROFILE=1 to enable profiling.\n\
-                 Example: VRIFT_PROFILE=1 vrift"
+                "No profile data found. Run with VRIFT_PROFILE=1 to enable profiling."
             ),
         }
     };
 
     if !profile_path.exists() {
         anyhow::bail!(
-            "Profile file not found: {}\n\
-             Run with VRIFT_PROFILE=1 to enable profiling.",
+            "Profile file not found: {}\nRun with VRIFT_PROFILE=1 to enable profiling.",
             profile_path.display()
         );
     }
@@ -1762,9 +1765,137 @@ fn cmd_profile_show(pid: Option<u32>) -> Result<()> {
     let data: serde_json::Value = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse profile: {}", profile_path.display()))?;
 
+    display_profile(&data, Some(&profile_path));
+    Ok(())
+}
+
+/// Aggregate all profile files in /tmp and display combined results
+fn cmd_profile_aggregate() -> Result<()> {
+    use console::style;
+
+    let mut files = Vec::new();
+    if let Ok(entries) = fs::read_dir("/tmp") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("vrift-profile-") && name_str.ends_with(".json") {
+                files.push(entry.path());
+            }
+        }
+    }
+
+    if files.is_empty() {
+        anyhow::bail!("No profile data found in /tmp");
+    }
+
+    let syscall_names = [
+        "stat", "fstat", "lstat", "open", "close", "read", "write", "readdir", "access",
+    ];
+
+    let mut total_counts = std::collections::HashMap::<String, u64>::new();
+    let mut total_ns_map = std::collections::HashMap::<String, u64>::new();
+    let (mut vfs_handled, mut vfs_passthrough) = (0u64, 0u64);
+    let (mut vdir_hits, mut vdir_misses, mut ipc_calls) = (0u64, 0u64, 0u64);
+    let (mut vdir_lookup_ns, mut ipc_roundtrip_ns) = (0u64, 0u64);
+    let mut max_duration_ms: u64 = 0;
+    let mut process_count: usize = 0;
+
+    for path in &files {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                process_count += 1;
+                let dur = data["duration_ms"].as_u64().unwrap_or(0);
+                if dur > max_duration_ms {
+                    max_duration_ms = dur;
+                }
+
+                let syscalls = &data["syscalls"];
+                for name in &syscall_names {
+                    let (count, ns) = parse_syscall_entry(syscalls, name);
+                    *total_counts.entry(name.to_string()).or_insert(0) += count;
+                    *total_ns_map.entry(name.to_string()).or_insert(0) += ns;
+                }
+
+                let vfs = &data["vfs"];
+                vfs_handled += vfs["handled"].as_u64().unwrap_or(0);
+                vfs_passthrough += vfs["passthrough"].as_u64().unwrap_or(0);
+
+                let cache = &data["cache"];
+                vdir_hits += cache["vdir_hits"].as_u64().unwrap_or(0);
+                vdir_misses += cache["vdir_misses"].as_u64().unwrap_or(0);
+                ipc_calls += cache["ipc_calls"].as_u64().unwrap_or(0);
+                vdir_lookup_ns += cache["vdir_lookup_ns"].as_u64().unwrap_or(0);
+                ipc_roundtrip_ns += cache["ipc_roundtrip_ns"].as_u64().unwrap_or(0);
+            }
+        }
+    }
+
+    let grand_total: u64 = total_counts.values().sum();
+    let grand_total_ns: u64 = total_ns_map.values().sum();
+
+    println!();
+    println!(
+        "{}",
+        style("╔══════════════════════════════════════════╗")
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        style("║  📊 VRift Aggregate Profile              ║")
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        style("╚══════════════════════════════════════════╝")
+            .cyan()
+            .bold()
+    );
+    println!();
+
+    println!("  {:<20} {}", "Processes:", style(process_count).bold());
+    println!(
+        "  {:<20} {:.1}s",
+        "Wall Time:",
+        max_duration_ms as f64 / 1000.0
+    );
+    println!(
+        "  {:<20} {}",
+        "Total Syscalls:",
+        style(format_count(grand_total)).bold()
+    );
+    if grand_total > 0 && grand_total_ns > 0 {
+        println!(
+            "  {:<20} {}ns",
+            "Avg Latency:",
+            style(grand_total_ns / grand_total).bold()
+        );
+        println!("  {:<20} {}", "Total CPU Time:", format_ns(grand_total_ns));
+    }
+
+    print_syscall_table(&syscall_names, &total_counts, &total_ns_map, grand_total);
+    print_vfs_section(vfs_handled, vfs_passthrough);
+    print_cache_section(
+        vdir_hits,
+        vdir_misses,
+        ipc_calls,
+        vdir_lookup_ns,
+        ipc_roundtrip_ns,
+    );
+
+    println!();
+    Ok(())
+}
+
+/// Display a single profile with latency data
+fn display_profile(data: &serde_json::Value, source: Option<&PathBuf>) {
+    use console::style;
+
     let pid_val = data["pid"].as_u64().unwrap_or(0);
     let duration_ms = data["duration_ms"].as_u64().unwrap_or(0);
     let total = data["total_syscalls"].as_u64().unwrap_or(0);
+    let total_ns = data["total_syscall_ns"].as_u64().unwrap_or(0);
 
     println!();
     println!(
@@ -1798,57 +1929,119 @@ fn cmd_profile_show(pid: Option<u32>) -> Result<()> {
         let rate = total as f64 / (duration_ms as f64 / 1000.0);
         println!("  {:<20} {}/s", "Syscall Rate:", format_count(rate as u64));
     }
-    println!(
-        "  {:<20} {}",
-        "Source:",
-        style(profile_path.display()).dim()
-    );
+    if total > 0 && total_ns > 0 {
+        println!(
+            "  {:<20} {}ns",
+            "Avg Latency:",
+            style(total_ns / total).bold()
+        );
+        println!("  {:<20} {}", "Syscall CPU Time:", format_ns(total_ns));
+    }
+    if let Some(path) = source {
+        println!("  {:<20} {}", "Source:", style(path.display()).dim());
+    }
 
     // Syscall breakdown
+    let syscall_names = [
+        "stat", "fstat", "lstat", "open", "close", "read", "write", "readdir", "access",
+    ];
+    let syscalls = &data["syscalls"];
+    let mut counts = std::collections::HashMap::<String, u64>::new();
+    let mut ns_map = std::collections::HashMap::<String, u64>::new();
+    for name in &syscall_names {
+        let (c, ns) = parse_syscall_entry(syscalls, name);
+        counts.insert(name.to_string(), c);
+        ns_map.insert(name.to_string(), ns);
+    }
+    print_syscall_table(&syscall_names, &counts, &ns_map, total);
+
+    // VFS
+    let vfs = &data["vfs"];
+    let handled = vfs["handled"].as_u64().unwrap_or(0);
+    let passthrough = vfs["passthrough"].as_u64().unwrap_or(0);
+    print_vfs_section(handled, passthrough);
+
+    // Cache
+    let cache = &data["cache"];
+    print_cache_section(
+        cache["vdir_hits"].as_u64().unwrap_or(0),
+        cache["vdir_misses"].as_u64().unwrap_or(0),
+        cache["ipc_calls"].as_u64().unwrap_or(0),
+        cache["vdir_lookup_ns"].as_u64().unwrap_or(0),
+        cache["ipc_roundtrip_ns"].as_u64().unwrap_or(0),
+    );
+
+    println!();
+}
+
+fn print_syscall_table(
+    names: &[&str],
+    counts: &std::collections::HashMap<String, u64>,
+    ns_map: &std::collections::HashMap<String, u64>,
+    total: u64,
+) {
+    use console::style;
+
     println!();
     println!("{}", style("  Syscall Breakdown").bold());
-    println!("  {}", style("─".repeat(38)).dim());
+    println!(
+        "  {}",
+        style(format!(
+            "{:<10} {:>10} {:>6} {:>10} {:>8}  {}",
+            "Name", "Count", "%", "Total", "Avg", ""
+        ))
+        .dim()
+    );
+    println!("  {}", style("─".repeat(62)).dim());
 
-    let syscalls = &data["syscalls"];
-    let entries = [
-        ("stat", syscalls["stat"].as_u64().unwrap_or(0)),
-        ("fstat", syscalls["fstat"].as_u64().unwrap_or(0)),
-        ("lstat", syscalls["lstat"].as_u64().unwrap_or(0)),
-        ("open", syscalls["open"].as_u64().unwrap_or(0)),
-        ("close", syscalls["close"].as_u64().unwrap_or(0)),
-        ("read", syscalls["read"].as_u64().unwrap_or(0)),
-        ("write", syscalls["write"].as_u64().unwrap_or(0)),
-        ("readdir", syscalls["readdir"].as_u64().unwrap_or(0)),
-        ("access", syscalls["access"].as_u64().unwrap_or(0)),
-    ];
+    let mut entries: Vec<(&&str, u64, u64)> = names
+        .iter()
+        .map(|n| {
+            let c = counts.get(*n).copied().unwrap_or(0);
+            let ns = ns_map.get(*n).copied().unwrap_or(0);
+            (n, c, ns)
+        })
+        .filter(|(_, c, _)| *c > 0)
+        .collect();
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
 
-    for (name, count) in &entries {
-        if *count > 0 {
-            let pct = if total > 0 {
-                100.0 * *count as f64 / total as f64
-            } else {
-                0.0
-            };
-            // Bar chart
-            let bar_len = (pct / 2.0) as usize;
-            let bar: String = "█".repeat(bar_len.min(20));
+    for (name, count, ns) in &entries {
+        let pct = if total > 0 {
+            100.0 * *count as f64 / total as f64
+        } else {
+            0.0
+        };
+        let avg_ns = if *count > 0 { ns / count } else { 0 };
+        let bar_len = (pct / 2.5) as usize;
+        let bar: String = "█".repeat(bar_len.min(20));
+        if *ns > 0 {
             println!(
-                "    {:<10} {:>10}  {:>5.1}%  {}",
+                "    {:<10} {:>10}  {:>5.1}%  {:>10} {:>7}ns  {}",
                 name,
                 format_count(*count),
                 pct,
+                format_ns(*ns),
+                avg_ns,
+                style(bar).cyan()
+            );
+        } else {
+            println!(
+                "    {:<10} {:>10}  {:>5.1}%  {:>10} {:>8}  {}",
+                name,
+                format_count(*count),
+                pct,
+                "-",
+                "-",
                 style(bar).cyan()
             );
         }
     }
+}
 
-    // VFS contribution
-    let vfs = &data["vfs"];
-    let handled = vfs["handled"].as_u64().unwrap_or(0);
-    let passthrough = vfs["passthrough"].as_u64().unwrap_or(0);
-    let handled_pct = vfs["handled_pct"].as_f64().unwrap_or(0.0);
-
+fn print_vfs_section(handled: u64, passthrough: u64) {
+    use console::style;
     if handled + passthrough > 0 {
+        let pct = 100.0 * handled as f64 / (handled + passthrough) as f64;
         println!();
         println!("{}", style("  VFS Contribution").bold());
         println!("  {}", style("─".repeat(38)).dim());
@@ -1862,48 +2055,79 @@ fn cmd_profile_show(pid: Option<u32>) -> Result<()> {
             "Passthrough to FS:",
             format_count(passthrough)
         );
-
-        let pct_style = if handled_pct > 80.0 {
-            style(format!("{:.1}%", handled_pct)).green().bold()
-        } else if handled_pct > 50.0 {
-            style(format!("{:.1}%", handled_pct)).yellow().bold()
+        let ps = if pct > 80.0 {
+            style(format!("{:.1}%", pct)).green().bold()
+        } else if pct > 50.0 {
+            style(format!("{:.1}%", pct)).yellow().bold()
         } else {
-            style(format!("{:.1}%", handled_pct)).red().bold()
+            style(format!("{:.1}%", pct)).red().bold()
         };
-        println!("    {:<20} {}", "VFS Hit Rate:", pct_style);
+        println!("    {:<20} {}", "VFS Hit Rate:", ps);
     }
+}
 
-    // Cache stats
-    let cache = &data["cache"];
-    let vdir_hits = cache["vdir_hits"].as_u64().unwrap_or(0);
-    let vdir_misses = cache["vdir_misses"].as_u64().unwrap_or(0);
-    let hit_rate = cache["hit_rate_pct"].as_f64().unwrap_or(0.0);
-    let ipc_calls = cache["ipc_calls"].as_u64().unwrap_or(0);
-
-    if vdir_hits + vdir_misses > 0 {
+fn print_cache_section(
+    vdir_hits: u64,
+    vdir_misses: u64,
+    ipc_calls: u64,
+    vdir_ns: u64,
+    ipc_ns: u64,
+) {
+    use console::style;
+    if vdir_hits + vdir_misses > 0 || ipc_calls > 0 {
         println!();
-        println!("{}", style("  Cache Performance").bold());
+        println!("{}", style("  Cache & IPC").bold());
         println!("  {}", style("─".repeat(38)).dim());
-        println!(
-            "    {:<20} {}",
-            "VDir Hits:",
-            style(format_count(vdir_hits)).green()
-        );
-        println!("    {:<20} {}", "VDir Misses:", format_count(vdir_misses));
-
-        let hit_style = if hit_rate > 90.0 {
-            style(format!("{:.1}%", hit_rate)).green().bold()
-        } else if hit_rate > 70.0 {
-            style(format!("{:.1}%", hit_rate)).yellow().bold()
-        } else {
-            style(format!("{:.1}%", hit_rate)).red().bold()
-        };
-        println!("    {:<20} {}", "VDir Hit Rate:", hit_style);
-        println!("    {:<20} {}", "IPC Roundtrips:", format_count(ipc_calls));
+        if vdir_hits + vdir_misses > 0 {
+            let hr = 100.0 * vdir_hits as f64 / (vdir_hits + vdir_misses) as f64;
+            println!(
+                "    {:<20} {}",
+                "VDir Hits:",
+                style(format_count(vdir_hits)).green()
+            );
+            println!("    {:<20} {}", "VDir Misses:", format_count(vdir_misses));
+            let hrs = if hr > 90.0 {
+                style(format!("{:.1}%", hr)).green().bold()
+            } else {
+                style(format!("{:.1}%", hr)).red().bold()
+            };
+            println!("    {:<20} {}", "VDir Hit Rate:", hrs);
+            if vdir_ns > 0 {
+                let avg = vdir_ns / (vdir_hits + vdir_misses);
+                println!(
+                    "    {:<20} {} (avg {}ns)",
+                    "VDir Lookup Time:",
+                    format_ns(vdir_ns),
+                    avg
+                );
+            }
+        }
+        if ipc_calls > 0 {
+            println!("    {:<20} {}", "IPC Roundtrips:", format_count(ipc_calls));
+            if ipc_ns > 0 {
+                let avg = ipc_ns / ipc_calls;
+                println!(
+                    "    {:<20} {} (avg {}ns)",
+                    "IPC Time:",
+                    format_ns(ipc_ns),
+                    avg
+                );
+            }
+        }
     }
+}
 
-    println!();
-    Ok(())
+/// Parse a syscall entry: handles both Phase 1 (flat number) and Phase 2 ({count, total_ns})
+fn parse_syscall_entry(syscalls: &serde_json::Value, name: &str) -> (u64, u64) {
+    let val = &syscalls[name];
+    if val.is_object() {
+        (
+            val["count"].as_u64().unwrap_or(0),
+            val["total_ns"].as_u64().unwrap_or(0),
+        )
+    } else {
+        (val.as_u64().unwrap_or(0), 0)
+    }
 }
 
 /// Format large numbers with K/M suffixes for readability
@@ -1914,5 +2138,18 @@ fn format_count(n: u64) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         format!("{}", n)
+    }
+}
+
+/// Format nanoseconds to human-readable (ns, μs, ms, s)
+fn format_ns(ns: u64) -> String {
+    if ns >= 1_000_000_000 {
+        format!("{:.2}s", ns as f64 / 1_000_000_000.0)
+    } else if ns >= 1_000_000 {
+        format!("{:.1}ms", ns as f64 / 1_000_000.0)
+    } else if ns >= 1_000 {
+        format!("{:.1}μs", ns as f64 / 1_000.0)
+    } else {
+        format!("{}ns", ns)
     }
 }

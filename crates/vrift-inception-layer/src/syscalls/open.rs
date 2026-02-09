@@ -348,8 +348,9 @@ fn format_blob_path_fixed(
 // Called by C bridge (c_open_bridge) after INITIALIZING check passes
 #[no_mangle]
 pub unsafe extern "C" fn velo_open_impl(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
-    profile_count!(open_calls);
-    open_impl(path, flags, mode).unwrap_or_else(|| raw_open(path, flags, mode))
+    profile_timed!(open_calls, open_ns, {
+        open_impl(path, flags, mode).unwrap_or_else(|| raw_open(path, flags, mode))
+    })
 }
 
 #[cfg(target_os = "macos")]

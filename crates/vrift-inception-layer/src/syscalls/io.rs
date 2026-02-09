@@ -276,109 +276,126 @@ pub unsafe extern "C" fn ftruncate_inception(fd: c_int, length: off_t) -> c_int 
 
 #[no_mangle]
 pub unsafe extern "C" fn write_inception(fd: c_int, buf: *const c_void, count: size_t) -> ssize_t {
-    profile_count!(write_calls);
-    #[cfg(target_os = "macos")]
-    return crate::syscalls::macos_raw::raw_write(fd, buf, count);
-    #[cfg(target_os = "linux")]
-    return crate::syscalls::linux_raw::raw_write(fd, buf, count);
+    profile_timed!(write_calls, write_ns, {
+        #[cfg(target_os = "macos")]
+        {
+            crate::syscalls::macos_raw::raw_write(fd, buf, count)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            crate::syscalls::linux_raw::raw_write(fd, buf, count)
+        }
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn read_inception(fd: c_int, buf: *mut c_void, count: size_t) -> ssize_t {
-    profile_count!(read_calls);
-    #[cfg(target_os = "macos")]
-    return crate::syscalls::macos_raw::raw_read(fd, buf, count);
-    #[cfg(target_os = "linux")]
-    return crate::syscalls::linux_raw::raw_read(fd, buf, count);
+    profile_timed!(read_calls, read_ns, {
+        #[cfg(target_os = "macos")]
+        {
+            crate::syscalls::macos_raw::raw_read(fd, buf, count)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            crate::syscalls::linux_raw::raw_read(fd, buf, count)
+        }
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn close_inception(fd: c_int) -> c_int {
-    profile_count!(close_calls);
-    use crate::state::{EventType, InceptionLayerGuard, InceptionLayerState};
+    profile_timed!(close_calls, close_ns, {
+        use crate::state::{EventType, InceptionLayerGuard, InceptionLayerState};
 
-    let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
-    if init_state != 0 || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed) {
-        #[cfg(target_os = "macos")]
-        return crate::syscalls::macos_raw::raw_close(fd);
-        #[cfg(target_os = "linux")]
-        return crate::syscalls::linux_raw::raw_close(fd);
-    }
-
-    let _guard = match InceptionLayerGuard::enter() {
-        Some(g) => g,
-        None => {
+        let init_state = crate::state::INITIALIZING.load(std::sync::atomic::Ordering::Relaxed);
+        if init_state != 0
+            || crate::state::CIRCUIT_TRIPPED.load(std::sync::atomic::Ordering::Relaxed)
+        {
             #[cfg(target_os = "macos")]
             return crate::syscalls::macos_raw::raw_close(fd);
             #[cfg(target_os = "linux")]
             return crate::syscalls::linux_raw::raw_close(fd);
         }
-    };
 
-    let state = match InceptionLayerState::get() {
-        Some(s) => s,
-        None => {
-            #[cfg(target_os = "macos")]
-            return crate::syscalls::macos_raw::raw_close(fd);
-            #[cfg(target_os = "linux")]
-            return crate::syscalls::linux_raw::raw_close(fd);
-        }
-    };
+        let _guard = match InceptionLayerGuard::enter() {
+            Some(g) => g,
+            None => {
+                #[cfg(target_os = "macos")]
+                return crate::syscalls::macos_raw::raw_close(fd);
+                #[cfg(target_os = "linux")]
+                return crate::syscalls::linux_raw::raw_close(fd);
+            }
+        };
 
-    // RFC-0051: Monitor FD usage on close (to reset warning thresholds)
-    let _ = crate::syscalls::io::OPEN_FD_COUNT.fetch_update(
-        std::sync::atomic::Ordering::Relaxed,
-        std::sync::atomic::Ordering::Relaxed,
-        |val| Some(val.saturating_sub(1)),
-    );
-    state.check_fd_usage();
+        let state = match InceptionLayerState::get() {
+            Some(s) => s,
+            None => {
+                #[cfg(target_os = "macos")]
+                return crate::syscalls::macos_raw::raw_close(fd);
+                #[cfg(target_os = "linux")]
+                return crate::syscalls::linux_raw::raw_close(fd);
+            }
+        };
 
-    // Check if this FD is a COW session
-    let cow_info = {
-        let entry_ptr = state.open_fds.remove(fd as u32);
-        if !entry_ptr.is_null() {
-            unsafe { Some(*Box::from_raw(entry_ptr)) }
-        } else {
-            None
-        }
-    };
-
-    // Use a hash of the FD or 0 if not tracked for general close event
-    let file_id = 0; // Simplified for general close
-    inception_record!(EventType::Close, file_id, fd);
-
-    // Final close of the file
-    #[cfg(target_os = "macos")]
-    let res = crate::syscalls::macos_raw::raw_close(fd);
-    #[cfg(target_os = "linux")]
-    let res = crate::syscalls::linux_raw::raw_close(fd);
-
-    // Offload IPC task to Worker (asynchronous)
-    if let Some(info) = cow_info {
-        inception_log!(
-            "COW CLOSE: fd={} vpath='{}' temp='{}'",
-            fd,
-            info.vpath,
-            info.temp_path
+        // RFC-0051: Monitor FD usage on close (to reset warning thresholds)
+        let _ = crate::syscalls::io::OPEN_FD_COUNT.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |val| Some(val.saturating_sub(1)),
         );
+        state.check_fd_usage();
 
-        // Offload reingest to Worker (non-blocking)
-        if let Some(reactor) = crate::sync::get_reactor() {
-            let _ = reactor.ring_buffer.push(crate::sync::Task::Reingest {
-                vpath: info.vpath.to_string(),
-                temp_path: info.temp_path.to_string(),
-            });
-        }
+        // Check if this FD is a COW session
+        let cow_info = {
+            let entry_ptr = state.open_fds.remove(fd as u32);
+            if !entry_ptr.is_null() {
+                unsafe { Some(*Box::from_raw(entry_ptr)) }
+            } else {
+                None
+            }
+        };
 
-        res
-    } else {
-        // Not a COW file, but might be a VFS read-only file or non-VFS file
-        untrack_fd(fd);
+        // Use a hash of the FD or 0 if not tracked for general close event
+        let file_id = 0; // Simplified for general close
+        inception_record!(EventType::Close, file_id, fd);
+
+        // Final close of the file
         #[cfg(target_os = "macos")]
-        return crate::syscalls::macos_raw::raw_close(fd);
+        let res = crate::syscalls::macos_raw::raw_close(fd);
         #[cfg(target_os = "linux")]
-        return crate::syscalls::linux_raw::raw_close(fd);
-    }
+        let res = crate::syscalls::linux_raw::raw_close(fd);
+
+        // Offload IPC task to Worker (asynchronous)
+        if let Some(info) = cow_info {
+            inception_log!(
+                "COW CLOSE: fd={} vpath='{}' temp='{}'",
+                fd,
+                info.vpath,
+                info.temp_path
+            );
+
+            // Offload reingest to Worker (non-blocking)
+            if let Some(reactor) = crate::sync::get_reactor() {
+                let _ = reactor.ring_buffer.push(crate::sync::Task::Reingest {
+                    vpath: info.vpath.to_string(),
+                    temp_path: info.temp_path.to_string(),
+                });
+            }
+
+            res
+        } else {
+            // Not a COW file, but might be a VFS read-only file or non-VFS file
+            untrack_fd(fd);
+            #[cfg(target_os = "macos")]
+            {
+                crate::syscalls::macos_raw::raw_close(fd)
+            }
+            #[cfg(target_os = "linux")]
+            {
+                crate::syscalls::linux_raw::raw_close(fd)
+            }
+        }
+    }) // profile_timed! close
 }
 
 // ============================================================================
