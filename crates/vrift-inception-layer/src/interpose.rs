@@ -419,25 +419,27 @@ pub static IT_MUNMAP: Interpose = Interpose {
     old_func: real_munmap as _,
 };
 
-// RFC-0045: Active interpositions for I/O profiling via C bridges
-// These use C bridge wrappers that call raw_syscall() assembly for early init
-// and forward to Rust velo_*_impl for normal operation — no recursion risk.
+// close/read/write: MUST stay in __nointerpose — velo_close_impl uses
+// InceptionLayerGuard which deadlocks when close() is called from within
+// another guarded syscall (e.g., open → TLS → close). The C bridges exist
+// but are not activated by dyld. Profile data comes from path-based
+// syscalls (open, stat, mkdir) which don't have this reentrance problem.
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__interpose"]
+#[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_WRITE: Interpose = Interpose {
     new_func: c_write_bridge as _,
     old_func: real_write as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__interpose"]
+#[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_READ: Interpose = Interpose {
     new_func: c_read_bridge as _,
     old_func: real_read as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__interpose"]
+#[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_CLOSE: Interpose = Interpose {
     new_func: c_close_bridge as _,
