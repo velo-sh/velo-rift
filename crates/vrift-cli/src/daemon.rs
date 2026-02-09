@@ -17,14 +17,10 @@ fn get_socket_path() -> PathBuf {
     vrift_config::config().socket_path().to_path_buf()
 }
 
-pub async fn check_status(project_root: &Path) -> Result<()> {
-    let conn = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        connect_to_daemon(project_root),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("Timed out connecting to daemon (5s)"))??;
-    let mut stream = conn.stream;
+pub async fn check_status(_project_root: &Path) -> Result<()> {
+    let mut stream = tokio::time::timeout(std::time::Duration::from_secs(10), connect_simple())
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out connecting to daemon (10s)"))??;
 
     // Status request
     let req = VeloRequest::Status;
