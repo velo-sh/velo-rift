@@ -1005,6 +1005,84 @@ async fn handle_request(
                 )));
             }
 
+            // 7. Backfill VDir with path strings for readdir support
+            {
+                use vrift_ipc::fnv1a_hash;
+                use vrift_ipc::vdir_types::VDirEntry;
+
+                // Compute VDir file path based on project path hash
+                let vdir_dir = state
+                    .cas
+                    .root()
+                    .parent()
+                    .unwrap_or(state.cas.root())
+                    .join("vdir");
+                let _ = std::fs::create_dir_all(&vdir_dir);
+                let project_hash = fnv1a_hash(&path);
+                let vdir_path = vdir_dir.join(format!("{:016x}.vdir", project_hash));
+
+                match vrift_vdird::vdir::VDir::create_or_open(&vdir_path) {
+                    Ok(mut vdir) => {
+                        let canon_root = source_path
+                            .canonicalize()
+                            .unwrap_or_else(|_| source_path.clone());
+                        let prefix_str = prefix.as_deref().unwrap_or("");
+                        let mut vdir_count = 0u64;
+
+                        for r in results.iter().flatten() {
+                            let canon_src = r
+                                .source_path
+                                .canonicalize()
+                                .unwrap_or_else(|_| r.source_path.clone());
+                            let rel = canon_src.strip_prefix(&canon_root).unwrap_or(&canon_src);
+                            let key = if prefix_str.is_empty() || prefix_str == "/" {
+                                format!("{}", rel.display())
+                            } else {
+                                format!("{}/{}", prefix_str.trim_end_matches('/'), rel.display())
+                            };
+
+                            let (mtime_sec, mtime_nsec, mode) =
+                                match std::fs::metadata(&r.source_path) {
+                                    Ok(meta) => {
+                                        use std::os::unix::fs::MetadataExt;
+                                        (meta.mtime(), meta.mtime_nsec() as u32, meta.mode())
+                                    }
+                                    Err(_) => (0, 0, 0o644),
+                                };
+
+                            let entry = VDirEntry {
+                                path_hash: fnv1a_hash(&key),
+                                cas_hash: r.hash,
+                                size: r.size,
+                                mtime_sec,
+                                mtime_nsec,
+                                mode,
+                                path_offset: 0,
+                                flags: 0,
+                                path_len: 0,
+                            };
+
+                            if vdir.upsert_with_path(entry, &key).is_ok() {
+                                vdir_count += 1;
+                            }
+                        }
+
+                        if let Err(e) = vdir.flush() {
+                            tracing::warn!("VDir flush failed: {}", e);
+                        }
+
+                        tracing::info!(
+                            vdir_entries = vdir_count,
+                            vdir_path = %vdir_path.display(),
+                            "VDir backfill complete (path strings stored)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("VDir backfill skipped (open failed): {}", e);
+                    }
+                }
+            }
+
             tracing::info!(
                 files = total_files,
                 blobs = unique_blobs,
