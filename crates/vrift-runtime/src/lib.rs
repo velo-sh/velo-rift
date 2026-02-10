@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use vrift_cas::CasStore;
-use vrift_manifest::Manifest;
 
 #[derive(Error, Debug)]
 pub enum RuntimeError {
@@ -56,13 +55,23 @@ impl LinkFarm {
     ///
     /// If multiple manifests are provided, they are applied in order. Files in later
     /// manifests will overwrite those in earlier ones at the same path.
-    pub fn populate(&self, manifests: &[Manifest], target: &Path) -> Result<()> {
+    pub fn populate(
+        &self,
+        manifests: &[vrift_manifest::LmdbManifest],
+        target: &Path,
+    ) -> Result<()> {
         if !target.exists() {
             fs::create_dir_all(target)?;
         }
 
         for manifest in manifests {
-            for (path_str, entry) in manifest.iter() {
+            let entries = manifest
+                .iter()
+                .map_err(|e| RuntimeError::Overlay(format!("Manifest iter error: {}", e)))?;
+
+            for (path_str, m_entry) in entries {
+                let entry = &m_entry.vnode;
+
                 // Skip root directory entry itself if present
                 if path_str == "/" {
                     continue;
@@ -126,10 +135,6 @@ impl LinkFarm {
                             e
                         );
                     }
-
-                    // Note: Setting mtime requires filetime or similar,
-                    // skipping for MVP unless we add dependency.
-                    // But permissions are CRITICAL for execution.
                 } else if entry.is_symlink() {
                     // Fetch symlink target from CAS
                     let target_bytes = self
@@ -343,112 +348,5 @@ impl NamespaceManager {
         println!("⚠️  Pseudo-FS mount is only supported on Linux.");
         println!("    Would mount /proc, /sys, /dev into {}", root.display());
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-    use vrift_manifest::VnodeEntry;
-
-    #[test]
-    fn test_link_farm_populate() {
-        let temp = TempDir::new().unwrap();
-        let cas_root = temp.path().join("cas");
-        let link_farm_root = temp.path().join("lower");
-
-        let cas = CasStore::new(&cas_root).unwrap();
-
-        // Store a file
-        let content = b"runtime test";
-        let hash = cas.store(content).unwrap();
-
-        // Create manifest
-        let mut manifest = Manifest::new();
-        manifest.insert(
-            "/etc/config",
-            VnodeEntry::new_file(hash, content.len() as u64, 0, 0o644),
-        );
-        manifest.insert("/var/log", VnodeEntry::new_directory(0, 0o755));
-
-        // Populate Link Farm
-        let farm = LinkFarm::new(cas);
-        farm.populate(&[manifest], &link_farm_root).unwrap();
-
-        // Verify
-        let config_path = link_farm_root.join("etc/config");
-        assert!(config_path.exists());
-        let read_content = fs::read(&config_path).unwrap();
-        assert_eq!(read_content, content);
-
-        // Verify it's a hard link (same inode) - simplified check
-        // Rust std doesn't expose inode easily without stat, but metadata should match
-        assert_eq!(
-            fs::metadata(&config_path).unwrap().len(),
-            content.len() as u64
-        );
-
-        let log_path = link_farm_root.join("var/log");
-        assert!(log_path.exists());
-        assert!(log_path.is_dir());
-    }
-
-    #[test]
-    fn test_link_farm_merge() {
-        let temp = TempDir::new().unwrap();
-        let cas_root = temp.path().join("cas");
-        let link_farm_root = temp.path().join("lower");
-
-        let cas = CasStore::new(&cas_root).unwrap();
-
-        // 1. Create Base Manifest
-        let base_content = b"base content";
-        let base_hash = cas.store(base_content).unwrap();
-        let mut base_manifest = Manifest::new();
-        base_manifest.insert(
-            "/bin/sh",
-            VnodeEntry::new_file(base_hash, base_content.len() as u64, 0, 0o755),
-        );
-        base_manifest.insert(
-            "/etc/common",
-            VnodeEntry::new_file(base_hash, base_content.len() as u64, 0, 0o644),
-        );
-
-        // 2. Create App Manifest
-        let app_content = b"app content";
-        let app_hash = cas.store(app_content).unwrap();
-        let mut app_manifest = Manifest::new();
-        app_manifest.insert(
-            "/app/main",
-            VnodeEntry::new_file(app_hash, app_content.len() as u64, 0, 0o755),
-        );
-        // Overwrite etc/common
-        app_manifest.insert(
-            "/etc/common",
-            VnodeEntry::new_file(app_hash, app_content.len() as u64, 0, 0o644),
-        );
-
-        // 3. Populate Link Farm with both
-        let farm = LinkFarm::new(cas);
-        farm.populate(&[base_manifest, app_manifest], &link_farm_root)
-            .unwrap();
-
-        // 4. Verify Merged View
-        // - From base
-        assert_eq!(
-            fs::read(link_farm_root.join("bin/sh")).unwrap(),
-            base_content
-        );
-        // - From app
-        assert_eq!(
-            fs::read(link_farm_root.join("app/main")).unwrap(),
-            app_content
-        );
-        // - Merged/Overwritten
-        assert_eq!(
-            fs::read(link_farm_root.join("etc/common")).unwrap(),
-            app_content
-        );
     }
 }

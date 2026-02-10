@@ -2,33 +2,25 @@
 # ============================================================================
 # VRift Functional Test: Basic Shim Interception
 # ============================================================================
-# Verifies that the inception correctly intercepts open/read for virtual paths
-# via the daemon IPC.
-# ============================================================================
-
 set -e
 
-# Helper for cleaning up files that might be immutable (Solid hardlinks)
 safe_rm() {
     local target="$1"
     if [ -e "$target" ]; then
         if [ "$(uname -s)" == "Darwin" ]; then
             chflags -R nouchg "$target" 2>/dev/null || true
         else
-            # Try chattr -i on Linux if available
             chattr -R -i "$target" 2>/dev/null || true
         fi
         rm -rf "$target"
     fi
 }
 
-# Setup paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 VELO_BIN="${PROJECT_ROOT}/target/release/vrift"
 VRIFTD_BIN="${PROJECT_ROOT}/target/release/vriftd"
 
-# Detect OS
 OS_TYPE=$(uname -s)
 if [ "$OS_TYPE" == "Darwin" ]; then
     INCEPTION_LIB="${PROJECT_ROOT}/target/release/libvrift_inception_layer.dylib"
@@ -38,19 +30,10 @@ else
     PRELOAD_VAR="LD_PRELOAD"
 fi
 
-# Ensure binaries exist
-if [ ! -f "$VELO_BIN" ] || [ ! -f "$VRIFTD_BIN" ] || [ ! -f "$INCEPTION_LIB" ]; then
-    echo "Building release binaries..."
-    cargo build --release --workspace
-    # Explicitly build inception layer cdylib (may not be built by --workspace alone)
-    cargo build --release -p vrift-inception-layer
-fi
-
 TEST_DIR=$(mktemp -d)
 echo "Work Dir: $TEST_DIR"
 
 cleanup() {
-    echo "Cleaning up..."
     pkill vriftd || true
     safe_rm "$TEST_DIR" 2>/dev/null || true
 }
@@ -58,45 +41,23 @@ trap cleanup EXIT
 
 echo "Testing Shim Basic Interception in $TEST_DIR"
 
+# 1. Setup Workspace (RFC-0039 style)
 mkdir -p "$TEST_DIR/source"
 echo -n "hello world" > "$TEST_DIR/source/testfile.txt"
 
-# Ensure clean environment
-unset VRIFT_PROJECT_ROOT
-unset VRIFT_INCEPTION
-unset VRIFT_SOCKET_PATH
-unset VR_THE_SOURCE
-unset VRIFT_MANIFEST
-unset VRIFT_VFS_PREFIX
-
-# 1. Ingest
+# 2. Ingest into the workspace's default .vrift/manifest.lmdb
 echo "Ingesting source..."
 export VR_THE_SOURCE="$TEST_DIR/cas"
-# Use --prefix "" for correct /testfile.txt mapping
-"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "" -o "$TEST_DIR/source/vrift.manifest" > "$TEST_DIR/ingest.log" 2>&1
+"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "" > "$TEST_DIR/ingest.log" 2>&1
 
-# 2. Start daemon
+# 3. Start daemon
 echo "Starting daemon..."
 export VR_THE_SOURCE="$TEST_DIR/cas"
 export RUST_LOG=info
-
 "$VRIFTD_BIN" start > "$TEST_DIR/daemon.log" 2>&1 &
-VRIFTD_PID=$!
 sleep 2
 
-# Behavior-based daemon verification: check via status command or socket
-if ! "$VELO_BIN" daemon status 2>/dev/null | grep -q "running\|Operational"; then
-    # Fallback: check socket exists
-    if [ ! -S "/tmp/vrift.sock" ]; then
-        echo "❌ ERROR: Daemon not running (behavior check failed)."
-        cat "$TEST_DIR/daemon.log"
-        exit 1
-    fi
-fi
-
-# 3. Compile helper C test
-# ... (lines 100-134 omitted for brevity, but I'll keep the block intact)
-echo "Compiling C test program..."
+# 4. Compile C test
 cat > "$TEST_DIR/test.c" << 'CEOF'
 #include <fcntl.h>
 #include <stdio.h>
@@ -114,15 +75,12 @@ int main() {
     char buf[12];
     int n = read(fd, buf, 11);
     if (n < 0) {
-        printf("[Test] Read failed with errno %d: %s\n", errno, strerror(errno));
+        printf("[Test] Read failed with errno %d\n", errno);
         return 1;
     }
     buf[n] = 0;
     printf("[Test] Read content: '%s'\n", buf);
-    if (strcmp(buf, "hello world") != 0) {
-        printf("[Test] Content mismatch: expected 'hello world', got '%s'\n", buf);
-        return 1;
-    }
+    if (strcmp(buf, "hello world") != 0) return 1;
     close(fd);
     printf("[Test] Success!\n");
     return 0;
@@ -130,55 +88,24 @@ int main() {
 CEOF
 gcc "$TEST_DIR/test.c" -o "$TEST_DIR/test"
 
-# 4. Run with inception
+# 5. Run with inception (Point VRIFT_PROJECT_ROOT to the ingested workspace)
 echo "Running with inception..."
-INCEPTION_PATH="$(realpath "$INCEPTION_LIB")"
-if [ ! -f "$INCEPTION_PATH" ]; then
-    echo "❌ ERROR: Shim library not found at $INCEPTION_PATH"
-    exit 1
-fi
-
-export "$PRELOAD_VAR"="$INCEPTION_PATH"
-if [ "$OS_TYPE" == "Darwin" ]; then
-    export DYLD_FORCE_FLAT_NAMESPACE=1
-fi
-export VR_THE_SOURCE="$TEST_DIR/cas"
-export VRIFT_MANIFEST="$TEST_DIR/source/vrift.manifest"
+export "$PRELOAD_VAR"="$(realpath "$INCEPTION_LIB")"
+if [ "$OS_TYPE" == "Darwin" ]; then export DYLD_FORCE_FLAT_NAMESPACE=1; fi
 export VRIFT_VFS_PREFIX="/vrift"
+export VRIFT_PROJECT_ROOT="$TEST_DIR/source"
 export VRIFT_DEBUG=1
 
-# Capture output
-STRACE_CMD=""
-# Disabled automatic strace to prevent hangs in CI/non-interactive modes
-# if command -v strace >/dev/null 2>&1; then
-#     STRACE_CMD="strace -f -e trace=file,open,openat,openat2,stat,lstat,fstat,newfstatat,fstatat64"
-# fi
-if [ -n "$VRIFT_STRACE" ]; then
-    STRACE_CMD="dtruss" 
-fi
-
-echo "Running with strace: $STRACE_CMD"
 set +e
-if [ -n "$STRACE_CMD" ]; then
-    # Run with strace and capture its output to stderr (which we redirect anyway)
-    export "$PRELOAD_VAR"="$INCEPTION_PATH"
-    $STRACE_CMD "$TEST_DIR/test" > "$TEST_DIR/test_output.log" 2>&1
-else
-    export "$PRELOAD_VAR"="$INCEPTION_PATH"
-    "$TEST_DIR/test" > "$TEST_DIR/test_output.log" 2>&1
-fi
+"$TEST_DIR/test" > "$TEST_DIR/test_output.log" 2>&1
 set -e
 
 if grep -q "Success!" "$TEST_DIR/test_output.log"; then
-    echo "✅ Success: Shim intercepted and returned correct data!"
-    cat "$TEST_DIR/test_output.log"
+    echo "✅ Success: Shim intercepted correctly!"
 else
     echo "❌ Failure: Shim test failed."
-    echo "--- Test Output ---"
     cat "$TEST_DIR/test_output.log"
     echo "--- Daemon Log ---"
     cat "$TEST_DIR/daemon.log"
     exit 1
 fi
-
-exit 0

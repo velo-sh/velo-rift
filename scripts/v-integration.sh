@@ -45,10 +45,8 @@ export PATH=$PATH:$(pwd)/target/release
 TEST_DIR="/tmp/vrift_test"
 CAS_DIR="$TEST_DIR/cas"
 DATA_DIR="$TEST_DIR/data"
-# RFC-0039: Manifest is a directory, but CLI commands expect the .lmdb file path
-# for direct manifest operations.
-MANIFEST_DIR="$TEST_DIR/vrift.manifest"
-MANIFEST="$MANIFEST_DIR/manifest.lmdb"
+# RFC-0039: Manifest is a directory
+MANIFEST="$TEST_DIR/vrift.manifest"
 
 safe_rm "$TEST_DIR"
 mkdir -p "$CAS_DIR" "$DATA_DIR"
@@ -107,9 +105,7 @@ echo "[PASS] Daemon auto-started."
 echo "[*] Running vrift status..."
 if ! vrift status --manifest "$MANIFEST"; then
     echo "ERROR: vrift status failed. Checking environment..."
-    ls -ld "$MANIFEST_DIR" || true
     ls -ld "$MANIFEST" || true
-    file "$MANIFEST" || true
     printenv | grep VRIFT || true
     exit 1
 fi
@@ -226,6 +222,7 @@ if [ "$OS" == "Linux" ]; then
             vrift ingest "$SIM_SOURCE" --prefix /vrift > "$SIM_DIR/ingest.log" 2>&1
             
             # Start daemon for this workspace
+            # RFC-0039: LMDB directory
             export VRIFT_MANIFEST="$SIM_SOURCE/.vrift/manifest.lmdb"
             pkill vriftd 2>/dev/null || true
             sleep 1
@@ -310,7 +307,16 @@ SIMEOF
     # Check content
     echo "Checking mount content..."
     if [ -f "$MOUNT_DIR/data/file1.txt" ]; then
-       CONTENT=$(cat "$MOUNT_DIR/data/file1.txt")
+       if ! CONTENT=$(cat "$MOUNT_DIR/data/file1.txt"); then
+           echo "ERROR: Failed to read file from mount (I/O Error)"
+           echo "=== MOUNT LOG ==="
+           cat "$TEST_DIR/mount.log"
+           echo "================="
+           echo "=== SYSTEM LOGS ==="
+           dmesg | tail -n 20 || true
+           exit 1
+       fi
+
        if [ "$CONTENT" == "Hello Velo Rift" ]; then
            echo "[PASS] FUSE read verified."
        else
@@ -411,10 +417,9 @@ if [ "$OS" == "Linux" ]; then
     ./scripts/setup_busybox.sh
     
     # Use /bin/sh from the busybox base to run a command
-    # Note: we use 'id -u' because 'whoami' requires /etc/passwd which we don't have.
-    # Inside the user namespace, we should be UID 0 (root).
-    # RFC-0039: busybox.manifest is a directory containing manifest.lmdb
-    ISO_OUT=$(vrift run --isolate --base busybox.manifest/manifest.lmdb --manifest "$MANIFEST" -- /bin/sh -c "id -u" 2>&1) || ISO_ERR=$?
+    # RFC-0039: busybox.manifest is an LMDB directory
+    BUSYBOX_MANIFEST="busybox.manifest"
+    ISO_OUT=$(vrift run --isolate --base "$BUSYBOX_MANIFEST" --manifest "$MANIFEST" -- /bin/sh -c "id -u" 2>&1) || ISO_ERR=$?
     
     if [ -n "$ISO_ERR" ]; then
         if [[ "$ISO_OUT" == *"Operation not permitted"* ]] || [[ "$ISO_OUT" == *"uid_map"* ]]; then
@@ -430,9 +435,6 @@ if [ "$OS" == "Linux" ]; then
         echo "ERROR: Static binary execution output mismatch: $ISO_OUT"
         exit 1
     fi
-
-    # To truly verify we are "inside" and not just crashing, we would need a static binary.
-    # But for MVP, "Not finding host binaries" is the strongest signal we have without ingesting a rootfs.
 else
     echo "Skipping Isolation test on $OS"
 fi
@@ -442,17 +444,8 @@ fi
 # 1. Modify file1.txt content (Remove first as it might be a read-only hard link from Solid ingest)
 safe_rm "$DATA_DIR/file1.txt"
 echo "New Content" > "$DATA_DIR/file1.txt"
-# 2. Ingest again (creates new blob, updates manifest, leaving old blob "Hello Velo Rift" orphan)
-# Note: In a real scenario, we'd probably want to use a fresh manifest or update existing. 
-# `vrift ingest` overwrites manifest by default.
+# 2. Ingest again
 vrift ingest "$DATA_DIR" --output "$MANIFEST" > /dev/null
-
-# 3. List blobs to find the orphan
-# "Hello Velo" hash is roughly known or we can just count.
-# Before: 5 files + 1 dir = 6 blobs.
-# Now: 5 files (1 changed) + 1 dir = 6 active blobs.
-# Total in CAS: 6 (original) + 1 (new content) + 1 (new dir Vnode? actually old dir struct might be reused if same mtime, but likely new) = ~8 blobs.
-# Let's trust GC output parsing.
 
 # Test Dry Run (Default)
 GC_OUT=$(vrift gc --manifest "$MANIFEST")
@@ -480,5 +473,3 @@ else
 fi
 
 echo "=== All Tests Passed ==="
-
-

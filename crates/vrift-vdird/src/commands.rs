@@ -133,19 +133,26 @@ impl CommandHandler {
         }
 
         // 2. Fallback to LMDB (persistent storage)
-        match self.manifest.get(path) {
+        // Ensure path starts with slash for LMDB lookup
+        let lookup_path = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{}", path)
+        };
+
+        match self.manifest.get(&lookup_path) {
             Ok(Some(entry)) => {
-                debug!(path = %path, "ManifestGet: found in LMDB");
+                debug!(path = %lookup_path, "ManifestGet: found in LMDB");
                 VeloResponse::ManifestAck {
                     entry: Some(entry.vnode),
                 }
             }
             Ok(None) => {
-                debug!(path = %path, "ManifestGet: not found in VDir or LMDB");
+                debug!(path = %lookup_path, "ManifestGet: not found in VDir or LMDB");
                 VeloResponse::ManifestAck { entry: None }
             }
             Err(e) => {
-                warn!(path = %path, error = %e, "ManifestGet: LMDB lookup failed");
+                warn!(path = %lookup_path, error = %e, "ManifestGet: LMDB lookup failed");
                 VeloResponse::ManifestAck { entry: None }
             }
         }
@@ -539,8 +546,7 @@ impl CommandHandler {
 
         let duration = start.elapsed();
 
-        // 5. Build and write manifest (using vrift_manifest if available)
-        // For now, just write a simple binary manifest
+        // 5. Build and write manifest entries to LMDB
         if let Err(e) = self.write_manifest(&manifest_out, &source_path, &results, prefix) {
             return VeloResponse::Error(VeloError::io_error(format!(
                 "Failed to write manifest: {}",
@@ -621,7 +627,7 @@ impl CommandHandler {
         }
     }
 
-    /// Write manifest file from ingest results
+    /// Write manifest entries to LMDB from ingest results
     fn write_manifest(
         &self,
         manifest_path: &Path,
@@ -629,20 +635,21 @@ impl CommandHandler {
         results: &[Result<vrift_cas::IngestResult, vrift_cas::CasError>],
         prefix: Option<&str>,
     ) -> Result<()> {
-        let mut manifest = vrift_manifest::Manifest::new();
+        use vrift_manifest::{AssetTier, LmdbManifest};
+
+        // RFC-0039: Always use LMDB
+        let manifest = LmdbManifest::open(manifest_path)?;
 
         for result in results.iter().flatten() {
-            // Try to get metadata for mtime/mode
             let (mtime, mode) = match fs::metadata(&result.source_path) {
                 Ok(meta) => {
-                    // VnodeEntry.mtime is nanoseconds since epoch
                     let mtime_ns = meta.mtime() as u64 * 1_000_000_000 + meta.mtime_nsec() as u64;
                     (mtime_ns, meta.mode())
                 }
-                Err(_) => (0, 0o644), // Fallback
+                Err(_) => (0, 0o644),
             };
 
-            let entry = VnodeEntry {
+            let vnode = VnodeEntry {
                 content_hash: result.hash,
                 size: result.size,
                 mtime,
@@ -651,7 +658,6 @@ impl CommandHandler {
                 _pad: 0,
             };
 
-            // RFC-0050: Handle prefix
             let canon_source = result
                 .source_path
                 .canonicalize()
@@ -670,13 +676,10 @@ impl CommandHandler {
                 format!("{}/{}", prefix_str.trim_end_matches('/'), rel.display())
             };
 
-            manifest.insert(&key, entry);
+            manifest.insert(&key, vnode, AssetTier::Tier2Mutable);
         }
 
-        manifest
-            .save(manifest_path)
-            .map_err(|e| anyhow::anyhow!("Failed to save manifest: {}", e))?;
-
+        manifest.commit()?;
         Ok(())
     }
 }

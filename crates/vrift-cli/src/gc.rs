@@ -9,13 +9,13 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use vrift_cas::CasStore;
-use vrift_manifest::Manifest;
+use vrift_manifest::LmdbManifest;
 
 use crate::registry::ManifestRegistry;
 
 #[derive(Args, Debug)]
 pub struct GcArgs {
-    /// Path to a single Manifest file (legacy mode, bypasses registry)
+    /// Path to a single Manifest (LMDB directory)
     #[arg(long)]
     manifest: Option<PathBuf>,
 
@@ -49,11 +49,13 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
     // Collect all referenced blob hashes
     let keep_set: HashSet<_> = if let Some(ref manifest_path) = args.manifest {
         println!();
-        println!("  [Legacy Mode] Using single manifest: {:?}", manifest_path);
-        let manifest = Manifest::load(manifest_path).context("Failed to parse manifest")?;
-        manifest
-            .iter()
-            .map(|(_, entry)| entry.content_hash)
+        println!("  [Direct Mode] Using single manifest: {:?}", manifest_path);
+        // RFC-0039: Manifest is an LMDB directory
+        let manifest = LmdbManifest::open(manifest_path).context("Failed to open LMDB manifest")?;
+        let entries = manifest.iter().context("Failed to iterate manifest")?;
+        entries
+            .into_iter()
+            .map(|(_, m_entry)| m_entry.vnode.content_hash)
             .collect()
     } else {
         println!();
