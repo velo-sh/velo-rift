@@ -16,6 +16,7 @@ libc = "0.2"
 rkyv = { version = "0.8", features = ["alloc"] }
 vrift-ipc = { path = "../vrift-ipc", default-features = false }
 vrift-config = { path = "../vrift-config" }
+blake3 = "1.5"
 
 [build-dependencies]
 cc = "1.0"

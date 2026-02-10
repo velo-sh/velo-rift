@@ -43,6 +43,7 @@ pub fn streaming_ingest(
     let scanner = std::thread::spawn(move || {
         let mut file_count = 0;
         for entry in WalkDir::new(&source_path)
+            .skip_hidden(false)
             .process_read_dir(|_depth, _path, _state, children| {
                 children.retain(|entry| {
                     entry.as_ref().map_or(true, |e| {
@@ -171,6 +172,7 @@ where
         use std::os::unix::fs::MetadataExt;
         let mut file_count = 0;
         for entry in WalkDir::new(&scanner_source)
+            .skip_hidden(false)
             .process_read_dir(|_depth, _path, _state, children| {
                 children.retain(|entry| {
                     entry.as_ref().map_or(true, |e| {
@@ -307,6 +309,7 @@ where
     let source_path = source.to_path_buf();
     let scanner = std::thread::spawn(move || {
         for entry in WalkDir::new(&source_path)
+            .skip_hidden(false)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())

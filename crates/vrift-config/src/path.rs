@@ -191,8 +191,17 @@ pub fn normalize_relative_to(path: impl AsRef<Path>, root: impl AsRef<Path>) -> 
 pub fn compute_project_id(project_root: impl AsRef<Path>) -> String {
     let path = project_root.as_ref();
     let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    compute_project_id_raw(canon.to_string_lossy().as_ref())
+}
+
+/// Generate a stable project ID from an already-canonical path string.
+///
+/// Unlike `compute_project_id`, this does NOT call `std::fs::canonicalize()`.
+/// Use this in the inception layer where the path is already resolved via
+/// `raw_realpath` and calling std canonicalize would trigger shim recursion.
+pub fn compute_project_id_raw(canonical_path: &str) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(canon.to_string_lossy().as_bytes());
+    hasher.update(canonical_path.as_bytes());
     hasher.finalize().to_hex().to_string()
 }
 

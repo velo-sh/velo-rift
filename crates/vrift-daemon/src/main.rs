@@ -1045,10 +1045,12 @@ async fn handle_request(
                                 .canonicalize()
                                 .unwrap_or_else(|_| r.source_path.clone());
                             let rel = canon_src.strip_prefix(&canon_root).unwrap_or(&canon_src);
+                            // Prepend / to match manifest key convention:
+                            // inception layer strips project_root → "/debug/..." (with leading /)
                             let key = if prefix_str.is_empty() || prefix_str == "/" {
-                                format!("{}", rel.display())
+                                format!("/{}", rel.display())
                             } else {
-                                format!("{}/{}", prefix_str.trim_end_matches('/'), rel.display())
+                                format!("/{}/{}", prefix_str.trim_end_matches('/'), rel.display())
                             };
 
                             let (mtime_sec, mtime_nsec, mode) =

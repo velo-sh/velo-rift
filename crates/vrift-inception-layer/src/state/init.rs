@@ -279,6 +279,20 @@ impl InceptionLayerState {
                                 project_root_fs.set(s);
                             }
                         }
+                    } else {
+                        // raw_open failed — directory may not exist (e.g. after rm -rf target/).
+                        // On macOS, /tmp is a symlink to /private/tmp. Without canonicalization,
+                        // project_root stays as /tmp/... while kernel paths use /private/tmp/...
+                        // This causes path resolver's starts_with() to fail.
+                        // Fallback: prepend /private for /tmp/ paths.
+                        let current = project_root_fs.as_str();
+                        if current.starts_with("/tmp/") || current == "/tmp" {
+                            use std::fmt::Write;
+                            let mut canon_buf = [0u8; 1024];
+                            let mut cw = crate::macros::StackWriter::new(&mut canon_buf);
+                            let _ = write!(cw, "/private{}", current);
+                            project_root_fs.set(cw.as_str());
+                        }
                     }
                 }
                 #[cfg(target_os = "linux")]
@@ -503,32 +517,92 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
 
         let root_str = std::str::from_utf8(&root_bytes[..final_root_len]).unwrap_or("");
 
-        // BUG-007b: Use raw_realpath instead of std::fs::canonicalize()
-        let canon_root = unsafe {
-            let mut resolved = [0u8; libc::PATH_MAX as usize];
+        // BUG-009: Use raw_open + F_GETPATH for canonicalization instead of
+        // raw_realpath + compute_project_id. During init(), INITIALIZING=Busy(3)
+        // causes raw_realpath's bootstrap guard to copy path unchanged (no symlink
+        // resolution), and compute_project_id() calls canonicalize() which under
+        // DYLD_FORCE_FLAT_NAMESPACE routes to our realpath_inception → same guard
+        // → wrong BLAKE3 hash → wrong VDir filename → mmap fails.
+        let canon_root_string: String = unsafe {
             let root_cstr = std::ffi::CString::new(root_str).unwrap_or_default();
             #[cfg(target_os = "macos")]
-            let result = crate::syscalls::macos_raw::raw_realpath(
-                root_cstr.as_ptr(),
-                resolved.as_mut_ptr() as *mut libc::c_char,
-            );
+            {
+                let fd = crate::syscalls::macos_raw::raw_open(
+                    root_cstr.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC,
+                    0,
+                );
+                if fd >= 0 {
+                    let mut resolved_buf = [0u8; libc::PATH_MAX as usize];
+                    let ret = crate::syscalls::macos_raw::raw_fcntl(
+                        fd,
+                        libc::F_GETPATH,
+                        resolved_buf.as_mut_ptr() as i64,
+                    );
+                    crate::syscalls::macos_raw::raw_close(fd);
+                    if ret >= 0 {
+                        CStr::from_ptr(resolved_buf.as_ptr() as *const libc::c_char)
+                            .to_str()
+                            .unwrap_or(root_str)
+                            .to_string()
+                    } else {
+                        root_str.to_string()
+                    }
+                } else {
+                    // raw_open failed — /tmp → /private/tmp fallback
+                    if root_str.starts_with("/tmp/") || root_str == "/tmp" {
+                        format!("/private{}", root_str)
+                    } else {
+                        root_str.to_string()
+                    }
+                }
+            }
             #[cfg(target_os = "linux")]
-            let result = libc::realpath(
-                root_cstr.as_ptr(),
-                resolved.as_mut_ptr() as *mut libc::c_char,
-            );
-            if !result.is_null() {
-                let resolved_str = CStr::from_ptr(result).to_string_lossy().to_string();
-                PathBuf::from(resolved_str)
-            } else {
-                PathBuf::from(root_str)
+            {
+                let mut resolved_buf = [0u8; libc::PATH_MAX as usize];
+                let result = libc::realpath(
+                    root_cstr.as_ptr(),
+                    resolved_buf.as_mut_ptr() as *mut libc::c_char,
+                );
+                if !result.is_null() {
+                    CStr::from_ptr(result).to_string_lossy().to_string()
+                } else {
+                    root_str.to_string()
+                }
             }
         };
-        let canon_root_str = canon_root.to_string_lossy();
 
-        let project_id = vrift_config::path::compute_project_id(canon_root_str.as_ref());
-        let mmap_path = vrift_config::path::get_vdir_mmap_path(&project_id)
-            .unwrap_or_else(|| PathBuf::from(format!("{}/.vrift/manifest.mmap", canon_root_str)));
+        // Inline BLAKE3 hash — avoids compute_project_id()'s canonicalize() call
+        // which is bootstrap-unsafe under DYLD_FORCE_FLAT_NAMESPACE (BUG-009).
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(canon_root_string.as_bytes());
+        let project_id = hasher.finalize().to_hex().to_string();
+        let mmap_path = vrift_config::path::get_vdir_mmap_path(&project_id).unwrap_or_else(|| {
+            PathBuf::from(format!("{}/.vrift/manifest.mmap", canon_root_string))
+        });
+
+        // BUG-009: Debug log the derived VDir path for diagnosis
+        {
+            let mut dbg_buf = [0u8; 512];
+            let mut dw = crate::macros::StackWriter::new(&mut dbg_buf);
+            let _ = writeln!(
+                dw,
+                "[vrift-inception] VDir mmap path: {} (root: {})",
+                mmap_path.display(),
+                canon_root_string
+            );
+            let dbg_msg = dw.as_str();
+            unsafe {
+                #[cfg(target_os = "macos")]
+                crate::syscalls::macos_raw::raw_write(
+                    2,
+                    dbg_msg.as_ptr() as *const libc::c_void,
+                    dbg_msg.len(),
+                );
+                #[cfg(target_os = "linux")]
+                libc::write(2, dbg_msg.as_ptr() as *const libc::c_void, dbg_msg.len());
+            }
+        }
 
         let _ = write!(writer, "{}\0", mmap_path.display());
     }
@@ -549,6 +623,29 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
         )
     };
     if fd < 0 {
+        // BUG-009: Log open failure for diagnosis
+        #[cfg(target_os = "macos")]
+        let errno_val = unsafe { *libc::__error() };
+        #[cfg(target_os = "linux")]
+        let errno_val = unsafe { *libc::__errno_location() };
+        let mut dbg_buf = [0u8; 256];
+        let mut dw = crate::macros::StackWriter::new(&mut dbg_buf);
+        let _ = writeln!(
+            dw,
+            "[vrift-inception] VDir raw_open FAILED fd={} errno={}",
+            fd, errno_val
+        );
+        let dbg_msg = dw.as_str();
+        unsafe {
+            #[cfg(target_os = "macos")]
+            crate::syscalls::macos_raw::raw_write(
+                2,
+                dbg_msg.as_ptr() as *const libc::c_void,
+                dbg_msg.len(),
+            );
+            #[cfg(target_os = "linux")]
+            libc::write(2, dbg_msg.as_ptr() as *const libc::c_void, dbg_msg.len());
+        }
         return (ptr::null(), 0);
     }
 
