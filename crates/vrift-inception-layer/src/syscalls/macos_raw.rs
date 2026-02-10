@@ -165,6 +165,10 @@ const SYS_RENAMEAT: i64 = 465;
 const SYS_READLINK: i64 = 58;
 // No SYS_REALPATH syscall on macOS
 
+/// SYS_clonefileat = 462 on macOS (APFS CoW clone)
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const SYS_CLONEFILEAT: i64 = 462;
+
 /// Raw stat64 syscall for macOS ARM64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[inline(never)]
@@ -916,6 +920,42 @@ pub unsafe fn raw_mkdirat(
         in("x0") dirfd as i64,
         in("x1") path as i64,
         in("x2") mode as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+/// Raw clonefileat syscall for macOS ARM64.
+/// Creates an APFS Copy-on-Write clone of a file — zero data copy, instant.
+/// `src_dirfd` and `dst_dirfd` can be AT_FDCWD (-2) for cwd-relative paths.
+/// `flags`: 0 for default; CLONE_NOFOLLOW (1), CLONE_NOOWNERCOPY (2).
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_clonefileat(
+    src_dirfd: libc::c_int,
+    src: *const libc::c_char,
+    dst_dirfd: libc::c_int,
+    dst: *const libc::c_char,
+    flags: u32,
+) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_CLONEFILEAT,
+        in("x0") src_dirfd as i64,
+        in("x1") src as i64,
+        in("x2") dst_dirfd as i64,
+        in("x3") dst as i64,
+        in("x4") flags as i64,
         lateout("x0") ret,
         err = out(reg) err,
         options(nostack)

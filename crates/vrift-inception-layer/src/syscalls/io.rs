@@ -357,19 +357,26 @@ pub unsafe extern "C" fn velo_close_impl(fd: c_int) -> c_int {
         let res = crate::syscalls::linux_raw::raw_close(fd);
 
         // COW reingest: fire-and-forget to worker (non-blocking)
+        // Only reingest COW staging temps (non-empty temp_path).
+        // New files under project_root (empty temp_path) are captured by
+        // vDird's background FSEvents sweep — no per-file IPC needed.
         if let Some(info) = cow_info {
-            inception_log!(
-                "COW CLOSE: fd={} vpath='{}' temp='{}'",
-                fd,
-                info.vpath,
-                info.temp_path
-            );
+            if info.is_vfs && !info.manifest_key.is_empty() && !info.temp_path.is_empty() {
+                let reingest_path = info.temp_path.to_string();
 
-            if let Some(reactor) = crate::sync::get_reactor() {
-                let _ = reactor.ring_buffer.push(crate::sync::Task::Reingest {
-                    vpath: info.vpath.to_string(),
-                    temp_path: info.temp_path.to_string(),
-                });
+                inception_log!(
+                    "CLOSE REINGEST: fd={} vpath='{}' source='{}'",
+                    fd,
+                    info.manifest_key,
+                    reingest_path
+                );
+
+                if let Some(reactor) = crate::sync::get_reactor() {
+                    let _ = reactor.ring_buffer.push(crate::sync::Task::Reingest {
+                        vpath: info.manifest_key.to_string(),
+                        temp_path: reingest_path,
+                    });
+                }
             }
         }
 

@@ -6,6 +6,7 @@ use anyhow::Result;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 use vrift_ipc::{
     VeloError, VeloErrorKind, VeloRequest, VeloResponse, VnodeEntry, PROTOCOL_VERSION,
@@ -14,14 +15,14 @@ use vrift_ipc::{
 /// Command handler for vdir_d
 pub struct CommandHandler {
     config: ProjectConfig,
-    vdir: VDir,
+    vdir: Arc<Mutex<VDir>>,
     manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
 }
 
 impl CommandHandler {
     pub fn new(
         config: ProjectConfig,
-        vdir: VDir,
+        vdir: Arc<Mutex<VDir>>,
         manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
     ) -> Self {
         Self {
@@ -117,7 +118,7 @@ impl CommandHandler {
         let path_hash = fnv1a_hash(path);
 
         // 1. First check VDir (runtime overlay for COW mutations)
-        if let Some(entry) = self.vdir.lookup(path_hash) {
+        if let Some(entry) = self.vdir.lock().unwrap().lookup(path_hash) {
             // Reconstruct nanosecond mtime from VDirEntry sec+nsec
             let mtime_ns = entry.mtime_sec as u64 * 1_000_000_000 + entry.mtime_nsec as u64;
             let vnode = VnodeEntry {
@@ -166,7 +167,7 @@ impl CommandHandler {
             _pad: [0; 3],
         };
 
-        match self.vdir.upsert(vdir_entry) {
+        match self.vdir.lock().unwrap().upsert(vdir_entry) {
             Ok(_) => {
                 debug!(path = %path, "Upserted entry");
                 VeloResponse::ManifestAck { entry: Some(entry) }
@@ -181,7 +182,7 @@ impl CommandHandler {
     /// Handle ManifestRemove
     fn handle_manifest_remove(&mut self, path: &str) -> VeloResponse {
         let path_hash = fnv1a_hash(path);
-        if self.vdir.mark_dirty(path_hash, false) {
+        if self.vdir.lock().unwrap().mark_dirty(path_hash, false) {
             // For now, just clear dirty bit. Full deletion would require tombstone.
             debug!(path = %path, "Marked for removal");
             VeloResponse::ManifestAck { entry: None }
@@ -196,7 +197,7 @@ impl CommandHandler {
         let new_hash = fnv1a_hash(new_path);
 
         // Lookup old entry (VDir first, then LMDB)
-        let old_entry = if let Some(entry) = self.vdir.lookup(old_hash) {
+        let old_entry = if let Some(entry) = self.vdir.lock().unwrap().lookup(old_hash) {
             Some(*entry)
         } else if let Ok(Some(lmdb_entry)) = self.manifest.get(old_path) {
             Some(VDirEntry {
@@ -216,14 +217,14 @@ impl CommandHandler {
         match old_entry {
             Some(entry) => {
                 // Mark old path as removed
-                self.vdir.mark_dirty(old_hash, false);
+                self.vdir.lock().unwrap().mark_dirty(old_hash, false);
 
                 // Insert under new path hash
                 let new_entry = VDirEntry {
                     path_hash: new_hash,
                     ..entry
                 };
-                match self.vdir.upsert(new_entry) {
+                match self.vdir.lock().unwrap().upsert(new_entry) {
                     Ok(_) => {
                         debug!(old = %old_path, new = %new_path, "Manifest rename");
                         VeloResponse::ManifestAck { entry: None }
@@ -248,7 +249,7 @@ impl CommandHandler {
         let mtime_nsec = (mtime_ns % 1_000_000_000) as u32;
 
         // Look up existing entry (VDir first, then LMDB)
-        let existing = if let Some(entry) = self.vdir.lookup(path_hash) {
+        let existing = if let Some(entry) = self.vdir.lock().unwrap().lookup(path_hash) {
             Some(*entry)
         } else if let Ok(Some(lmdb_entry)) = self.manifest.get(path) {
             Some(VDirEntry {
@@ -272,7 +273,7 @@ impl CommandHandler {
                     mtime_nsec,
                     ..entry
                 };
-                match self.vdir.upsert(updated) {
+                match self.vdir.lock().unwrap().upsert(updated) {
                     Ok(_) => {
                         debug!(path = %path, mtime_sec, "Updated mtime");
                         VeloResponse::ManifestAck { entry: None }
@@ -346,11 +347,26 @@ impl CommandHandler {
         VeloResponse::ManifestListAck { entries }
     }
 
-    /// Handle ManifestReingest (CoW commit)
+    /// Handle ManifestReingest (CoW commit or new file capture)
     async fn handle_reingest(&mut self, vpath: &str, temp_path: &str) -> VeloResponse {
-        let temp = PathBuf::from(temp_path);
+        let source = PathBuf::from(temp_path);
 
-        // 1. Initialize CAS store
+        // 1. Capture source file metadata BEFORE CAS store (preserves original mtime)
+        let src_meta = match fs::metadata(&source) {
+            Ok(m) => m,
+            Err(e) => {
+                // File may have been deleted between close() and reingest — not an error
+                debug!(error = %e, path = %temp_path, "Reingest source not found (transient)");
+                return VeloResponse::ManifestAck { entry: None };
+            }
+        };
+
+        // Skip directories
+        if src_meta.is_dir() {
+            return VeloResponse::ManifestAck { entry: None };
+        }
+
+        // 2. Initialize CAS store
         let store = match vrift_cas::CasStore::new(&self.config.cas_path) {
             Ok(s) => s,
             Err(e) => {
@@ -362,51 +378,58 @@ impl CommandHandler {
             }
         };
 
-        // 2. Ingest to CAS via move (atomic & deduplicated)
-        let hash_bytes = match store.store_by_move(&temp) {
-            Ok(h) => h,
-            Err(e) => {
-                error!(error = %e, temp = %temp_path, "CAS ingestion failed");
-                return VeloResponse::Error(VeloError::new(
-                    VeloErrorKind::IngestFailed,
-                    format!("Ingest error: {}", e),
-                ));
+        // 3. Ingest to CAS — use move for staging temps, copy for live files
+        let is_staging = temp_path.contains("/.vrift/staging/");
+        let hash_bytes = if is_staging {
+            // COW staging temp: move into CAS (delete temp after)
+            match store.store_by_move(&source) {
+                Ok(h) => h,
+                Err(e) => {
+                    error!(error = %e, temp = %temp_path, "CAS ingestion failed (move)");
+                    return VeloResponse::Error(VeloError::new(
+                        VeloErrorKind::IngestFailed,
+                        format!("Ingest error: {}", e),
+                    ));
+                }
+            }
+        } else {
+            // Live file: copy into CAS (keep original intact)
+            match store.store_file(&source) {
+                Ok(h) => h,
+                Err(e) => {
+                    error!(error = %e, path = %temp_path, "CAS ingestion failed (copy)");
+                    return VeloResponse::Error(VeloError::new(
+                        VeloErrorKind::IngestFailed,
+                        format!("Ingest error: {}", e),
+                    ));
+                }
             }
         };
 
-        // 3. Get metadata for the committed file
-        let cas_path = store.blob_path_for_hash(&hash_bytes).unwrap();
-        let meta = match fs::metadata(&cas_path) {
-            Ok(m) => m,
-            Err(e) => {
-                return VeloResponse::Error(VeloError::io_error(format!("Metadata error: {}", e)));
-            }
-        };
-
-        // 4. Update VDir
+        // 4. Update VDir with original source metadata (not CAS blob metadata)
         let entry = VDirEntry {
             path_hash: fnv1a_hash(vpath),
             cas_hash: hash_bytes,
-            size: meta.len(),
-            mtime_sec: meta.mtime(),
-            mtime_nsec: meta.mtime_nsec() as u32,
-            mode: meta.mode(),
-            flags: if meta.is_dir() { FLAG_DIR } else { 0 },
+            size: src_meta.len(),
+            mtime_sec: src_meta.mtime(),
+            mtime_nsec: src_meta.mtime_nsec() as u32,
+            mode: src_meta.mode(),
+            flags: if src_meta.is_dir() { FLAG_DIR } else { 0 },
             _pad: [0; 3],
         };
 
-        if let Err(e) = self.vdir.upsert(entry) {
+        if let Err(e) = self.vdir.lock().unwrap().upsert(entry) {
             return VeloResponse::Error(VeloError::io_error(format!("VDir update error: {}", e)));
         }
 
-        info!(vpath = %vpath, hash = %hex::encode(hash_bytes), "Reingest complete");
+        info!(vpath = %vpath, hash = %hex::encode(hash_bytes), staging = is_staging, "Reingest complete");
 
         VeloResponse::ManifestAck {
             entry: Some(VnodeEntry {
                 content_hash: hash_bytes,
-                size: meta.len(),
-                mtime: meta.mtime() as u64 * 1_000_000_000 + meta.mtime_nsec() as u64,
-                mode: meta.mode(),
+                size: src_meta.len(),
+                mtime: src_meta.mtime() as u64 * 1_000_000_000 + src_meta.mtime_nsec() as u64,
+                mode: src_meta.mode(),
                 flags: 0,
                 _pad: 0,
             }),
@@ -604,9 +627,9 @@ mod tests {
         let temp = tempdir().unwrap();
         let config = ProjectConfig::from_project_root(temp.path().to_path_buf());
 
-        // Create VDir
+        // Create VDir (shared via Arc<Mutex>)
         let vdir_path = temp.path().join("test.vdir");
-        let vdir = VDir::create_or_open(&vdir_path).unwrap();
+        let vdir = Arc::new(Mutex::new(VDir::create_or_open(&vdir_path).unwrap()));
 
         // Create LMDB manifest
         let manifest_path = temp.path().join("manifest.lmdb");
@@ -919,11 +942,12 @@ mod tests {
             })
             .await;
 
+        // Nonexistent source is treated as transient (file deleted between close and reingest)
         match response {
-            VeloResponse::Error(err) => {
-                assert!(err.message.contains("Ingest error"));
+            VeloResponse::ManifestAck { entry: None } => {
+                // Expected: transient file not found is gracefully handled
             }
-            _ => panic!("Expected Error for nonexistent file"),
+            _ => panic!("Expected ManifestAck(None) for nonexistent file"),
         }
     }
 

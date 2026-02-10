@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
@@ -152,11 +153,12 @@ impl IngestQueue {
     }
 }
 
-/// Handler that processes ingest events and updates manifest
+/// Handler that processes ingest events and updates manifest + VDir
 pub struct IngestHandler {
     project_root: std::path::PathBuf,
     manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
     cas: vrift_cas::CasStore,
+    vdir: Option<Arc<Mutex<crate::vdir::VDir>>>,
 }
 
 impl IngestHandler {
@@ -169,7 +171,14 @@ impl IngestHandler {
             project_root,
             manifest,
             cas,
+            vdir: None,
         }
+    }
+
+    /// Set VDir handle for dual-write (manifest + VDir mmap)
+    pub fn with_vdir(mut self, vdir: Arc<Mutex<crate::vdir::VDir>>) -> Self {
+        self.vdir = Some(vdir);
+        self
     }
 
     /// Process a single ingest event
@@ -216,13 +225,33 @@ impl IngestHandler {
                         // Insert into manifest with classified tier
                         self.manifest.insert(&rel_path, vnode, tier);
 
+                        // Also update VDir mmap so inception layer fast-path sees it
+                        if let Some(ref vdir_lock) = self.vdir {
+                            use crate::vdir::{fnv1a_hash, VDirEntry};
+                            let vdir_entry = VDirEntry {
+                                path_hash: fnv1a_hash(&rel_path),
+                                cas_hash: result.hash,
+                                size: result.size,
+                                mtime_sec: meta.mtime(),
+                                mtime_nsec: meta.mtime_nsec() as u32,
+                                mode: meta.mode(),
+                                flags: 0,
+                                _pad: [0; 3],
+                            };
+                            if let Ok(mut vdir) = vdir_lock.lock() {
+                                if let Err(e) = vdir.upsert(vdir_entry) {
+                                    tracing::warn!(error = %e, path = %rel_path, "VDir upsert failed during ingest");
+                                }
+                            }
+                        }
+
                         info!(
                             path = %rel_path,
                             size = result.size,
                             tier = ?tier,
                             hash = %vrift_cas::CasStore::hash_to_hex(&result.hash)[..8],
                             was_new = result.was_new,
-                            "Ingest: file stored to CAS (zero-copy)"
+                            "Ingest: file stored to CAS + VDir (zero-copy)"
                         );
                     }
                     Err(e) => {

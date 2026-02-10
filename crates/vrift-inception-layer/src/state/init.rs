@@ -360,6 +360,17 @@ impl InceptionLayerState {
             );
         }
 
+        // Phase 1.3: Read VRIFT_VDIRD_SOCKET env (set by CLI, avoids lazy IPC caching delay)
+        unsafe {
+            let env_ptr = libc::getenv(c"VRIFT_VDIRD_SOCKET".as_ptr());
+            if !env_ptr.is_null() {
+                let socket_str = CStr::from_ptr(env_ptr).to_str().unwrap_or("");
+                if !socket_str.is_empty() {
+                    (*ptr).vdird_socket_path.set(socket_str);
+                }
+            }
+        }
+
         // Perform proactive environment audit (Safe: uses getenv and safe logger)
         unsafe { Self::audit_environment() };
 

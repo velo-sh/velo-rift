@@ -6,7 +6,7 @@ use crate::commands::CommandHandler;
 use crate::vdir::VDir;
 use crate::ProjectConfig;
 use anyhow::Result;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
@@ -16,7 +16,7 @@ use vrift_ipc::{IpcHeader, VeloError, VeloRequest, VeloResponse};
 /// Run the UDS listener loop
 pub async fn run_listener(
     config: ProjectConfig,
-    vdir: VDir,
+    vdir: Arc<Mutex<VDir>>,
     manifest: std::sync::Arc<vrift_manifest::lmdb::LmdbManifest>,
 ) -> Result<()> {
     // Remove existing socket if present

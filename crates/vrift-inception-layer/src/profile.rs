@@ -78,6 +78,7 @@ pub struct VriftProfile {
     pub vdir_hits: AtomicU64,
     pub vdir_misses: AtomicU64,
     pub ipc_calls: AtomicU64,
+    pub cas_materializations: AtomicU64,
 
     // ── Latency breakdown (cumulative ns) ──
     pub vdir_lookup_ns: AtomicU64,   // Time spent in VDir mmap lookups
@@ -122,6 +123,7 @@ impl VriftProfile {
             vdir_hits: AtomicU64::new(0),
             vdir_misses: AtomicU64::new(0),
             ipc_calls: AtomicU64::new(0),
+            cas_materializations: AtomicU64::new(0),
             vdir_lookup_ns: AtomicU64::new(0),
             ipc_roundtrip_ns: AtomicU64::new(0),
             start_time_ns: AtomicU64::new(0),

@@ -85,12 +85,14 @@ impl InceptionLayerState {
             }
             crate::sync::Task::Reingest { vpath, temp_path } => {
                 if let Some(state) = InceptionLayerState::get_no_spawn() {
+                    // Route reingest to vDird socket (not main daemon, which rejects it)
+                    let socket = if !state.vdird_socket_path.is_empty() {
+                        &state.vdird_socket_path
+                    } else {
+                        &state.socket_path
+                    };
                     unsafe {
-                        if crate::ipc::sync_ipc_manifest_reingest(
-                            &state.socket_path,
-                            &vpath,
-                            &temp_path,
-                        ) {
+                        if crate::ipc::sync_ipc_manifest_reingest(socket, &vpath, &temp_path) {
                             // M4: Clear dirty status ONLY after the daemon confirms reingest.
                             DIRTY_TRACKER.clear_dirty(&vpath);
                         }

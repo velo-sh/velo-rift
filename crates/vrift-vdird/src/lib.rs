@@ -120,8 +120,10 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
         Err(e) => tracing::warn!(error = %e, "Failed to cleanup orphan staging files"),
     }
 
-    // Initialize VDir mmap
-    let vdir = vdir::VDir::create_or_open(&config.vdir_path)?;
+    // Initialize VDir mmap (shared between socket handler and ingest handler)
+    let vdir = std::sync::Arc::new(std::sync::Mutex::new(vdir::VDir::create_or_open(
+        &config.vdir_path,
+    )?));
     info!(path = %config.vdir_path.display(), "VDir mmap initialized");
 
     // Initialize reingest journal for crash recovery
@@ -182,11 +184,10 @@ pub async fn run_daemon(config: ProjectConfig) -> Result<()> {
 
     // Phase 1: Start consumer FIRST (consumer-first pattern)
     let ingest_queue = ingest::IngestQueue::new(ingest_rx);
-    let handler = std::sync::Arc::new(ingest::IngestHandler::new(
-        config.project_root.clone(),
-        manifest.clone(),
-        cas,
-    ));
+    let handler = std::sync::Arc::new(
+        ingest::IngestHandler::new(config.project_root.clone(), manifest.clone(), cas)
+            .with_vdir(vdir.clone()),
+    );
     let consumer_handle = tokio::spawn(async move {
         ingest::run_consumer(ingest_queue, handler).await;
     });

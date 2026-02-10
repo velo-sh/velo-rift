@@ -42,12 +42,33 @@ impl PathResolver {
         let mut abs_writer = crate::macros::StackWriter::new(&mut abs_buf);
         use std::fmt::Write;
 
-        // 1. Resolve relative paths using project_root
+        // 1. Resolve relative paths using real process cwd (POSIX semantics).
+        //    Previous bug: used project_root, which broke build-scripts that chdir
+        //    to external directories (e.g. ~/.cargo/registry/.../zerocopy-0.8.31/)
+        //    and read relative "Cargo.toml" — that incorrectly resolved to
+        //    {project_root}/Cargo.toml instead of the crate's own Cargo.toml.
         if !path.starts_with('/') {
-            if self.project_root.is_empty() {
+            let mut cwd_buf = [0u8; 1024];
+            #[cfg(target_os = "macos")]
+            let cwd_ptr = unsafe {
+                crate::syscalls::macos_raw::raw_getcwd(
+                    cwd_buf.as_mut_ptr() as *mut libc::c_char,
+                    cwd_buf.len(),
+                )
+            };
+            #[cfg(target_os = "linux")]
+            let cwd_ptr = unsafe {
+                crate::syscalls::linux_raw::raw_getcwd(
+                    cwd_buf.as_mut_ptr() as *mut libc::c_char,
+                    cwd_buf.len(),
+                )
+            };
+            if cwd_ptr.is_null() {
                 return None;
             }
-            let _ = write!(abs_writer, "{}/{}", self.project_root.as_str(), path);
+            let cwd = unsafe { CStr::from_ptr(cwd_buf.as_ptr() as *const c_char) };
+            let cwd_str = cwd.to_str().ok()?;
+            let _ = write!(abs_writer, "{}/{}", cwd_str, path);
         } else {
             let _ = write!(abs_writer, "{}", path);
         };
@@ -69,6 +90,21 @@ impl PathResolver {
             let mut aw = crate::macros::StackWriter::new(&mut alt_buf);
             let _ = write!(aw, "/private{}", normalized);
             applicable = aw.as_str().starts_with(prefix);
+        }
+
+        // Drop-in build cache: also match project_root-prefixed paths.
+        // Virtual prefix (e.g. /vrift) is for read path; real paths under project root
+        // are for write-back capture (cargo/rustc write to real paths like
+        // /Users/.../velo/target/debug/..., which must be tracked for close-reingest).
+        if !applicable && !self.project_root.is_empty() {
+            let proj_root_str = self.project_root.as_str();
+            if normalized.starts_with(proj_root_str)
+                && (normalized.len() == proj_root_str.len()
+                    || proj_root_str.ends_with('/')
+                    || normalized.as_bytes()[proj_root_str.len()] == b'/')
+            {
+                applicable = true;
+            }
         }
 
         if !applicable {
