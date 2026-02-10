@@ -160,32 +160,6 @@ unsafe fn stat_impl(
         return Some(result);
     }
 
-    // Build cache fallback: when VDir misses but build cache is active,
-    // intercept target artifact stat calls and override mtime to now().
-    // This handles the passthrough path (target/ not in VDir).
-    //
-    // CRITICAL: must override BOTH seconds AND nanoseconds.
-    // Cargo uses nanosecond-precision mtime comparison:
-    //   dep_mtime.ns > output_mtime.ns → dirty
-    // With cp -r, files get different nanosecond values based on copy order.
-    // Setting all to (override_ts, 0ns) ensures exact equality → fresh.
-    if let Some(override_ts) = crate::build_cache::should_override_mtime(path_str) {
-        // Do the real stat first to get actual file metadata
-        #[cfg(target_os = "macos")]
-        let res = crate::syscalls::macos_raw::raw_stat(path, buf);
-        #[cfg(target_os = "linux")]
-        let res = crate::syscalls::linux_raw::raw_stat(path, buf);
-
-        if res == 0 {
-            // Override mtime to a uniform timestamp across ALL target files.
-            // Both seconds and nanoseconds must be identical to prevent
-            // cargo's nanosecond-precision ordering check from triggering.
-            (*buf).st_mtime = override_ts as _;
-            (*buf).st_mtime_nsec = 0;
-            return Some(0);
-        }
-    }
-
     None
 }
 

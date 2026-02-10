@@ -369,9 +369,6 @@ impl InceptionLayerState {
         // RFC-0045: Initialize profiling counters if VRIFT_PROFILE=1
         crate::profile::init_profile();
 
-        // Build cache: Initialize cargo wrapper if VRIFT_BUILD_CACHE=1
-        crate::build_cache::cargo::init_if_enabled();
-
         Some(ptr)
     }
 

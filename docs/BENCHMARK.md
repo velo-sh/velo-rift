@@ -54,29 +54,28 @@ Space savings from content-addressable storage:
 - **Method**: daemon pre-started, `vrift ingest` with release build
 - **Re-ingest**: same dataset, manifest cache loaded, warm CAS
 
-## Build Cache (mtime override POC)
+## Build Cache (VDir Native Architecture)
 
 Target: `velo` project (329 crates, ~51s clean build)
+
+### E2E Flow
+
+```
+vrift ingest target/ → cp -a target/ cache/ → rm -rf target/ → cp -a cache/ target/ → cargo build
+```
 
 | Scenario | Time | Crates Compiled | Speedup |
 |----------|------|-----------------|---------|
 | Clean build (no cache) | 51.0s | 329 | — |
 | No-op (intact target/) | 0.37s | 0 | 138x |
 | `cp -a` restore (mtime preserved) | 0.38s | 0 | 134x |
-| `cp -r` restore (mtime reset) | 25.7s | 329 | 2x |
-| **`cp -r` + VRift BUILD_CACHE** | **0.67s** | **0** | **76x** |
-
-### Root Cause
-
-Cargo uses **nanosecond-precision** mtime comparison for freshness checks.
-`cp -r` resets all file mtimes to copy-time, but copy order creates nanosecond
-differences between files → cargo sees dependency outputs as "newer" → dirty.
+| `cp -r` restore (mtime reset, no VRift) | 25.7s | 329 | 2x |
+| **Cache restore + VRift (VDir native)** | **0.79s** | **0** | **65x** |
 
 ### Mechanism
 
-VRift intercepts `stat()` at the syscall layer and overrides mtime for all files
-under `target/debug/` and `target/release/` to a uniform `(now, 0ns)` timestamp.
-Cargo sees all artifacts as equally "recent" and newer than all sources → no-op.
+VRift intercepts `stat()` at the syscall layer. VDir entries serve the original
+build-time mtime with nanosecond precision. Cargo's fingerprint check sees
+exact mtime match → all artifacts fresh → no-op build.
 
-This is a POC shim. Production implementation will use VDir to serve target/
-artifacts with their original build-time mtimes.
+Overhead vs native no-op: +0.23s (VFS stat interception cost).

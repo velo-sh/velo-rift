@@ -528,16 +528,7 @@ fn dump_profile_json() {
     }
     let _ = writeln!(buf, "  ],");
 
-    // Build cache counters
-    let bc_checks = crate::build_cache::CHECK_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-    let bc_overrides =
-        crate::build_cache::OVERRIDE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-    let bc_active = crate::build_cache::is_active();
-    let _ = write!(
-        buf,
-        "  \"build_cache\": {{ \"active\": {}, \"checks\": {}, \"overrides\": {} }}\n}}",
-        bc_active, bc_checks, bc_overrides
-    );
+    let _ = write!(buf, "}}");
 
     // Write to file — use raw libc to avoid allocator issues in atexit
     let path = format!("/tmp/vrift-profile-{}.json\0", pid);
