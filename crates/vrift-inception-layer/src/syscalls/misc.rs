@@ -336,7 +336,8 @@ pub unsafe extern "C" fn fchflags_inception(fd: c_int, flags: libc::c_uint) -> c
 }
 
 /// RFC-0047: Link (hardlink) implementation with VFS boundary enforcement
-/// Hardlinks crossing VFS boundary or into CAS are forbidden (returns EXDEV)
+/// Cross-boundary hardlinks are forbidden (EXDEV). Intra-VFS hard links are allowed
+/// since they operate on the real filesystem and don't compromise CAS integrity.
 unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
     if old.is_null() || new.is_null() {
         return None;
@@ -352,13 +353,13 @@ unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
     let new_in_vfs = state.inception_applicable(new_str);
 
     // RFC-0047: Cross-boundary hardlink is forbidden
-    // Also block if source is in VFS (protects CAS blobs)
-    if old_in_vfs != new_in_vfs || old_in_vfs {
+    if old_in_vfs != new_in_vfs {
         crate::set_errno(libc::EXDEV);
         return Some(-1);
     }
 
-    None // Let real syscall handle non-VFS links
+    // Intra-VFS or non-VFS: passthrough to raw link()
+    None
 }
 
 #[no_mangle]
@@ -373,11 +374,6 @@ pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) 
         crate::set_errno(libc::EXDEV);
         return -1;
     }
-    if new_in_vfs {
-        // Destination in VFS: block to protect VFS integrity
-        crate::set_errno(libc::EXDEV);
-        return -1;
-    }
 
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
@@ -385,16 +381,15 @@ pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) 
             .load(Ordering::Acquire)
             .is_null()
     {
-        // Early init: just passthrough for non-VFS paths (already checked above)
+        // Early init: passthrough
         return crate::syscalls::macos_raw::raw_link(old, new);
     }
-    // Post-init: use full link_impl for additional checks, then block_vfs_mutation
+    // Post-init: use link_impl for manifest-aware checks
     if let Some(err) = link_impl(old, new) {
         return err;
     }
-    block_vfs_mutation(old)
-        .or_else(|| block_vfs_mutation(new))
-        .unwrap_or_else(|| crate::syscalls::macos_raw::raw_link(old, new))
+    // Non-VFS or intra-VFS local files: passthrough to raw link
+    crate::syscalls::macos_raw::raw_link(old, new)
 }
 
 #[no_mangle]
@@ -407,10 +402,6 @@ pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) 
         crate::set_errno(libc::EXDEV);
         return -1;
     }
-    if new_in_vfs {
-        crate::set_errno(libc::EXDEV);
-        return -1;
-    }
 
     let init_state = INITIALIZING.load(Ordering::Relaxed);
     if init_state != 0
@@ -420,12 +411,12 @@ pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) 
     {
         return crate::syscalls::linux_raw::raw_link(old, new);
     }
+    // Post-init: use link_impl for manifest-aware checks
     if let Some(err) = link_impl(old, new) {
         return err;
     }
-    block_vfs_mutation(old)
-        .or_else(|| block_vfs_mutation(new))
-        .unwrap_or_else(|| crate::syscalls::linux_raw::raw_link(old, new))
+    // Non-VFS or intra-VFS local files: passthrough to raw link
+    crate::syscalls::linux_raw::raw_link(old, new)
 }
 
 #[no_mangle]

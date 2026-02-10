@@ -299,6 +299,12 @@ impl InceptionLayerState {
             }
         }
 
+        // Fallback: if VRIFT_MANIFEST was not set (or failed to derive project root),
+        // default project_root to vfs_prefix so chdir/getcwd translation works.
+        if project_root_fs.as_str().is_empty() {
+            project_root_fs.set(vfs_prefix.as_str());
+        }
+
         // RFC-CRIT-001: Bootstrap-Safe Allocation using raw_mmap
         // Replaces malloc to avoid fstat->shim->malloc deadlock on macOS (BUG-007)
         let size = std::mem::size_of::<InceptionLayerState>();
