@@ -38,6 +38,15 @@ impl VDir {
         if metadata.len() == 0 {
             file.set_len(file_size as u64)?;
             info!(path = %path.display(), size = file_size, "Created new VDir file");
+        } else if (metadata.len() as usize) < file_size {
+            // v2 → v3 upgrade: expand file to include string pool
+            file.set_len(file_size as u64)?;
+            info!(
+                path = %path.display(),
+                old_size = metadata.len(),
+                new_size = file_size,
+                "Expanded VDir file for v3 string pool"
+            );
         }
 
         // mmap the file

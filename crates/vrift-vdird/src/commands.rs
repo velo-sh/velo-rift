@@ -548,6 +548,61 @@ impl CommandHandler {
             )));
         }
 
+        // 6. Backfill VDir with path strings for readdir support
+        {
+            let canon_root = source_path
+                .canonicalize()
+                .unwrap_or_else(|_| source_path.clone());
+            let prefix_str = prefix.unwrap_or("");
+            let mut vdir = self.vdir.lock().unwrap();
+            let mut vdir_count = 0u64;
+
+            for result in results.iter().flatten() {
+                let canon_source = result
+                    .source_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| result.source_path.clone());
+                let rel = canon_source
+                    .strip_prefix(&canon_root)
+                    .unwrap_or(&canon_source);
+
+                let key = if prefix_str == "/" || prefix_str.is_empty() {
+                    format!("{}", rel.display())
+                } else {
+                    format!("{}/{}", prefix_str.trim_end_matches('/'), rel.display())
+                };
+
+                let (mtime_sec, mtime_nsec, mode) = match fs::metadata(&result.source_path) {
+                    Ok(meta) => (meta.mtime(), meta.mtime_nsec() as u32, meta.mode()),
+                    Err(_) => (0, 0, 0o644),
+                };
+
+                let path_hash = fnv1a_hash(&key);
+                let entry = VDirEntry {
+                    path_hash,
+                    cas_hash: result.hash,
+                    size: result.size,
+                    mtime_sec,
+                    mtime_nsec,
+                    mode,
+                    path_offset: 0,
+                    flags: 0,
+                    path_len: 0,
+                };
+
+                if let Err(e) = vdir.upsert_with_path(entry, &key) {
+                    warn!(path = %key, error = %e, "VDir backfill failed for entry");
+                } else {
+                    vdir_count += 1;
+                }
+            }
+
+            info!(
+                vdir_entries = vdir_count,
+                "VDir backfill complete (path strings stored)"
+            );
+        }
+
         info!(
             files = total_files,
             blobs = unique_blobs,
