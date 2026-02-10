@@ -236,10 +236,11 @@ impl IngestHandler {
                                 mtime_nsec: meta.mtime_nsec() as u32,
                                 mode: meta.mode(),
                                 flags: 0,
-                                _pad: [0; 3],
+                                path_offset: 0,
+                                path_len: 0,
                             };
                             if let Ok(mut vdir) = vdir_lock.lock() {
-                                if let Err(e) = vdir.upsert(vdir_entry) {
+                                if let Err(e) = vdir.upsert_with_path(vdir_entry, &rel_path) {
                                     tracing::warn!(error = %e, path = %rel_path, "VDir upsert failed during ingest");
                                 }
                             }

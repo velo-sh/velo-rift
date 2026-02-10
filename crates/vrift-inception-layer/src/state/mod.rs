@@ -793,7 +793,9 @@ pub(crate) static SYNTHETIC_DIR_COUNTER: std::sync::atomic::AtomicUsize =
 // Phase 1.3: vdir_lookup — seqlock-protected O(1) stat from VDir mmap
 // ============================================================================
 
-use vrift_ipc::vdir_types::{VDirEntry, VDIR_ENTRY_SIZE, VDIR_HEADER_SIZE, VDIR_MAGIC};
+use vrift_ipc::vdir_types::{
+    VDirEntry, FLAG_DELETED, FLAG_DIR, VDIR_ENTRY_SIZE, VDIR_HEADER_SIZE, VDIR_MAGIC,
+};
 
 /// Result from VDir lookup (VDirEntry fields needed for stat)
 #[derive(Debug, Clone, Copy)]
@@ -904,8 +906,143 @@ pub(crate) fn vdir_lookup(
     }
 }
 
-// mmap_dir_lookup removed — VDir entries store only path hashes (no filenames),
-// so readdir is served via IPC. Readdir is not on the PSFS hot path.
+// ============================================================================
+// Phase 4: vdir_list_dir — seqlock-protected directory listing from VDir v3
+// VDir v3 stores path strings in a bump-allocated string pool, enabling
+// zero-IPC readdir by prefix-scanning all entries.
+// ============================================================================
+
+/// Directory entry returned by vdir_list_dir
+#[derive(Debug, Clone)]
+pub(crate) struct VDirDirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// Scan VDir mmap for all entries whose path starts with `dir_prefix/`.
+/// Returns immediate children only (files and first-level subdirectories).
+/// Uses seqlock for safe concurrent reading.
+#[inline(never)]
+pub(crate) fn vdir_list_dir(
+    mmap_ptr: *const u8,
+    mmap_size: usize,
+    dir_prefix: &str,
+) -> Option<Vec<VDirDirEntry>> {
+    if mmap_ptr.is_null() || mmap_size < VDIR_HEADER_SIZE {
+        return None;
+    }
+
+    let magic = unsafe { *(mmap_ptr as *const u32) };
+    if magic != VDIR_MAGIC {
+        return None;
+    }
+
+    // Read header fields
+    let gen_addr = mmap_ptr as usize + 8;
+    let gen_ptr = unsafe { &*(gen_addr as *const AtomicU64) };
+    let table_capacity = unsafe { *((mmap_ptr as usize + 20) as *const u32) } as usize;
+    let table_offset = unsafe { *((mmap_ptr as usize + 24) as *const u32) } as usize;
+    // v3 string pool fields: offset at +32, size at +36
+    let string_pool_offset = unsafe { *((mmap_ptr as usize + 32) as *const u32) } as usize;
+    let string_pool_size = unsafe { *((mmap_ptr as usize + 36) as *const u32) } as usize;
+
+    if table_capacity == 0 || string_pool_size == 0 {
+        return None; // No entries or no path strings stored
+    }
+
+    let prefix = if dir_prefix.ends_with('/') {
+        dir_prefix.to_string()
+    } else {
+        format!("{}/", dir_prefix)
+    };
+
+    // Seqlock read loop
+    let mut spins: u32 = 0;
+    loop {
+        let g1 = gen_ptr.load(Ordering::Acquire);
+        if g1 & 1 != 0 {
+            spins += 1;
+            if spins > MAX_SEQLOCK_SPINS {
+                return None;
+            }
+            core::hint::spin_loop();
+            continue;
+        }
+
+        // Scan all entries for path prefix match
+        let mut results: Vec<VDirDirEntry> = Vec::new();
+        let mut seen_names: Vec<String> = Vec::new();
+
+        for slot in 0..table_capacity {
+            let entry_offset = table_offset + slot * VDIR_ENTRY_SIZE;
+            if entry_offset + VDIR_ENTRY_SIZE > mmap_size {
+                break;
+            }
+            let entry = unsafe { &*(mmap_ptr.add(entry_offset) as *const VDirEntry) };
+
+            // Skip empty/deleted entries
+            if entry.path_hash == 0 || entry.flags & FLAG_DELETED != 0 {
+                continue;
+            }
+
+            // Skip entries without path strings
+            if entry.path_len == 0 {
+                continue;
+            }
+
+            // Read path string from string pool
+            let path_start = string_pool_offset + entry.path_offset as usize;
+            let path_end = path_start + entry.path_len as usize;
+            if path_end > mmap_size {
+                continue;
+            }
+
+            let path_bytes = unsafe {
+                std::slice::from_raw_parts(mmap_ptr.add(path_start), entry.path_len as usize)
+            };
+            let path = match std::str::from_utf8(path_bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            // Check if path matches the directory prefix
+            if let Some(rest) = path.strip_prefix(&prefix) {
+                // Extract immediate child name
+                let child_name = if let Some(slash_pos) = rest.find('/') {
+                    &rest[..slash_pos]
+                } else {
+                    rest
+                };
+
+                if !child_name.is_empty() && !seen_names.iter().any(|n| n == child_name) {
+                    let is_dir = rest.contains('/') || (entry.flags & FLAG_DIR != 0);
+                    results.push(VDirDirEntry {
+                        name: child_name.to_string(),
+                        is_dir,
+                    });
+                    seen_names.push(child_name.to_string());
+                }
+            }
+        }
+
+        // Validate seqlock
+        let g2 = gen_ptr.load(Ordering::Acquire);
+        if g1 != g2 {
+            spins += 1;
+            if spins > MAX_SEQLOCK_SPINS {
+                return None;
+            }
+            core::hint::spin_loop();
+            continue;
+        }
+
+        return if results.is_empty() {
+            None
+        } else {
+            Some(results)
+        };
+    }
+}
 
 // ============================================================================
 // InceptionLayerState: Core struct & hot-path methods
@@ -1156,10 +1293,34 @@ impl InceptionLayerState {
         }
     }
 
-    /// Query daemon for directory listing (for opendir/readdir)
+    /// Query directory listing for opendir/readdir.
+    /// v3 fast path: scan VDir mmap string pool (zero IPC, zero allocation for entries).
+    /// Falls back to IPC if VDir has no path strings (pre-v3 data).
     #[allow(dead_code)]
     pub(crate) fn query_dir_listing(&self, path: &str) -> Option<Vec<vrift_ipc::DirEntry>> {
-        // Fall back to IPC (readdir is not on the PSFS hot path and VDir doesn't store filenames)
+        // v3 fast path: try VDir mmap string pool first
+        // VDir stores relative paths (e.g. "target/debug/..."), but opendir passes
+        // absolute paths. Strip project_root prefix to get the VDir key.
+        let project_root = self.path_resolver.project_root.as_str();
+        let rel_path = if !project_root.is_empty() && path.starts_with(project_root) {
+            let rest = &path[project_root.len()..];
+            rest.strip_prefix('/').unwrap_or(rest)
+        } else {
+            path
+        };
+
+        if let Some(vdir_entries) = vdir_list_dir(self.mmap_ptr, self.mmap_size, rel_path) {
+            let entries = vdir_entries
+                .into_iter()
+                .map(|e| vrift_ipc::DirEntry {
+                    name: e.name,
+                    is_dir: e.is_dir,
+                })
+                .collect();
+            return Some(entries);
+        }
+
+        // Fall back to IPC (pre-v3 VDir without path strings)
         unsafe { sync_ipc_manifest_list_dir(&self.vdird_socket_path, path) }
     }
 

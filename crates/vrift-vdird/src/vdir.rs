@@ -21,7 +21,9 @@ impl VDir {
     /// Create or open existing VDir mmap file
     pub fn create_or_open(path: &Path) -> Result<Self> {
         let capacity = VDIR_DEFAULT_CAPACITY;
-        let file_size = VDIR_HEADER_SIZE + (capacity * VDIR_ENTRY_SIZE);
+        let table_size = capacity * VDIR_ENTRY_SIZE;
+        let string_pool_offset = VDIR_HEADER_SIZE + table_size;
+        let file_size = string_pool_offset + VDIR_STRING_POOL_CAPACITY;
 
         let file = OpenOptions::new()
             .read(true)
@@ -61,7 +63,10 @@ impl VDir {
                 table_capacity: capacity as u32,
                 table_offset: VDIR_HEADER_SIZE as u32,
                 crc32: 0,
-                _pad: [0; 32],
+                string_pool_offset: string_pool_offset as u32,
+                string_pool_size: 0,
+                string_pool_capacity: VDIR_STRING_POOL_CAPACITY as u32,
+                _pad: [0; 20],
             };
             header.crc32 = Self::compute_header_crc(header);
             mmap.flush()?;
@@ -342,24 +347,29 @@ impl VDir {
 
     /// Resize VDir to a new capacity.
     /// Rehashes all existing entries into a larger table.
+    /// String pool is preserved and compacted during resize.
     pub fn resize(&mut self, new_capacity: usize) -> Result<()> {
         info!(
             "vdir: Resizing from {} to {} entries...",
             self.capacity, new_capacity
         );
 
-        // 1. Snapshot existing entries
-        // We use a Vec because we're about to unmap/remap.
-        let entries_snapshot: Vec<VDirEntry> = self
+        // 1. Snapshot existing entries and their paths
+        let entries_snapshot: Vec<(VDirEntry, Option<String>)> = self
             .entries()
             .iter()
             .filter(|e| !e.is_empty())
-            .cloned()
+            .map(|e| {
+                let path = self.get_path(e).map(|s| s.to_string());
+                (*e, path)
+            })
             .collect();
 
-        // 2. Resize file and remap
+        // 2. Resize file and remap (include string pool)
         let file = OpenOptions::new().read(true).write(true).open(&self.path)?;
-        let new_size = VDIR_HEADER_SIZE + (new_capacity * VDIR_ENTRY_SIZE);
+        let table_size = new_capacity * VDIR_ENTRY_SIZE;
+        let new_pool_offset = VDIR_HEADER_SIZE + table_size;
+        let new_size = new_pool_offset + VDIR_STRING_POOL_CAPACITY;
         file.set_len(new_size as u64)?;
 
         // Re-map MmapMut
@@ -370,17 +380,39 @@ impl VDir {
         self.begin_write();
         let header = self.header_mut();
         header.table_capacity = new_capacity as u32;
-        header.entry_count = 0; // Reset count, re-increment during insertion
+        header.entry_count = 0;
+        header.string_pool_offset = new_pool_offset as u32;
+        header.string_pool_size = 0; // Reset — will be repopulated
+        header.string_pool_capacity = VDIR_STRING_POOL_CAPACITY as u32;
 
         // 4. Clear table (zero out)
         let entries_ptr = unsafe { self.mmap.as_mut_ptr().add(VDIR_HEADER_SIZE) };
         unsafe {
-            std::ptr::write_bytes(entries_ptr, 0, new_capacity * VDIR_ENTRY_SIZE);
+            std::ptr::write_bytes(entries_ptr, 0, table_size);
         }
 
-        // 5. Re-insert (rehash)
-        for entry in entries_snapshot {
-            // Internal upsert-like logic without seqlock wrapping (already in seqlock)
+        // 5. Clear string pool
+        let pool_ptr = unsafe { self.mmap.as_mut_ptr().add(new_pool_offset) };
+        unsafe {
+            std::ptr::write_bytes(pool_ptr, 0, VDIR_STRING_POOL_CAPACITY);
+        }
+
+        // 6. Re-insert with paths (rehash + compact pool)
+        for (mut entry, path) in entries_snapshot {
+            // Re-allocate path in new pool if available
+            if let Some(ref p) = path {
+                if let Some((offset, len)) = self.string_pool_alloc(p.as_bytes()) {
+                    entry.path_offset = offset;
+                    entry.path_len = len;
+                } else {
+                    entry.path_offset = 0;
+                    entry.path_len = 0;
+                }
+            } else {
+                entry.path_offset = 0;
+                entry.path_len = 0;
+            }
+
             let slot = self
                 .find_slot(entry.path_hash)
                 .context("VDir full after resize")?;
@@ -393,6 +425,162 @@ impl VDir {
 
         info!("vdir: Resize complete.");
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // String Pool — bump allocator for path strings
+    // -----------------------------------------------------------------------
+
+    /// Allocate space in the string pool and write data.
+    /// Returns (offset_within_pool, len) or None if pool is full.
+    fn string_pool_alloc(&mut self, data: &[u8]) -> Option<(u32, u16)> {
+        if data.is_empty() || data.len() > u16::MAX as usize {
+            return None;
+        }
+
+        let header = self.header();
+        let pool_offset = header.string_pool_offset as usize;
+        let pool_used = header.string_pool_size as usize;
+        let pool_cap = header.string_pool_capacity as usize;
+
+        if pool_used + data.len() > pool_cap {
+            warn!(
+                used = pool_used,
+                needed = data.len(),
+                cap = pool_cap,
+                "String pool full"
+            );
+            return None;
+        }
+
+        let write_offset = pool_offset + pool_used;
+        let data_len = data.len() as u16;
+        let pool_relative_offset = pool_used as u32;
+
+        // Write data into mmap
+        self.mmap[write_offset..write_offset + data.len()].copy_from_slice(data);
+
+        // Update pool size in header
+        self.header_mut().string_pool_size = (pool_used + data.len()) as u32;
+
+        Some((pool_relative_offset, data_len))
+    }
+
+    /// Read a path string from the string pool for a given entry.
+    pub fn get_path(&self, entry: &VDirEntry) -> Option<&str> {
+        if entry.path_len == 0 {
+            return None;
+        }
+
+        let header = self.header();
+        let pool_offset = header.string_pool_offset as usize;
+        let start = pool_offset + entry.path_offset as usize;
+        let end = start + entry.path_len as usize;
+
+        if end > self.mmap.len() {
+            return None;
+        }
+
+        std::str::from_utf8(&self.mmap[start..end]).ok()
+    }
+
+    /// Insert or update entry with path string.
+    /// The path is stored in the string pool for readdir enumeration.
+    pub fn upsert_with_path(&mut self, mut entry: VDirEntry, path: &str) -> Result<()> {
+        // Dynamic Resize: Check if resulting load factor would exceed 75%
+        let current_count = self.header().entry_count as usize;
+        let existing = self.lookup(entry.path_hash);
+        let is_new = existing.is_none();
+
+        if is_new && (current_count + 1) as f64 / self.capacity as f64 > 0.75 {
+            self.resize(self.capacity * 2)?;
+        }
+
+        // Allocate path in string pool (skip if already stored with same content)
+        let should_alloc = if let Some(existing) = self.lookup(entry.path_hash) {
+            // Entry exists — check if path changed or was never stored
+            existing.path_len == 0
+        } else {
+            true
+        };
+
+        if should_alloc {
+            if let Some((offset, len)) = self.string_pool_alloc(path.as_bytes()) {
+                entry.path_offset = offset;
+                entry.path_len = len;
+            }
+            // If pool full: entry works without path (no readdir, but open/stat still work)
+        } else if let Some(existing) = self.lookup(entry.path_hash) {
+            // Preserve existing path offset/len
+            entry.path_offset = existing.path_offset;
+            entry.path_len = existing.path_len;
+        }
+
+        let slot = self.find_slot(entry.path_hash).context("VDir full")?;
+
+        let is_new = self.entries()[slot].is_empty();
+
+        self.begin_write();
+        self.entries_mut()[slot] = entry;
+
+        if is_new {
+            self.header_mut().entry_count += 1;
+        }
+
+        self.end_write();
+        Ok(())
+    }
+
+    /// List all entries whose path starts with the given directory prefix.
+    /// Returns (relative_name, entry) pairs for immediate children only.
+    ///
+    /// Example: list_directory("target/debug") returns entries like
+    ///   ("deps", entry), (".fingerprint", entry), etc.
+    pub fn list_directory(&self, dir_prefix: &str) -> Vec<(String, VDirEntry)> {
+        let mut results = Vec::new();
+        let prefix = if dir_prefix.ends_with('/') {
+            dir_prefix.to_string()
+        } else {
+            format!("{}/", dir_prefix)
+        };
+
+        let entries = self.entries();
+        for entry in entries.iter().take(self.capacity) {
+            if entry.is_empty() || entry.is_deleted() {
+                continue;
+            }
+
+            if let Some(path) = self.get_path(entry) {
+                if let Some(rest) = path.strip_prefix(&prefix) {
+                    // Immediate child: no more '/' in rest, or the first component
+                    let child_name = if let Some(slash_pos) = rest.find('/') {
+                        // This is a grandchild — extract the first component as a dir
+                        &rest[..slash_pos]
+                    } else {
+                        rest
+                    };
+
+                    if !child_name.is_empty() {
+                        // Deduplicate: check if we already have this child name
+                        let already = results
+                            .iter()
+                            .any(|(n, _): &(String, VDirEntry)| n == child_name);
+                        if !already {
+                            let is_subdir = rest.contains('/');
+                            let mut child_entry = *entry;
+                            if is_subdir {
+                                // Mark as directory for readdir
+                                child_entry.flags |= FLAG_DIR;
+                                child_entry.size = 0;
+                            }
+                            results.push((child_name.to_string(), child_entry));
+                        }
+                    }
+                }
+            }
+        }
+
+        results
     }
 }
 
@@ -446,7 +634,8 @@ mod tests {
             mtime_nsec: 0,
             mode: 0o644,
             flags: 0,
-            _pad: [0; 3],
+            path_offset: 0,
+            path_len: 0,
         };
         vdir.upsert(entry).unwrap();
 

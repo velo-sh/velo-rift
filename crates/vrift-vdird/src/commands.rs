@@ -164,10 +164,11 @@ impl CommandHandler {
             mtime_nsec,
             mode: entry.mode,
             flags: entry.flags,
-            _pad: [0; 3],
+            path_offset: 0,
+            path_len: 0,
         };
 
-        match self.vdir.lock().unwrap().upsert(vdir_entry) {
+        match self.vdir.lock().unwrap().upsert_with_path(vdir_entry, path) {
             Ok(_) => {
                 debug!(path = %path, "Upserted entry");
                 VeloResponse::ManifestAck { entry: Some(entry) }
@@ -208,7 +209,8 @@ impl CommandHandler {
                 mtime_nsec: (lmdb_entry.vnode.mtime % 1_000_000_000) as u32,
                 mode: lmdb_entry.vnode.mode,
                 flags: lmdb_entry.vnode.flags,
-                _pad: [0; 3],
+                path_offset: 0,
+                path_len: 0,
             })
         } else {
             None
@@ -224,7 +226,12 @@ impl CommandHandler {
                     path_hash: new_hash,
                     ..entry
                 };
-                match self.vdir.lock().unwrap().upsert(new_entry) {
+                match self
+                    .vdir
+                    .lock()
+                    .unwrap()
+                    .upsert_with_path(new_entry, new_path)
+                {
                     Ok(_) => {
                         debug!(old = %old_path, new = %new_path, "Manifest rename");
                         VeloResponse::ManifestAck { entry: None }
@@ -260,7 +267,8 @@ impl CommandHandler {
                 mtime_nsec: (lmdb_entry.vnode.mtime % 1_000_000_000) as u32,
                 mode: lmdb_entry.vnode.mode,
                 flags: lmdb_entry.vnode.flags,
-                _pad: [0; 3],
+                path_offset: 0,
+                path_len: 0,
             })
         } else {
             None
@@ -273,7 +281,7 @@ impl CommandHandler {
                     mtime_nsec,
                     ..entry
                 };
-                match self.vdir.lock().unwrap().upsert(updated) {
+                match self.vdir.lock().unwrap().upsert_with_path(updated, path) {
                     Ok(_) => {
                         debug!(path = %path, mtime_sec, "Updated mtime");
                         VeloResponse::ManifestAck { entry: None }
@@ -415,10 +423,11 @@ impl CommandHandler {
             mtime_nsec: src_meta.mtime_nsec() as u32,
             mode: src_meta.mode(),
             flags: if src_meta.is_dir() { FLAG_DIR } else { 0 },
-            _pad: [0; 3],
+            path_offset: 0,
+            path_len: 0,
         };
 
-        if let Err(e) = self.vdir.lock().unwrap().upsert(entry) {
+        if let Err(e) = self.vdir.lock().unwrap().upsert_with_path(entry, vpath) {
             return VeloResponse::Error(VeloError::io_error(format!("VDir update error: {}", e)));
         }
 
