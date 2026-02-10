@@ -150,36 +150,41 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
 // Solid-mode CAS materialization — auto-rebuild physical files from CAS
 // ============================================================================
 
-/// Try to materialize a file from CAS blob when open() gets ENOENT.
-/// Looks up VDir for the manifest key, constructs the CAS blob path,
-/// creates parent directories, and clonefiles (APFS CoW, zero-copy) the blob
-/// to the original path. Restores mtime so cargo fingerprints match.
+/// Materialize a file from CAS blob to a physical path.
+/// Uses clonefile (APFS CoW, zero-copy) with hardlink fallback.
+/// Restores mtime so cargo fingerprints match.
+///
+/// Called by:
+///   - stat_impl_common(): VDir HIT + physical ENOENT → materialize before returning metadata
+///   - try_materialize_from_cas(): open() ENOENT fallback
+///
+/// Returns true if physical file was successfully created.
 #[cfg(target_os = "macos")]
-unsafe fn try_materialize_from_cas(
+pub(crate) unsafe fn materialize_from_cas_entry(
     state: &InceptionLayerState,
-    vpath: &VfsPath,
-    path: *const c_char,
-    flags: c_int,
-    mode: mode_t,
-) -> Option<c_int> {
-    // Step 1: Look up VDir for this manifest key
-    let vdir_entry = vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key)?;
-
+    entry: &crate::state::VDirStatResult,
+    physical_path: &str,
+) -> bool {
     // Skip directories (cas_hash is all zeros)
-    if vdir_entry.cas_hash.iter().all(|b| *b == 0) {
-        return None;
+    if entry.cas_hash.iter().all(|b| *b == 0) {
+        return false;
     }
 
-    // Step 2: Construct CAS blob path
-    let blob_path = format_blob_path_fixed(&state.cas_root, &vdir_entry.cas_hash, vdir_entry.size);
-    let blob_cpath = std::ffi::CString::new(blob_path.as_str()).ok()?;
+    // Step 1: Construct CAS blob path
+    let blob_path = format_blob_path_fixed(&state.cas_root, &entry.cas_hash, entry.size);
+    let blob_cpath = match std::ffi::CString::new(blob_path.as_str()) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
 
-    // Step 3: Ensure parent directories exist
-    let path_str = CStr::from_ptr(path).to_str().ok()?;
-    ensure_parent_dirs(path_str);
+    // Step 2: Ensure parent directories exist
+    ensure_parent_dirs(physical_path);
 
-    // Step 4: clonefile (APFS CoW — zero data copy, instant)
-    let dst_cpath = std::ffi::CString::new(path_str).ok()?;
+    // Step 3: clonefile (APFS CoW — zero data copy, instant)
+    let dst_cpath = match std::ffi::CString::new(physical_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
     let at_fdcwd: libc::c_int = -2; // AT_FDCWD on macOS
     let rc = crate::syscalls::macos_raw::raw_clonefileat(
         at_fdcwd,
@@ -190,38 +195,84 @@ unsafe fn try_materialize_from_cas(
     );
 
     if rc != 0 {
+        let clone_errno = crate::get_errno();
+        if clone_errno == libc::EEXIST {
+            // Already materialized (e.g. by concurrent stat) — success
+            return true;
+        }
         // clonefile failed (e.g. non-APFS, cross-device) — try hardlink fallback
         let rc2 = crate::syscalls::macos_raw::raw_link(blob_cpath.as_ptr(), dst_cpath.as_ptr());
         if rc2 != 0 {
+            let link_errno = crate::get_errno();
+            if link_errno == libc::EEXIST {
+                return true; // Already materialized
+            }
             inception_log!(
-                "CAS materialize failed for '{}': clonefile={}, link={}",
-                vpath.manifest_key,
-                crate::get_errno(),
-                crate::get_errno()
+                "CAS materialize failed for '{}': clonefile errno={}, link errno={}",
+                physical_path,
+                clone_errno,
+                link_errno
             );
-            return None;
+            return false;
         }
     }
+
+    // Step 4: Clear macOS immutable flags (uchg) inherited from CAS blob via clonefile.
+    // CAS blobs have uchg for integrity protection, but the materialized copy is a
+    // normal working file that Cargo needs to link/unlink/rename freely.
+    // clonefile creates a separate inode, so clearing flags here doesn't affect CAS.
+    crate::syscalls::macos_raw::raw_chflags(dst_cpath.as_ptr(), 0);
+    // Also make the file writable (CAS blobs are 444, but Cargo may need to overwrite)
+    crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o644);
 
     // Step 5: Restore mtime so cargo fingerprints match
     let times = [
         libc::timeval {
-            tv_sec: vdir_entry.mtime_sec,
-            tv_usec: (vdir_entry.mtime_nsec / 1000) as i32,
+            tv_sec: entry.mtime_sec,
+            tv_usec: (entry.mtime_nsec / 1000) as i32,
         },
         libc::timeval {
-            tv_sec: vdir_entry.mtime_sec,
-            tv_usec: (vdir_entry.mtime_nsec / 1000) as i32,
+            tv_sec: entry.mtime_sec,
+            tv_usec: (entry.mtime_nsec / 1000) as i32,
         },
     ];
     crate::syscalls::macos_raw::raw_utimes(dst_cpath.as_ptr(), times.as_ptr());
 
-    // Step 6: Retry open — should succeed now
+    profile_count!(cas_materializations);
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) unsafe fn materialize_from_cas_entry(
+    _state: &InceptionLayerState,
+    _entry: &crate::state::VDirStatResult,
+    _physical_path: &str,
+) -> bool {
+    false
+}
+
+/// Try to materialize a file from CAS blob when open() gets ENOENT.
+/// Looks up VDir, materializes to physical path, then retries open.
+#[cfg(target_os = "macos")]
+unsafe fn try_materialize_from_cas(
+    state: &InceptionLayerState,
+    vpath: &VfsPath,
+    path: *const c_char,
+    flags: c_int,
+    mode: mode_t,
+) -> Option<c_int> {
+    let vdir_entry = vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key)?;
+    let path_str = CStr::from_ptr(path).to_str().ok()?;
+
+    if !materialize_from_cas_entry(state, &vdir_entry, path_str) {
+        return None;
+    }
+
+    inception_record!(EventType::OpenHit, vpath.manifest_key_hash, 12); // 12 = cas_materialize_hit
+
+    // Retry open — should succeed now
     let fd = raw_open(path, flags, mode);
     if fd >= 0 {
-        profile_count!(cas_materializations);
-        inception_record!(EventType::OpenHit, vpath.manifest_key_hash, 12); // 12 = cas_materialize_hit
-
         let mut cached_stat: libc::stat = std::mem::zeroed();
         cached_stat.st_size = vdir_entry.size as _;
         cached_stat.st_mode = vdir_entry.mode as _;
@@ -238,7 +289,7 @@ unsafe fn try_materialize_from_cas(
             vpath.manifest_key_hash,
         );
         inception_log!(
-            "CAS materialized '{}' (size={}, clonefile)",
+            "CAS materialized+opened '{}' (size={})",
             vpath.manifest_key,
             vdir_entry.size
         );

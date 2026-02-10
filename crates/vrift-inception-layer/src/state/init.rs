@@ -210,7 +210,8 @@ impl InceptionLayerState {
             socket_path.set(&unsafe { CStr::from_ptr(socket_ptr).to_string_lossy() });
         }
 
-        let (mmap_ptr, mmap_size) = open_manifest_mmap();
+        // VDir mmap opening deferred until after project_root_fs is set (line ~320).
+        // This avoids redundant VRIFT_MANIFEST parsing + heap alloc deadlock (BUG-009b).
 
         let mut project_root_fs = FixedString::<1024>::new();
         let manifest_ptr = unsafe { libc::getenv(c"VRIFT_MANIFEST".as_ptr()) };
@@ -318,6 +319,12 @@ impl InceptionLayerState {
         if project_root_fs.as_str().is_empty() {
             project_root_fs.set(vfs_prefix.as_str());
         }
+
+        // BUG-009b: Open VDir mmap AFTER project_root_fs is canonical.
+        // Uses VRIFT_VDIR_MMAP env if set, otherwise derives from project_root_fs.
+        let mmap_result = open_vdir_mmap(project_root_fs.as_str());
+        let mmap_ptr: *const u8 = mmap_result.0;
+        let mmap_size: usize = mmap_result.1;
 
         // RFC-CRIT-001: Bootstrap-Safe Allocation using raw_mmap
         // Replaces malloc to avoid fstat->shim->malloc deadlock on macOS (BUG-007)
@@ -449,17 +456,179 @@ impl InceptionLayerState {
 }
 
 // =============================================================================
-// open_manifest_mmap: mmap-based O(1) stat lookup (BUG-007b: #[inline(never)])
+// open_vdir_mmap: VDir mmap opener that takes canonical root (BUG-009b)
 // =============================================================================
 
-/// Open mmap'd manifest file for O(1) stat lookup.
-/// Returns (ptr, size) or (null, 0) if unavailable.
-/// Uses raw libc to avoid recursion through inception layer.
-/// BUG-007b: MUST NOT be inlined — allocates large stack buffers (PATH_MAX etc.)
-/// that would overflow the 512KB default pthread stack if merged into get().
+/// Open mmap'd VDir file using an already-canonical project root.
+///
+/// BUG-009b: Replaces open_manifest_mmap() which was called BEFORE project_root_fs
+/// was set, causing redundant VRIFT_MANIFEST parsing + heap allocations (BLAKE3,
+/// String, dirs::home_dir) that deadlock during inception init.
+///
+/// This version:
+/// 1. Checks VRIFT_VDIR_MMAP env for explicit override (zero-derivation path)
+/// 2. Otherwise: computes BLAKE3(project_root) on the stack, reads HOME env var
+///    directly (no dirs::home_dir), constructs VDir path on the stack
+/// 3. Opens and mmaps the file using raw syscalls only
 #[inline(never)]
 #[cold]
-#[allow(deprecated)]
+fn open_vdir_mmap(project_root: &str) -> (*const u8, usize) {
+    use std::ffi::CStr;
+    use std::fmt::Write;
+
+    // Check if mmap is explicitly disabled
+    unsafe {
+        let env_key = c"VRIFT_DISABLE_MMAP";
+        let env_val = libc::getenv(env_key.as_ptr());
+        if !env_val.is_null() {
+            let val = CStr::from_ptr(env_val).to_str().unwrap_or("0");
+            if val == "1" || val == "true" {
+                return (ptr::null(), 0);
+            }
+        }
+    }
+
+    // Step 1: Check VRIFT_VDIR_MMAP for explicit override
+    let vdir_mmap_ptr = unsafe { libc::getenv(c"VRIFT_VDIR_MMAP".as_ptr()) };
+
+    let mut path_buf = [0u8; 1024];
+    let mut writer = crate::macros::StackWriter::new(&mut path_buf);
+
+    if !vdir_mmap_ptr.is_null() {
+        // Direct path from env -- no derivation needed
+        let vdir_str = unsafe { CStr::from_ptr(vdir_mmap_ptr) };
+        let _ = write!(writer, "{}\0", vdir_str.to_str().unwrap_or(""));
+    } else if !project_root.is_empty() {
+        // Step 2: Derive VDir path from canonical project root
+        // Uses compute_project_id_raw (correct BLAKE3, heap-allocates String).
+        // NOTE: malloc is safe by this point in init; inline BLAKE3 was avoided
+        // because it produced wrong hash during dylib init on ARM64.
+        let project_id = vrift_config::path::compute_project_id_raw(project_root);
+        let mmap_path = vrift_config::path::get_vdir_mmap_path(&project_id);
+        match mmap_path {
+            Some(p) => {
+                let _ = write!(writer, "{}\0", p.display());
+            }
+            None => {
+                return (ptr::null(), 0);
+            }
+        }
+    } else {
+        return (ptr::null(), 0);
+    }
+    // writer is dropped here (end of if-else block), releasing the mutable borrow on path_buf
+
+    let mmap_path_ptr = path_buf.as_ptr() as *const libc::c_char;
+
+    // Debug log the derived path (read directly from path_buf now that writer is dropped)
+    {
+        let path_str = unsafe { CStr::from_ptr(mmap_path_ptr) };
+        let mut dbg_buf = [0u8; 512];
+        let mut dw = crate::macros::StackWriter::new(&mut dbg_buf);
+        let _ = writeln!(
+            dw,
+            "[vrift-inception] VDir mmap path: {}",
+            path_str.to_str().unwrap_or("?")
+        );
+        let dbg_msg = dw.as_str();
+        unsafe {
+            #[cfg(target_os = "macos")]
+            crate::syscalls::macos_raw::raw_write(
+                2,
+                dbg_msg.as_ptr() as *const libc::c_void,
+                dbg_msg.len(),
+            );
+            #[cfg(target_os = "linux")]
+            libc::write(2, dbg_msg.as_ptr() as *const libc::c_void, dbg_msg.len());
+        }
+    }
+
+    // Step 3: Open and mmap the VDir file
+    #[cfg(target_os = "macos")]
+    let fd = unsafe {
+        crate::syscalls::macos_raw::raw_open(mmap_path_ptr, libc::O_RDONLY | libc::O_CLOEXEC, 0)
+    };
+    #[cfg(target_os = "linux")]
+    let fd = unsafe {
+        crate::syscalls::linux_raw::raw_openat(
+            libc::AT_FDCWD,
+            mmap_path_ptr,
+            libc::O_RDONLY | libc::O_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        return (ptr::null(), 0);
+    }
+
+    // Get file size via fstat
+    let file_size = unsafe {
+        let mut st: libc::stat = core::mem::zeroed();
+        #[cfg(target_os = "macos")]
+        let ret = crate::syscalls::macos_raw::raw_fstat64(fd, &mut st);
+        #[cfg(target_os = "linux")]
+        let ret = libc::fstat(fd, &mut st);
+        if ret < 0 {
+            #[cfg(target_os = "macos")]
+            crate::syscalls::macos_raw::raw_close(fd);
+            #[cfg(target_os = "linux")]
+            libc::close(fd);
+            return (ptr::null(), 0);
+        }
+        st.st_size as usize
+    };
+
+    if file_size == 0 {
+        unsafe {
+            #[cfg(target_os = "macos")]
+            crate::syscalls::macos_raw::raw_close(fd);
+            #[cfg(target_os = "linux")]
+            libc::close(fd);
+        }
+        return (ptr::null(), 0);
+    }
+
+    // mmap the file
+    #[cfg(target_os = "macos")]
+    let mmap = unsafe {
+        crate::syscalls::macos_raw::raw_mmap(
+            ptr::null_mut(),
+            file_size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let mmap = unsafe {
+        crate::syscalls::linux_raw::raw_mmap(
+            ptr::null_mut(),
+            file_size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+
+    unsafe {
+        #[cfg(target_os = "macos")]
+        crate::syscalls::macos_raw::raw_close(fd);
+        #[cfg(target_os = "linux")]
+        libc::close(fd);
+    }
+
+    if mmap == libc::MAP_FAILED {
+        return (ptr::null(), 0);
+    }
+
+    (mmap as *const u8, file_size)
+}
+
+// =============================================================================
+// open_manifest_mmap (legacy — kept for reference, no longer called from init)
+// =============================================================================
 pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
     // Check if mmap is explicitly disabled
     unsafe {
@@ -716,10 +885,13 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
     let magic = unsafe { *(ptr as *const u32) };
     if magic != VDIR_MAGIC {
         // Fallback: Try legacy ManifestMmapHeader format
-        if size >= vrift_ipc::ManifestMmapHeader::SIZE {
-            let header = unsafe { &*(ptr as *const vrift_ipc::ManifestMmapHeader) };
-            if header.is_valid() {
-                return (ptr as *const u8, size);
+        #[allow(deprecated)]
+        {
+            if size >= vrift_ipc::ManifestMmapHeader::SIZE {
+                let header = unsafe { &*(ptr as *const vrift_ipc::ManifestMmapHeader) };
+                if header.is_valid() {
+                    return (ptr as *const u8, size);
+                }
             }
         }
         unsafe { libc::munmap(ptr, size) };

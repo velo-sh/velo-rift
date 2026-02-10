@@ -50,6 +50,33 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
 
     let manifest_path = vpath.manifest_key.as_str();
 
+    // BUG-011: VDir only stores file entries. Before VDir virtualization, check if the
+    // physical path exists as a directory. If so, skip VDir entirely and let kernel stat
+    // handle it. This prevents hash collisions from returning file metadata for directories,
+    // which breaks create_dir_all (sees EEXIST + !is_dir → error).
+    let phys_exists: bool;
+    {
+        let mut phys_buf: libc_stat = std::mem::zeroed();
+        let path_cstr = match std::ffi::CString::new(path_str) {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+        #[cfg(target_os = "macos")]
+        let phys_result = crate::syscalls::macos_raw::raw_stat(path_cstr.as_ptr(), &mut phys_buf);
+        #[cfg(target_os = "linux")]
+        let phys_result = crate::syscalls::linux_raw::raw_stat(path_cstr.as_ptr(), &mut phys_buf);
+        if phys_result == 0 {
+            let mode = phys_buf.st_mode as u32;
+            if mode & 0o170000 == 0o040000 {
+                // Physical path is a directory — skip VDir, let kernel stat handle it
+                return None;
+            }
+            phys_exists = true;
+        } else {
+            phys_exists = false;
+        }
+    }
+
     // PSFS: hot path — zero alloc, zero lock, zero syscall. Hit/Miss recorded below.
 
     // M4: Dirty Check - if file is being written to, bypass mmap cache
@@ -80,19 +107,42 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     } else {
         // Try Hot Stat Cache — Phase 1.3: seqlock-protected VDir lookup
         if let Some(entry) = vdir_lookup(state.mmap_ptr, state.mmap_size, manifest_path) {
+            // BUG-011: VDir only stores file entries. If the entry mode lacks S_IFREG
+            // (0o100000), it's likely a hash collision or corrupted entry — fall through
+            // to kernel stat so directories are reported correctly.
+            let mode_with_type = if entry.mode & 0o170000 == 0 {
+                // No S_IFMT bits set — assume regular file, add S_IFREG
+                entry.mode | 0o100000
+            } else if entry.mode & 0o170000 != 0o100000 {
+                // Has S_IFMT but not S_IFREG (e.g. S_IFDIR) — skip VDir, fall through
+                profile_count!(vdir_misses);
+                inception_record!(EventType::StatMiss, vpath.manifest_key_hash, 20);
+                return None;
+            } else {
+                entry.mode
+            };
+
+            // Solid Mode: materialize from CAS if physical file doesn't exist.
+            // VDir says "file exists" → ensure it ACTUALLY exists on disk.
+            // After this, all subsequent syscalls (open/unlink/chmod) hit real files.
+            // Also ensures filesystem is intact after exiting inception mode.
+            if !phys_exists {
+                crate::syscalls::open::materialize_from_cas_entry(state, &entry, path_str);
+            }
+
             profile_count!(vdir_hits);
             inception_record!(EventType::StatHit, vpath.manifest_key_hash, 11); // 11 = vdir_hit (seqlock)
             std::ptr::write_bytes(buf, 0, 1);
             (*buf).st_size = entry.size as _;
             #[cfg(target_os = "macos")]
             {
-                (*buf).st_mode = entry.mode as u16;
+                (*buf).st_mode = mode_with_type as u16;
                 (*buf).st_mtime = entry.mtime_sec as _;
                 (*buf).st_mtime_nsec = entry.mtime_nsec as _;
             }
             #[cfg(target_os = "linux")]
             {
-                (*buf).st_mode = entry.mode as _;
+                (*buf).st_mode = mode_with_type as _;
                 (*buf).st_mtime = entry.mtime_sec as _;
                 (*buf).st_mtime_nsec = entry.mtime_nsec as _;
             }

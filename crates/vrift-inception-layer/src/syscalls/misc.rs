@@ -3,8 +3,6 @@ use crate::state::*;
 use libc::c_void;
 use libc::{c_char, c_int};
 use std::ffi::CStr;
-#[cfg(target_os = "macos")]
-use std::fmt::Write;
 use std::sync::atomic::Ordering;
 
 /// RFC-0047: Rename implementation with VFS boundary enforcement
@@ -466,20 +464,11 @@ pub unsafe extern "C" fn linkat_inception(
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn unlink_inception(path: *const c_char) -> c_int {
-    let init_state = INITIALIZING.load(Ordering::Relaxed);
-    if init_state != 0
-        || crate::state::INCEPTION_LAYER_STATE
-            .load(std::sync::atomic::Ordering::Acquire)
-            .is_null()
-    {
-        if let Some(err) = quick_block_vfs_mutation(path) {
-            return err;
-        }
-        return crate::syscalls::macos_raw::raw_unlink(path);
-    }
-
-    // Pattern 2878: Always prefer raw syscall to avoid dlsym recursion in flat namespace
-    block_existing_vfs_entry(path).unwrap_or_else(|| crate::syscalls::macos_raw::raw_unlink(path))
+    // BUG-012: Always passthrough to kernel. Build cache mode does not need
+    // mutation blocking on unlink. The kernel correctly returns ENOENT for
+    // non-existent files. Blocking virtual-only files (in manifest but not
+    // on disk) with EEXIST breaks Cargo's build flow.
+    crate::syscalls::macos_raw::raw_unlink(path)
 }
 
 #[no_mangle]
@@ -697,27 +686,10 @@ pub unsafe extern "C" fn mkdir_inception(path: *const c_char, mode: libc::mode_t
         return crate::syscalls::macos_raw::raw_mkdir(path, mode);
     }
 
-    // RFC-0039: Check VDir (virtual view) for existence — NOT the static manifest.
-    // VDir reflects runtime mutations and is the authoritative source of truth.
-    if let Some(_guard) = InceptionLayerGuard::enter() {
-        if let Some(state) = InceptionLayerState::get() {
-            let path_str = CStr::from_ptr(path).to_string_lossy();
-            if let Some(vpath) = state.resolve_path(&path_str) {
-                // O(1) VDir mmap lookup — zero alloc, zero IPC
-                if let Some(vdir_result) =
-                    vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key)
-                {
-                    // Entry exists in VDir and not deleted → EEXIST
-                    if (vdir_result.flags & vrift_ipc::vdir_types::FLAG_DELETED) == 0 {
-                        crate::set_errno(libc::EEXIST);
-                        return -1;
-                    }
-                }
-            }
-        }
-    }
-
-    // VDir says not exists (or deleted) → let kernel create it
+    // BUG-010: Always pass mkdir through to kernel.
+    // The kernel correctly returns EEXIST for existing directories which
+    // std::fs::create_dir_all handles gracefully. The VDir EEXIST pre-check
+    // was blocking build tools (Cargo) that use create_dir_all patterns.
     let result = crate::syscalls::macos_raw::raw_mkdir(path, mode);
 
     // RFC-0039 Live Ingest: Update VDir with new directory entry
@@ -746,23 +718,7 @@ pub unsafe extern "C" fn mkdir_inception(path: *const c_char, mode: libc::mode_t
         return crate::syscalls::linux_raw::raw_mkdir(path, mode);
     }
 
-    // RFC-0039: Check VDir (virtual view) for existence — NOT the static manifest.
-    if let Some(_guard) = InceptionLayerGuard::enter() {
-        if let Some(state) = InceptionLayerState::get() {
-            let path_str = CStr::from_ptr(path).to_string_lossy();
-            if let Some(vpath) = state.resolve_path(&path_str) {
-                if let Some(vdir_result) =
-                    vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key)
-                {
-                    if (vdir_result.flags & vrift_ipc::vdir_types::FLAG_DELETED) == 0 {
-                        crate::set_errno(libc::EEXIST);
-                        return -1;
-                    }
-                }
-            }
-        }
-    }
-
+    // BUG-010: Always pass mkdir through to kernel (see macOS version for rationale)
     let result = crate::syscalls::linux_raw::raw_mkdir(path, mode);
 
     // RFC-0039 Live Ingest: Update VDir with new directory entry
@@ -868,105 +824,25 @@ pub unsafe extern "C" fn setattrlist_inception(
 }
 
 /// Helper: Check if path is in VFS and return EPERM if so
-/// RFC-0048: Must check is_vfs_ready() FIRST to avoid deadlock during init (Pattern 2543)
-/// RFC-0052: Standalone mode - check VRIFT_VFS_PREFIX even without daemon
 ///
-/// NOTE: This blocks ALL mutations in VFS territory (for destructive ops like unlink, chmod)
-/// For creation ops (mkdir, symlink), use block_existing_vfs_entry instead
-pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
-    if path.is_null() {
-        return None;
-    }
-
-    let path_str = CStr::from_ptr(path).to_str().ok()?;
-
-    // First try: Full inception layer state check (daemon connected)
-    if let Some(_guard) = InceptionLayerGuard::enter() {
-        if let Some(state) = InceptionLayerState::get() {
-            if let Some(vpath) = state.resolve_path(path_str) {
-                // RFC-0047: Block all mutations in VFS territory to ensure integrity
-                inception_log!(
-                    "blocking mutation on VFS territory path: '{}'",
-                    vpath.absolute
-                );
-                crate::set_errno(libc::EPERM);
-                return Some(-1);
-            }
-        }
-    }
-
-    if quick_is_in_vfs(path) {
-        inception_log!(
-            "blocking mutation (quick-check) on VFS path: '{}'",
-            path_str
-        );
-        crate::set_errno(libc::EPERM);
-        return Some(-1);
-    }
+/// BUG-012: DISABLED for build cache use case.
+/// RFC-0039 §5.1.2 Tier-2 mutable assets (build artifacts) require Break-Before-Write.
+/// Blanket mutation blocking prevents Cargo from performing normal build operations
+/// (unlink, chmod, rename, etc.). CAS integrity is preserved by:
+///   - open_cow_write() staging area + re-ingest on close
+///   - Tier-1 kernel protections: chmod 444 + chattr +i / chflags uchg
+pub(crate) unsafe fn block_vfs_mutation(_path: *const c_char) -> Option<c_int> {
     None
 }
 
 /// Helper for CREATION ops (mkdir, symlink): Only block if path EXISTS in manifest
-/// RFC-0039 Solid Mode: Allow creating new files/directories in VFS territory
-/// This enables compilers to create .o files, build dirs, etc.
+///
+/// BUG-012: DISABLED for build cache use case.
+/// Same rationale as block_vfs_mutation — Tier-2 build artifacts need free mutation.
 pub(crate) unsafe fn block_existing_vfs_entry_at(
-    dirfd: c_int,
-    path: *const c_char,
+    _dirfd: c_int,
+    _path: *const c_char,
 ) -> Option<c_int> {
-    if path.is_null() {
-        return None;
-    }
-
-    let path_str = CStr::from_ptr(path).to_str().ok()?;
-
-    let _guard = InceptionLayerGuard::enter()?;
-    let state = InceptionLayerState::get()?;
-    let mut resolved_vpath = None;
-
-    if path_str.starts_with('/') || dirfd == libc::AT_FDCWD {
-        resolved_vpath = state.resolve_path(path_str);
-    } else {
-        // Resolve dirfd
-        let mut _dir_path_buf = [0i8; 1024];
-        #[cfg(target_os = "macos")]
-        if crate::syscalls::macos_raw::raw_fcntl(
-            dirfd,
-            libc::F_GETPATH,
-            _dir_path_buf.as_mut_ptr() as i64,
-        ) == 0
-        {
-            let mut abs_buf = [0u8; 1024];
-            let mut aw = crate::macros::StackWriter::new(&mut abs_buf);
-            let dir_path_ptr = _dir_path_buf.as_ptr() as *const u8;
-            let dir_path_len = unsafe { libc::strlen(dir_path_ptr as *const i8) };
-
-            // Safety: libc::fcntl with F_GETPATH fills the buffer with a NUL-terminated C string.
-            // We use bytes directly to avoid to_string_lossy (which can allocate).
-            let dir_path_bytes = unsafe { std::slice::from_raw_parts(dir_path_ptr, dir_path_len) };
-            let _ = aw.write_str(std::str::from_utf8(dir_path_bytes).unwrap_or(""));
-            let _ = aw.write_char('/');
-            let _ = aw.write_str(path_str);
-
-            resolved_vpath = state.resolve_path(aw.as_str());
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // TODO: linux dirfd resolution
-        }
-    }
-
-    if let Some(vpath) = resolved_vpath {
-        // Check if this path exists in manifest
-        if state.query_manifest_ipc(&vpath).is_some() {
-            inception_log!(
-                "blocking creation on EXISTING VFS entry: '{}'",
-                vpath.absolute
-            );
-            crate::set_errno(libc::EEXIST);
-            return Some(-1);
-        }
-    }
-
     None
 }
 
@@ -995,28 +871,13 @@ pub(crate) unsafe fn quick_is_in_vfs(path: *const c_char) -> bool {
 }
 
 /// Lightweight VFS check for raw syscall path - avoids TLS/InceptionLayerGuard
-/// Only checks VRIFT_VFS_PREFIX env var, safe to call during early init
+///
+/// BUG-012: DISABLED for build cache use case.
+/// Same rationale as block_vfs_mutation — CAS paths are outside VFS prefix,
+/// so this guard never protects CAS. It only blocks project-directory mutations
+/// which Cargo needs for build artifact operations (link, copy, rename).
 #[inline]
-pub(crate) unsafe fn quick_block_vfs_mutation(path: *const c_char) -> Option<c_int> {
-    if path.is_null() {
-        return None;
-    }
-    let path_str = CStr::from_ptr(path).to_str().ok()?;
-    let env_name = b"VRIFT_VFS_PREFIX\0";
-    let vfs_prefix_ptr = libc::getenv(env_name.as_ptr() as *const c_char);
-    if !vfs_prefix_ptr.is_null() {
-        if let Ok(vfs_prefix) = CStr::from_ptr(vfs_prefix_ptr).to_str() {
-            let matches = path_str.starts_with(vfs_prefix);
-            if matches {
-                inception_log!(
-                    "blocking mutation (quick-block) on VFS path: '{}'",
-                    path_str
-                );
-                crate::set_errno(libc::EPERM);
-                return Some(-1);
-            }
-        }
-    }
+pub(crate) unsafe fn quick_block_vfs_mutation(_path: *const c_char) -> Option<c_int> {
     None
 }
 
