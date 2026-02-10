@@ -17,6 +17,9 @@ safe_rm() {
 
 echo "=== Velo Rift E2E Verification ==="
 
+# Force socket path to /tmp for consistent testing across platforms
+export VRIFT_SOCKET_PATH="/tmp/vrift.sock"
+
 # 1. Build project
 echo "[*] Building Velo Rift..."
 if [ "$SKIP_BUILD" == "true" ]; then

@@ -1,6 +1,6 @@
 //! Syscall interposition table for macOS/Linux inception layer.
 //! Safety: All extern "C" functions here are dangerous FFI and must be used correctly.
-#![allow(clippy::missing_safety_doc)]
+// Clippy lint checks enabled
 
 #[cfg(target_os = "macos")]
 use crate::syscalls::dir::{
@@ -49,7 +49,9 @@ use crate::syscalls::path::realpath_inception;
 use libc::{c_char, c_int, c_void, mode_t};
 
 #[cfg(target_os = "macos")]
-use libc::{c_long, dirent, pid_t, size_t, ssize_t, timeval, DIR};
+use libc::{c_long, dirent, pid_t, timeval, DIR};
+#[cfg(target_os = "macos")]
+use libc::{size_t, ssize_t};
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
@@ -962,8 +964,8 @@ pub unsafe extern "C" fn readlinkat(
     dirfd: c_int,
     path: *const c_char,
     buf: *mut c_char,
-    bufsiz: size_t,
-) -> ssize_t {
+    bufsiz: libc::size_t,
+) -> libc::ssize_t {
     crate::syscalls::misc::readlinkat_inception(dirfd, path, buf, bufsiz)
 }
 

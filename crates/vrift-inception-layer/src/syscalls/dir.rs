@@ -127,14 +127,12 @@ pub unsafe extern "C" fn readdir_inception(dir: *mut c_void) -> *mut libc::diren
             // Copy name to buffer
             let name_bytes = entry.name.as_bytes();
             let copy_len = name_bytes.len().min(1023);
-            std::ptr::copy_nonoverlapping(
-                name_bytes.as_ptr(),
-                DIRENT_BUF.d_name.as_mut_ptr() as *mut u8,
-                copy_len,
-            );
-            DIRENT_BUF.d_name[copy_len] = 0;
+            let dirent_ptr = std::ptr::addr_of_mut!(DIRENT_BUF);
+            let d_name_ptr = std::ptr::addr_of_mut!((*dirent_ptr).d_name);
+            std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), d_name_ptr as *mut u8, copy_len);
+            (*dirent_ptr).d_name[copy_len] = 0;
 
-            return &mut DIRENT_BUF;
+            return dirent_ptr;
         }
     }
 

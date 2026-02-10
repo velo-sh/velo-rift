@@ -32,12 +32,11 @@
 //!
 //! See `docs/INCEPTION_LAYER_SAFETY_GUIDE.md` for full documentation.
 
-// Allow dead code during incremental restoration - functions will be connected in later phases
+// Allow dead code during incremental restoration
 #![allow(dead_code)]
-// Allow unsafe FFI functions without safety docs - these are inherently unsafe C ABI
+// Allow unsafe FFI functions without safety docs - extensive FFI codebase
 #![allow(clippy::missing_safety_doc)]
-// Allow static mut refs for FFI buffers - carefully managed in single-threaded context
-#![allow(static_mut_refs)]
+// Clippy lint checks enabled (static_mut_refs fixed)
 
 // Macros must be defined before modules that use them
 #[macro_use]

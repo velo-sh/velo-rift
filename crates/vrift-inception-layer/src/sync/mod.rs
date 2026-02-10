@@ -26,7 +26,12 @@ pub fn get_reactor() -> Option<&'static Reactor> {
     if !REACTOR_INITIALIZED.load(std::sync::atomic::Ordering::Acquire) {
         return None;
     }
-    unsafe { (*REACTOR.get()).as_ref() }
+    // Use addr_of_mut to avoid creating a reference to static mut
+    unsafe {
+        let reactor_cell_ptr = std::ptr::addr_of_mut!(REACTOR);
+        let reactor_option_ptr = reactor_cell_ptr as *mut Option<Reactor>;
+        (*reactor_option_ptr).as_ref()
+    }
 }
 
 /// Called once during initialization

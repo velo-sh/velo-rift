@@ -458,8 +458,8 @@ pub unsafe extern "C" fn statx_inception(
 
     // VFS lookup
     if let Some(state) = InceptionLayerState::get() {
-        if state.inception_applicable(path_str) {
-            if let Some(entry) = state.query_manifest(path_str) {
+        if let Some(vpath) = state.resolve_path(path_str) {
+            if let Some(entry) = state.query_manifest(&vpath) {
                 std::ptr::write_bytes(buf, 0, 1);
                 (*buf).stx_mask = 0x7FF; // basic stats
                 (*buf).stx_size = entry.size as _;

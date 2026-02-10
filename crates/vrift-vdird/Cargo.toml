@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Per-project daemon for vrift virtual directory management"
 
+[[bin]]
+name = "vdir_d"
+path = "src/main.rs"
+
 [dependencies]
 # Core
 tokio = { version = "1", features = ["full"] }

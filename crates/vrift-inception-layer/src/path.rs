@@ -60,6 +60,7 @@ impl PathResolver {
 
         // 3. Check VFS applicability
         let prefix = self.vfs_prefix.as_str();
+        #[allow(unused_mut)]
         let mut applicable = normalized.starts_with(prefix);
 
         // RFC-0050: Handle macOS /tmp symlink invisibility
@@ -88,6 +89,7 @@ impl PathResolver {
         let mut key_fs = FixedString::<1024>::new();
         let proj_root_str = self.project_root.as_str();
 
+        #[allow(unused_mut)]
         let mut normalized_for_strip = normalized;
         #[cfg(target_os = "macos")]
         if !normalized.starts_with(proj_root_str) && normalized.starts_with("/tmp/") {

@@ -3,6 +3,7 @@ use crate::state::*;
 use libc::c_void;
 use libc::{c_char, c_int};
 use std::ffi::CStr;
+#[cfg(target_os = "macos")]
 use std::fmt::Write;
 use std::sync::atomic::Ordering;
 
@@ -920,17 +921,17 @@ pub(crate) unsafe fn block_existing_vfs_entry_at(
         resolved_vpath = state.resolve_path(path_str);
     } else {
         // Resolve dirfd
-        let mut dir_path_buf = [0i8; 1024];
+        let mut _dir_path_buf = [0i8; 1024];
         #[cfg(target_os = "macos")]
         if crate::syscalls::macos_raw::raw_fcntl(
             dirfd,
             libc::F_GETPATH,
-            dir_path_buf.as_mut_ptr() as i64,
+            _dir_path_buf.as_mut_ptr() as i64,
         ) == 0
         {
             let mut abs_buf = [0u8; 1024];
             let mut aw = crate::macros::StackWriter::new(&mut abs_buf);
-            let dir_path_ptr = dir_path_buf.as_ptr() as *const u8;
+            let dir_path_ptr = _dir_path_buf.as_ptr() as *const u8;
             let dir_path_len = unsafe { libc::strlen(dir_path_ptr as *const i8) };
 
             // Safety: libc::fcntl with F_GETPATH fills the buffer with a NUL-terminated C string.
@@ -1400,7 +1401,7 @@ pub unsafe extern "C" fn readlinkat_inception(
     }
 
     // For AT_FDCWD with absolute paths, use VFS-resolved readlink path
-    if !path.is_null() && (dirfd == libc::AT_FDCWD || *path == b'/' as i8) {
+    if !path.is_null() && (dirfd == libc::AT_FDCWD || *path == b'/' as c_char) {
         // Delegate to readlink inception logic which handles VFS paths
         if let Some(_guard) = InceptionLayerGuard::enter() {
             if let Some(state) = InceptionLayerState::get() {
@@ -1420,7 +1421,7 @@ pub unsafe extern "C" fn readlinkat_inception(
     #[cfg(target_os = "macos")]
     return crate::syscalls::macos_raw::raw_readlinkat(dirfd, path, buf, bufsiz);
     #[cfg(target_os = "linux")]
-    return crate::syscalls::linux_raw::raw_readlinkat(dirfd, path, buf, bufsiz);
+    return crate::syscalls::linux_raw::raw_readlinkat(dirfd, path, buf as *mut _, bufsiz);
 }
 
 /// exchangedata_inception: Block atomic file swaps involving VFS (macOS only)

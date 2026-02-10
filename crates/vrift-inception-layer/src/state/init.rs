@@ -389,7 +389,10 @@ impl InceptionLayerState {
                     ring_buffer: crate::sync::RingBuffer::new(),
                     started: std::sync::atomic::AtomicBool::new(true),
                 };
-                *crate::sync::REACTOR.get() = Some(reactor);
+                // Use addr_of_mut to avoid creating a reference to static mut
+                let reactor_ptr = std::ptr::addr_of_mut!(crate::sync::REACTOR)
+                    as *mut Option<crate::sync::Reactor>;
+                *reactor_ptr = Some(reactor);
 
                 // Start Worker Thread via pthread LATER
                 // BUG-008: Spawning in ctor causes deadlock with dyld loader lock
