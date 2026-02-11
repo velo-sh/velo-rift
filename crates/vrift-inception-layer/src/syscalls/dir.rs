@@ -315,8 +315,46 @@ pub unsafe extern "C" fn chdir_inception(path: *const libc::c_char) -> c_int {
         }
 
         // Not in VFS domain, passthrough
-        raw_chdir(path)
+        let status = raw_chdir(path);
+        if status == 0 {
+            // Update CWD cache
+            let mut buf = [0u8; 1024];
+            let res = crate::syscalls::macos_raw::raw_getcwd(
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+            );
+            if !res.is_null() {
+                if let Ok(s) = CStr::from_ptr(res).to_str() {
+                    let mut fs = FixedString::new();
+                    fs.set(s);
+                    CACHED_CWD.with(|cache| {
+                        *cache.borrow_mut() = Some(fs);
+                    });
+                }
+            }
+        }
+        status
     }
     #[cfg(target_os = "linux")]
-    return crate::syscalls::linux_raw::raw_chdir(path);
+    {
+        let status = crate::syscalls::linux_raw::raw_chdir(path);
+        if status == 0 {
+            // Update CWD cache
+            let mut buf = [0u8; 1024];
+            let res = crate::syscalls::linux_raw::raw_getcwd(
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+            );
+            if !res.is_null() {
+                if let Ok(s) = CStr::from_ptr(res).to_str() {
+                    let mut fs = FixedString::new();
+                    fs.set(s);
+                    CACHED_CWD.with(|cache| {
+                        *cache.borrow_mut() = Some(fs);
+                    });
+                }
+            }
+        }
+        status
+    }
 }

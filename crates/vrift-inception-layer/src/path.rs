@@ -48,33 +48,44 @@ impl PathResolver {
         //    and read relative "Cargo.toml" — that incorrectly resolved to
         //    {project_root}/Cargo.toml instead of the crate's own Cargo.toml.
         if !path.starts_with('/') {
-            let mut cwd_buf = [0u8; 1024];
-            #[cfg(target_os = "macos")]
-            let cwd_ptr = unsafe {
-                crate::syscalls::macos_raw::raw_getcwd(
-                    cwd_buf.as_mut_ptr() as *mut libc::c_char,
-                    cwd_buf.len(),
-                )
-            };
-            #[cfg(target_os = "linux")]
-            let cwd_ptr = unsafe {
-                crate::syscalls::linux_raw::raw_getcwd(
-                    cwd_buf.as_mut_ptr() as *mut libc::c_char,
-                    cwd_buf.len(),
-                )
-            };
-            if cwd_ptr.is_null() {
-                return None;
+            let mut found = false;
+            crate::state::CACHED_CWD.with(|cache| {
+                if let Some(ref fs) = *cache.borrow() {
+                    let _ = write!(abs_writer, "{}/{}", fs.as_str(), path);
+                    found = true;
+                }
+            });
+
+            if !found {
+                let mut cwd_buf = [0u8; 1024];
+                #[cfg(target_os = "macos")]
+                let cwd_ptr = unsafe {
+                    crate::syscalls::macos_raw::raw_getcwd(
+                        cwd_buf.as_mut_ptr() as *mut libc::c_char,
+                        cwd_buf.len(),
+                    )
+                };
+                #[cfg(target_os = "linux")]
+                let cwd_ptr = unsafe {
+                    crate::syscalls::linux_raw::raw_getcwd(
+                        cwd_buf.as_mut_ptr() as *mut libc::c_char,
+                        cwd_buf.len(),
+                    )
+                };
+                if cwd_ptr.is_null() {
+                    return None;
+                }
+                let cwd = unsafe { CStr::from_ptr(cwd_buf.as_ptr() as *const libc::c_char) };
+                let cwd_str = cwd.to_str().ok()?;
+                let _ = write!(abs_writer, "{}/{}", cwd_str, path);
+
+                // Update cache for next time
+                let mut fs = crate::state::FixedString::new();
+                fs.set(cwd_str);
+                crate::state::CACHED_CWD.with(|cache| {
+                    *cache.borrow_mut() = Some(fs);
+                });
             }
-            let cwd = unsafe { CStr::from_ptr(cwd_buf.as_ptr() as *const c_char) };
-            let cwd_str = cwd.to_str().ok()?;
-            let _ = write!(abs_writer, "{}/{}", cwd_str, path);
-            crate::inception_log!(
-                "RESOLVE relative: '{}' in '{}' -> {}",
-                path,
-                cwd_str,
-                abs_writer.as_str()
-            );
         } else {
             let _ = write!(abs_writer, "{}", path);
         };
@@ -105,12 +116,12 @@ impl PathResolver {
         // /Users/.../velo/target/debug/..., which must be tracked for close-reingest).
         if !applicable && !self.project_root.is_empty() {
             let proj_root_str = self.project_root.as_str();
-            if normalized.starts_with(proj_root_str)
-                && (normalized.len() == proj_root_str.len()
-                    || proj_root_str.ends_with('/')
-                    || normalized.as_bytes()[proj_root_str.len()] == b'/')
-            {
-                applicable = true;
+            if normalized.starts_with(proj_root_str) {
+                let boundary_char = normalized.as_bytes().get(proj_root_str.len()).copied();
+                // Match if exact or if followed by component separator
+                if boundary_char.is_none() || boundary_char == Some(b'/') {
+                    applicable = true;
+                }
             }
         }
 
@@ -160,20 +171,23 @@ impl PathResolver {
         if !normalized_for_strip.is_empty()
             && !self.project_root.is_empty()
             && normalized_for_strip.starts_with(proj_root_str)
-            && (normalized_for_strip.len() == proj_root_str.len()
-                || proj_root_str.ends_with('/')
-                || normalized_for_strip.as_bytes()[proj_root_str.len()] == b'/')
         {
-            let key = normalized_for_strip
-                .strip_prefix(proj_root_str)
-                .unwrap_or("");
-            if !key.starts_with('/') {
-                let mut key_buf = [0u8; 1024];
-                let mut kw = crate::macros::StackWriter::new(&mut key_buf);
-                let _ = write!(kw, "/{}", key);
-                key_fs.set(kw.as_str());
-            } else {
-                key_fs.set(key);
+            let boundary_char = normalized_for_strip
+                .as_bytes()
+                .get(proj_root_str.len())
+                .copied();
+            if boundary_char.is_none() || boundary_char == Some(b'/') {
+                let key = normalized_for_strip
+                    .strip_prefix(proj_root_str)
+                    .unwrap_or("");
+                if !key.starts_with('/') {
+                    let mut key_buf = [0u8; 1024];
+                    let mut kw = crate::macros::StackWriter::new(&mut key_buf);
+                    let _ = write!(kw, "/{}", key);
+                    key_fs.set(kw.as_str());
+                } else {
+                    key_fs.set(key);
+                }
             }
         } else {
             // Check if normalized matches the prefix.

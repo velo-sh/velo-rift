@@ -204,6 +204,12 @@ pub static EVENT_NAMES: &[&str] = &[
     "ReingestFail",
 ];
 
+// RFC-0050: Thread-local CWD cache to avoid redundant getcwd() syscalls.
+// Updated in chdir_inception, used in PathResolver::resolve.
+thread_local! {
+    pub(crate) static CACHED_CWD: std::cell::RefCell<Option<FixedString<1024>>> = const { std::cell::RefCell::new(None) };
+}
+
 // ============================================================================
 // DirtyTracker: Lock-Free Pending Write Tracking (M3: Dirty Bit Logic)
 // ============================================================================

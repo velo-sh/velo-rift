@@ -46,7 +46,16 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     let state = InceptionLayerState::get()?;
 
     // 1. Resolve path to VFS domain
-    let vpath = state.resolve_path(path_str)?;
+    let vpath = match state.resolve_path(path_str) {
+        Some(p) => {
+            profile_count!(vfs_handled);
+            p
+        }
+        None => {
+            profile_count!(vfs_passthrough);
+            return None;
+        }
+    };
     let manifest_path = vpath.manifest_key.as_str();
 
     // BUG-011: VDir only stores file entries. Before VDir virtualization, check if the
@@ -57,21 +66,49 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     let mut phys_exists = false;
     {
         // Use the resolved absolute physical path for the physical check
-        let path_cstr = match std::ffi::CString::new(vpath.absolute.as_str()) {
-            Ok(c) => c,
-            Err(_) => return None,
-        };
-        #[cfg(target_os = "macos")]
-        let phys_result = crate::syscalls::macos_raw::raw_stat(path_cstr.as_ptr(), &mut phys_buf);
-        #[cfg(target_os = "linux")]
-        let phys_result = crate::syscalls::linux_raw::raw_stat(path_cstr.as_ptr(), &mut phys_buf);
-        if phys_result == 0 {
-            let mode = phys_buf.st_mode as u32;
-            if mode & 0o170000 == 0o040000 {
-                // Physical path is a directory — skip VDir, let kernel stat handle it
-                return None;
+        // Performance: Optimization for common path lengths using stack CString
+        let path_bytes = vpath.absolute.as_str().as_bytes();
+        let mut stack_buf = [0u8; 1024];
+        if path_bytes.len() < 1023 {
+            stack_buf[..path_bytes.len()].copy_from_slice(path_bytes);
+            stack_buf[path_bytes.len()] = 0;
+            let path_ptr = stack_buf.as_ptr() as *const libc::c_char;
+
+            #[cfg(target_os = "macos")]
+            let phys_result = crate::syscalls::macos_raw::raw_stat(path_ptr, &mut phys_buf);
+            #[cfg(target_os = "linux")]
+            let phys_result = crate::syscalls::linux_raw::raw_stat(path_ptr, &mut phys_buf);
+
+            if phys_result == 0 {
+                let mode = phys_buf.st_mode as u32;
+                if mode & 0o170000 == 0o040000 {
+                    // Physical path is a directory — skip VDir, let kernel stat handle it
+                    return None;
+                }
+                phys_exists = true;
             }
-            phys_exists = true;
+        } else {
+            // Fallback to heap for very long paths
+            let path_cstr = match std::ffi::CString::new(vpath.absolute.as_str()) {
+                Ok(c) => c,
+                Err(_) => return None,
+            };
+
+            #[cfg(target_os = "macos")]
+            let phys_result =
+                crate::syscalls::macos_raw::raw_stat(path_cstr.as_ptr(), &mut phys_buf);
+            #[cfg(target_os = "linux")]
+            let phys_result =
+                crate::syscalls::linux_raw::raw_stat(path_cstr.as_ptr(), &mut phys_buf);
+
+            if phys_result == 0 {
+                let mode = phys_buf.st_mode as u32;
+                if mode & 0o170000 == 0o040000 {
+                    // Physical path is a directory — skip VDir, let kernel stat handle it
+                    return None;
+                }
+                phys_exists = true;
+            }
         }
     }
 

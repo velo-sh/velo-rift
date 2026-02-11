@@ -396,8 +396,32 @@ fn cmd_run(
     let _shim_path = find_shim_library()?;
     let mut cmd = std::process::Command::new(&command[0]);
     cmd.args(&command[1..]);
-    cmd.env("VRIFT_MANIFEST", normalize_for_ipc(manifest)?)
-        .env("VR_THE_SOURCE", normalize_or_original(cas_root));
+    let manifest_normalized = normalize_for_ipc(manifest)?;
+    let cas_normalized = normalize_or_original(cas_root);
+
+    // Set Velo environment variables
+    cmd.env("VRIFT_MANIFEST", &manifest_normalized);
+    cmd.env("VR_THE_SOURCE", &cas_normalized);
+
+    // RFC-0050: Auto-derive VFS prefix from manifest path if not set
+    let manifest_str = manifest_normalized.to_string_lossy();
+    let root_path = if let Some(idx) = manifest_str.find("/.vrift/") {
+        &manifest_str[..idx]
+    } else if let Some(stripped) = manifest_str.strip_suffix("/.vrift") {
+        stripped
+    } else if let Some(idx) = manifest_str.rfind('/') {
+        &manifest_str[..idx]
+    } else {
+        manifest_str.as_ref()
+    };
+    cmd.env("VRIFT_VFS_PREFIX", root_path);
+
+    // Set platform-specific library preload
+    #[cfg(target_os = "macos")]
+    {
+        cmd.env("DYLD_INSERT_LIBRARIES", &_shim_path);
+        cmd.env("DYLD_FORCE_FLAT_NAMESPACE", "1");
+    }
     #[cfg(target_os = "linux")]
     {
         cmd.env("LD_PRELOAD", &_shim_path);

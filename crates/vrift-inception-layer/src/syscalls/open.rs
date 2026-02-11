@@ -63,58 +63,96 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
                 // BUG-016: Cross-process Dirty Detection Heuristic (Open path).
                 // Similar to stat_impl_common, we check if a physical file exists and is newer.
                 let mut phys_buf: libc::stat = unsafe { std::mem::zeroed() };
-                let abs_path_cstr = match std::ffi::CString::new(vpath.absolute.as_str()) {
-                    Ok(c) => c,
-                    Err(_) => return None,
-                };
-                #[cfg(target_os = "macos")]
-                let phys_rc =
-                    crate::syscalls::macos_raw::raw_stat(abs_path_cstr.as_ptr(), &mut phys_buf);
-                #[cfg(target_os = "linux")]
-                let phys_rc =
-                    crate::syscalls::linux_raw::raw_stat(abs_path_cstr.as_ptr(), &mut phys_buf);
+                let phys_rc;
 
-                let phys_mtime_sec = phys_buf.st_mtime as u64;
-                let phys_mtime_nsec = phys_buf.st_mtime_nsec as u64;
+                let path_bytes = vpath.absolute.as_str().as_bytes();
+                let mut stack_buf = [0u8; 1024];
+                if path_bytes.len() < 1023 {
+                    stack_buf[..path_bytes.len()].copy_from_slice(path_bytes);
+                    stack_buf[path_bytes.len()] = 0;
+                    let path_ptr = stack_buf.as_ptr() as *const libc::c_char;
 
-                inception_log!(
-                    "DEBUG mtime '{}': phys={}.{:09}, vdir={}.0",
-                    vpath.manifest_key,
-                    phys_mtime_sec,
-                    phys_mtime_nsec,
-                    vdir_entry.mtime_sec
-                );
-
-                // BUG-016: Cross-process Dirty Detection (Nanosecond-aware).
-                let is_phys_newer = (phys_mtime_sec > (vdir_entry.mtime_sec as u64))
-                    || (phys_mtime_sec == (vdir_entry.mtime_sec as u64) && phys_mtime_nsec > 0);
-
-                if phys_rc == 0 && is_phys_newer {
-                    inception_log!(
-                        "physical file newer than VDir entry, bypassing VDir for '{}' (phys={}.{:09}, vdir={}.0)",
-                        vpath.manifest_key,
-                        phys_mtime_sec,
-                        phys_mtime_nsec,
-                        vdir_entry.mtime_sec
-                    );
-                    profile_count!(vdir_misses);
-
-                    // FALLBACK: Open the physical file using its absolute path.
-                    // This is critical because the process CWD might be virtual.
-                    let fd =
-                        crate::syscalls::macos_raw::raw_open(abs_path_cstr.as_ptr(), flags, mode);
-                    if fd >= 0 {
-                        crate::syscalls::io::track_fd(
-                            fd,
-                            &vpath.manifest_key,
-                            false,
-                            None,
-                            vpath.manifest_key_hash,
-                        );
-                        return Some(fd);
+                    #[cfg(target_os = "macos")]
+                    {
+                        phys_rc = crate::syscalls::macos_raw::raw_stat(path_ptr, &mut phys_buf);
                     }
-                    return None; // Fallback to raw open on original path if absolute open fails
+                    #[cfg(target_os = "linux")]
+                    {
+                        phys_rc = crate::syscalls::linux_raw::raw_stat(path_ptr, &mut phys_buf);
+                    }
+
+                    let phys_mtime_sec = phys_buf.st_mtime as u64;
+                    let phys_mtime_nsec = phys_buf.st_mtime_nsec as u64;
+
+                    // BUG-016: Cross-process Dirty Detection (Nanosecond-aware).
+                    let is_phys_newer = (phys_mtime_sec > (vdir_entry.mtime_sec as u64))
+                        || (phys_mtime_sec == (vdir_entry.mtime_sec as u64) && phys_mtime_nsec > 0);
+
+                    if phys_rc == 0 && is_phys_newer {
+                        profile_count!(vdir_misses);
+                        let fd = crate::syscalls::macos_raw::raw_open(path_ptr, flags, mode);
+                        if fd >= 0 {
+                            crate::syscalls::io::track_fd(
+                                fd,
+                                &vpath.manifest_key,
+                                false,
+                                None,
+                                vpath.manifest_key_hash,
+                            );
+                            return Some(fd);
+                        }
+                        return None;
+                    }
+                } else {
+                    let abs_path_cstr = match std::ffi::CString::new(vpath.absolute.as_str()) {
+                        Ok(c) => c,
+                        Err(_) => return None,
+                    };
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        phys_rc = crate::syscalls::macos_raw::raw_stat(
+                            abs_path_cstr.as_ptr(),
+                            &mut phys_buf,
+                        );
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        phys_rc = crate::syscalls::linux_raw::raw_stat(
+                            abs_path_cstr.as_ptr(),
+                            &mut phys_buf,
+                        );
+                    }
+
+                    let phys_mtime_sec = phys_buf.st_mtime as u64;
+                    let phys_mtime_nsec = phys_buf.st_mtime_nsec as u64;
+
+                    // BUG-016: Cross-process Dirty Detection (Nanosecond-aware).
+                    let is_phys_newer = (phys_mtime_sec > (vdir_entry.mtime_sec as u64))
+                        || (phys_mtime_sec == (vdir_entry.mtime_sec as u64) && phys_mtime_nsec > 0);
+
+                    if phys_rc == 0 && is_phys_newer {
+                        profile_count!(vdir_misses);
+                        let fd = crate::syscalls::macos_raw::raw_open(
+                            abs_path_cstr.as_ptr(),
+                            flags,
+                            mode,
+                        );
+                        if fd >= 0 {
+                            crate::syscalls::io::track_fd(
+                                fd,
+                                &vpath.manifest_key,
+                                false,
+                                None,
+                                vpath.manifest_key_hash,
+                            );
+                            return Some(fd);
+                        }
+                        return None;
+                    }
                 }
+
+                // duplicate record removed (handled above)
 
                 if is_write {
                     return open_cow_write(state, &vpath, blob_path.as_str(), flags, mode);
@@ -157,7 +195,10 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
                 vpath.manifest_key,
                 is_write
             );
-            inception_record!(EventType::OpenMiss, vpath.manifest_key_hash, 0);
+            // RFC-0051++: Solid Mode - ensure parent directories exist for VFS-territory opens.
+            // If the parent directory is supposed to exist according to readdir but is
+            // missing physically, we must materialize it to avoid ENOENT on O_CREAT.
+            ensure_parent_dirs(vpath.absolute.as_str());
 
             let fd = unsafe { raw_open(path, flags, mode) };
             if fd >= 0 {
@@ -366,12 +407,11 @@ unsafe fn try_materialize_from_cas(
 }
 
 /// Recursively create parent directories for a path using raw mkdir syscalls.
-#[cfg(target_os = "macos")]
-unsafe fn ensure_parent_dirs(path: &str) {
+pub(crate) unsafe fn ensure_parent_dirs(path: &str) {
     // Find the last '/' to get parent directory
     if let Some(last_slash) = path.rfind('/') {
         let parent = &path[..last_slash];
-        if parent.is_empty() {
+        if parent.is_empty() || parent == "/" {
             return;
         }
         // Try to create the parent — if it fails with ENOENT, recurse
@@ -379,12 +419,34 @@ unsafe fn ensure_parent_dirs(path: &str) {
             Ok(c) => c,
             Err(_) => return,
         };
+
+        #[cfg(target_os = "macos")]
         let rc = crate::syscalls::macos_raw::raw_mkdir(parent_cpath.as_ptr(), 0o755);
-        if rc != 0 && crate::get_errno() == libc::ENOENT {
-            // Parent's parent doesn't exist — recurse
-            ensure_parent_dirs(parent);
-            // Retry after creating grandparent
-            crate::syscalls::macos_raw::raw_mkdir(parent_cpath.as_ptr(), 0o755);
+        #[cfg(target_os = "linux")]
+        let rc =
+            crate::syscalls::linux_raw::raw_mkdirat(libc::AT_FDCWD, parent_cpath.as_ptr(), 0o755);
+
+        if rc != 0 {
+            let err = crate::get_errno();
+            if err == libc::ENOENT {
+                // Parent's parent doesn't exist — recurse
+                ensure_parent_dirs(parent);
+                // Retry after creating grandparent
+                #[cfg(target_os = "macos")]
+                let rc2 = crate::syscalls::macos_raw::raw_mkdir(parent_cpath.as_ptr(), 0o755);
+                #[cfg(target_os = "linux")]
+                let rc2 = crate::syscalls::linux_raw::raw_mkdirat(
+                    libc::AT_FDCWD,
+                    parent_cpath.as_ptr(),
+                    0o755,
+                );
+
+                if rc2 == 0 {
+                    inception_log!("Materialized directory: '{}'", parent);
+                }
+            }
+        } else {
+            inception_log!("Materialized directory: '{}'", parent);
         }
     }
 }
