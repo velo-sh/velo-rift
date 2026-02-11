@@ -617,17 +617,15 @@ fn lock_with_retry(mut file: File, lock_type: FlockArg) -> Result<Flock<File>> {
                     continue;
                 }
 
-                // Last attempt: try blocking lock
+                // Last attempt: return error if lock unavailable
                 if attempt == MAX_LOCK_RETRIES - 1 {
-                    return Flock::lock(returned_file, lock_type).map_err(|(_, e)| {
-                        CasError::Io(std::io::Error::new(
-                            std::io::ErrorKind::WouldBlock,
-                            format!(
-                                "Failed to acquire lock after {} retries: {}",
-                                MAX_LOCK_RETRIES, e
-                            ),
-                        ))
-                    });
+                    return Err(CasError::Io(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        format!(
+                            "Failed to acquire lock after {} retries: {}",
+                            MAX_LOCK_RETRIES, err
+                        ),
+                    )));
                 }
 
                 return Err(CasError::Io(std::io::Error::other(err.to_string())));

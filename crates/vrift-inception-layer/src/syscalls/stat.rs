@@ -193,12 +193,8 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
             } else {
                 entry.mode
             };
-            // BUG-016: VDir may store CAS blob mode (0o100444) which lacks execute bits.
-            // Cargo checks stat() mode before posix_spawn — if no execute bit, it returns
-            // EACCES ("Permission denied") without ever attempting to run the binary.
-            // Override permission bits to 0o755 (rwxr-xr-x) for all VDir file entries,
-            // matching what materialize_from_cas_entry sets on the physical file.
-            let mode_with_type = (mode_with_type & 0o170000) | 0o755;
+            // RFC-0039 Architecture: Faithfully report the original mode from VDir.
+            // Decouples VFS visibility from the read-only CAS physical storage.
 
             // Solid Mode: materialize from CAS if physical file doesn't exist.
             // VDir says "file exists" → ensure it ACTUALLY exists on disk.

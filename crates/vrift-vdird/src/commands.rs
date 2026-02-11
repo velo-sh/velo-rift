@@ -90,16 +90,33 @@ impl CommandHandler {
                 cas_root,
                 force_hash: _,
             } => {
-                self.handle_ingest_full_scan(
-                    &path,
-                    &manifest_path,
-                    threads,
-                    phantom,
-                    tier1,
-                    prefix.as_deref(),
-                    cas_root.as_deref(),
-                )
+                let config = self.config.clone();
+                let vdir = self.vdir.clone();
+                let manifest = self.manifest.clone();
+                let path_clone = path.clone();
+                let manifest_path_clone = manifest_path.clone();
+                let prefix_clone = prefix.clone();
+                let cas_root_clone = cas_root.clone();
+
+                // Offload heavy ingest to blocking thread to keep daemon responsive
+                tokio::task::spawn_blocking(move || {
+                    Self::handle_ingest_full_scan_sync(
+                        &config,
+                        &vdir,
+                        &manifest,
+                        &path_clone,
+                        &manifest_path_clone,
+                        threads,
+                        phantom,
+                        tier1,
+                        prefix_clone.as_deref(),
+                        cas_root_clone.as_deref(),
+                    )
+                })
                 .await
+                .unwrap_or_else(|e| {
+                    VeloResponse::Error(VeloError::internal(format!("Ingest task panicked: {}", e)))
+                })
             }
 
             // Not yet implemented - forward to future handlers
@@ -415,8 +432,12 @@ impl CommandHandler {
 
     /// Handle IngestFullScan
     #[allow(clippy::too_many_arguments)]
-    async fn handle_ingest_full_scan(
-        &self,
+    /// Handle IngestFullScan (Sync version for spawn_blocking)
+    #[allow(clippy::too_many_arguments)]
+    fn handle_ingest_full_scan_sync(
+        config: &ProjectConfig,
+        vdir_arc: &Arc<Mutex<VDir>>,
+        _manifest_arc: &Arc<vrift_manifest::lmdb::LmdbManifest>,
         path: &str,
         manifest_path: &str,
         threads: Option<usize>,
@@ -433,14 +454,17 @@ impl CommandHandler {
         let manifest_out = PathBuf::from(manifest_path);
         let start = Instant::now();
 
+        info!("Collecting files via WalkDir...");
         let file_paths: Vec<PathBuf> = WalkDir::new(&source_path)
             .into_iter()
+            .filter_entry(|e| !e.file_name().to_string_lossy().contains(".vrift"))
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .map(|e| e.path().to_path_buf())
             .collect();
 
         let total_files = file_paths.len() as u64;
+        info!("DEBUG: Collected {} files", total_files);
         if total_files == 0 {
             return VeloResponse::IngestAck {
                 files: 0,
@@ -459,9 +483,15 @@ impl CommandHandler {
         } else {
             IngestMode::SolidTier2
         };
-        let effective_cas_path = cas_root_override
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.config.cas_path.clone());
+        // 3. Run parallel ingest — use CLI-provided CAS root if available
+        let effective_cas_path = match cas_root_override {
+            Some(cli_cas) => {
+                let p = PathBuf::from(cli_cas);
+                info!(cas_root = %p.display(), "Using CLI-provided CAS root");
+                p
+            }
+            None => config.cas_path.clone(),
+        };
         let results = parallel_ingest_with_progress(
             &file_paths,
             &effective_cas_path,
@@ -469,6 +499,7 @@ impl CommandHandler {
             threads,
             |_, _| {},
         );
+        info!("DEBUG: parallel_ingest_with_progress complete");
 
         let mut total_bytes = 0u64;
         let mut new_bytes = 0u64;
@@ -481,9 +512,13 @@ impl CommandHandler {
             }
         }
 
-        if let Err(e) = self.write_manifest(&manifest_out, &source_path, &results, prefix) {
-            return VeloResponse::Error(VeloError::internal(format!(
-                "Manifest write failed: {}",
+        // 5. Build and write manifest
+        if let Err(e) = Self::write_manifest_sync(&manifest_out, &source_path, &results, prefix, config, _manifest_arc) {
+            return VeloResponse::Error(VeloError::io_error(format!(
+                "Failed to write manifest: {}",
+                e
+            )));
+        }
                 e
             )));
         }
@@ -492,7 +527,7 @@ impl CommandHandler {
         {
             let canon_root = source_path.canonicalize().unwrap_or(source_path.clone());
             let prefix_str = prefix.unwrap_or("");
-            let mut vdir = self.vdir.lock().unwrap();
+            let mut vdir = vdir_arc.lock().unwrap();
             for result in results.iter().flatten() {
                 let canon_source = result
                     .source_path
@@ -535,18 +570,20 @@ impl CommandHandler {
         }
     }
 
-    fn write_manifest(
-        &self,
+    /// Write manifest file from ingest results
+    fn write_manifest_sync(
         manifest_path: &Path,
         source_root: &Path,
         results: &[Result<vrift_cas::IngestResult, vrift_cas::CasError>],
         prefix: Option<&str>,
+        config: &ProjectConfig,
+        manifest: &Arc<vrift_manifest::lmdb::LmdbManifest>,
     ) -> Result<()> {
         use vrift_manifest::{AssetTier, LmdbManifest};
 
         // RFC-0039: Reuse existing manifest instance if paths match to avoid delta layer inconsistencies
-        let target_manifest = if manifest_path == self.config.manifest_path {
-            self.manifest.clone()
+        let target_manifest = if manifest_path == config.manifest_path {
+            manifest.clone()
         } else {
             Arc::new(LmdbManifest::open(manifest_path)?)
         };

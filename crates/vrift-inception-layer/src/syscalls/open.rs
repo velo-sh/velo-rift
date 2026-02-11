@@ -162,7 +162,14 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
                 }
 
                 if is_write {
-                    return open_cow_write(state, &vpath, blob_path.as_str(), flags, mode);
+                    return open_cow_write(
+                        state,
+                        &vpath,
+                        blob_path.as_str(),
+                        flags,
+                        mode,
+                        vdir_entry.mode,
+                    );
                 } else {
                     return open_cas_read(
                         state,
@@ -235,7 +242,14 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
     inception_log!("redirection path (IPC): '{}'", blob_path.as_str());
 
     if is_write {
-        open_cow_write(state, &vpath, blob_path.as_str(), flags, mode)
+        open_cow_write(
+            state,
+            &vpath,
+            blob_path.as_str(),
+            flags,
+            mode,
+            entry.mode as u32,
+        )
     } else {
         open_cas_read(
             state,
@@ -304,8 +318,8 @@ pub(crate) unsafe fn materialize_from_cas_entry(
             // Already materialized — but still ensure flags/perms are correct
             // (previous materialization may have left uchg from CAS blob)
             crate::syscalls::macos_raw::raw_chflags(dst_cpath.as_ptr(), 0);
-            // Use 0o755: VDir mode may be corrupted (0o444 from CAS blob)
-            crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o755);
+            // Restore original mode from VDir (SSOT)
+            crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), entry.mode as _);
             return true;
         }
         // clonefile failed (e.g. non-APFS, cross-device) — try hardlink fallback
@@ -314,7 +328,7 @@ pub(crate) unsafe fn materialize_from_cas_entry(
             let link_errno = crate::get_errno();
             if link_errno == libc::EEXIST {
                 crate::syscalls::macos_raw::raw_chflags(dst_cpath.as_ptr(), 0);
-                crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o755);
+                crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), entry.mode as _);
                 return true; // Already materialized
             }
             inception_log!(
@@ -327,14 +341,10 @@ pub(crate) unsafe fn materialize_from_cas_entry(
         }
     }
 
-    // Step 4: Clear macOS immutable flags (uchg) inherited from CAS blob via clonefile.
-    // CAS blobs have uchg for integrity protection, but the materialized copy is a
-    // normal working file that Cargo needs to link/unlink/rename freely.
-    // clonefile creates a separate inode, so clearing flags here doesn't affect CAS.
+    // Step 4: Clear macOS immutable flags (uchg) and restore original VDir mode.
+    // CAS blobs have uchg and are 0444, but the working file must honor original perms.
     crate::syscalls::macos_raw::raw_chflags(dst_cpath.as_ptr(), 0);
-    // Use 0o755: VDir mode may be corrupted (e.g. 0o444 from CAS blob).
-    // 0o755 is safe for all build artifacts — ensures build scripts are executable.
-    crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o755);
+    crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), entry.mode as _);
 
     // Step 5: Set mtime to NOW — materialization = fake compilation
     let now = std::time::SystemTime::now()
@@ -541,6 +551,7 @@ unsafe fn open_cow_write(
     blob_path: &str,
     flags: c_int,
     mode: mode_t,
+    vdir_mode: u32,
 ) -> Option<c_int> {
     inception_log!("open write request for '{}'", vpath.absolute);
 
@@ -580,7 +591,7 @@ unsafe fn open_cow_write(
             libc::open(
                 c_temp.as_ptr(),
                 libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
-                0o600,
+                (vdir_mode | 0o600) as libc::c_uint, // Ensure writable for COW while preserving execute bits
             )
         };
         if fd >= 0 {
@@ -614,6 +625,8 @@ unsafe fn open_cow_write(
             )
         };
         if dst_fd >= 0 {
+            // Already set by first open, but ensure consistency
+            let _ = unsafe { libc::fchmod(dst_fd, (vdir_mode | 0o600) as _) };
             let mut buf = [0u8; 8192];
             loop {
                 let n = unsafe { libc::read(src_fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
