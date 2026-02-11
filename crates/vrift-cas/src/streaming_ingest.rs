@@ -17,6 +17,10 @@ use crate::{CasError, IngestMode, IngestResult};
 /// Channel capacity (bounded ring buffer)
 const CHANNEL_CAP: usize = 1024;
 
+fn is_ignored(name: &str) -> bool {
+    name == ".vrift" || name == ".git" || name == "target" || name == ".cargo-lock"
+}
+
 /// Streaming ingest with producer-consumer pipeline
 pub fn streaming_ingest(
     source: &Path,
@@ -48,12 +52,24 @@ pub fn streaming_ingest(
                 children.retain(|entry| {
                     entry.as_ref().map_or(true, |e| {
                         let name = e.file_name.to_str().unwrap_or("");
-                        name != ".vrift" && name != ".git"
+                        !is_ignored(name)
                     })
                 });
             })
             .into_iter()
             .filter_map(|e| e.ok())
+            .filter(|e| {
+                // Nuclear filter: check all components of the path
+                let path = e.path();
+                for comp in path.components() {
+                    if let Some(name) = comp.as_os_str().to_str() {
+                        if is_ignored(name) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
             .filter(|e| e.file_type().is_file())
         {
             let path = entry.path();
@@ -177,12 +193,22 @@ where
                 children.retain(|entry| {
                     entry.as_ref().map_or(true, |e| {
                         let name = e.file_name.to_str().unwrap_or("");
-                        name != ".vrift" && name != ".git"
+                        !is_ignored(name)
                     })
                 });
             })
             .into_iter()
             .filter_map(|e| e.ok())
+            .filter(|e| {
+                for comp in e.path().components() {
+                    if let Some(name) = comp.as_os_str().to_str() {
+                        if is_ignored(name) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
             .filter(|e| e.file_type().is_file())
         {
             let path = entry.path();

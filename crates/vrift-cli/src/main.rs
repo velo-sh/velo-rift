@@ -426,28 +426,78 @@ fn cmd_run(
     {
         cmd.env("LD_PRELOAD", &_shim_path);
     }
-    let status = cmd.status()?;
+    // Enable debug/profile output if set
+    if std::env::var("VRIFT_DEBUG").is_ok() {
+        cmd.env("VRIFT_DEBUG", "1");
+    }
+    if std::env::var("VRIFT_PROFILE").is_ok() {
+        cmd.env("VRIFT_PROFILE", "1");
+    }
+    if let Ok(log) = std::env::var("VRIFT_LOG_LEVEL") {
+        cmd.env("VRIFT_LOG_LEVEL", log);
+    }
+
+    use anyhow::Context;
+    let status = cmd
+        .status()
+        .with_context(|| format!("Failed to execute: {}", command[0]))?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
 fn find_shim_library() -> Result<PathBuf> {
-    let p = std::env::current_exe()?.parent().unwrap().to_path_buf();
-    let name = if cfg!(target_os = "macos") {
-        "libvrift_shim.dylib"
-    } else {
-        "libvrift_shim.so"
-    };
-    let candidate = p.join(name);
-    if candidate.exists() {
-        Ok(candidate)
-    } else {
-        // Search in workspace target too
-        let ws_p = PathBuf::from("target/release").join(name);
-        if ws_p.exists() {
-            return Ok(fs::canonicalize(ws_p)?);
+    // Check standard locations
+    let candidates = [
+        // Development: relative to cargo target
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| {
+                #[cfg(target_os = "macos")]
+                {
+                    p.join("libvrift_inception_layer.dylib")
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    p.join("libvrift_inception_layer.so")
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                {
+                    p.join("libvrift_inception_layer.so")
+                }
+            }),
+        // Also check target/release relative to CWD if not in EXE dir
+        Some(PathBuf::from("target/release").join(if cfg!(target_os = "macos") {
+            "libvrift_inception_layer.dylib"
+        } else {
+            "libvrift_inception_layer.so"
+        })),
+        // Installed location (standard Linux/FHS)
+        Some(PathBuf::from(
+            "/usr/local/lib/vrift/libvrift_inception_layer.so",
+        )),
+        #[cfg(target_os = "macos")]
+        Some(PathBuf::from(
+            "/usr/local/lib/vrift/libvrift_inception_layer.dylib",
+        )),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            return Ok(candidate);
         }
-        anyhow::bail!("Shim not found")
     }
+
+    // Provide helpful error message
+    anyhow::bail!(
+        "Could not find vrift-inception-layer library. \n\
+        Build with: cargo build -p vrift-inception-layer --release\n\
+        Expected at: target/release/libvrift_inception_layer.{}",
+        if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        }
+    );
 }
 
 fn cmd_status(

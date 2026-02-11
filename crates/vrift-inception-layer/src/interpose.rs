@@ -41,10 +41,9 @@ use crate::syscalls::misc::{
     fclonefileat_inception, flock_inception, futimens_inception, futimes_inception,
     lchown_inception, link_inception, linkat_inception, mkdir_inception, mkdirat_inception,
     posix_spawn_inception, posix_spawnp_inception, readlinkat_inception, remove_inception,
-    removexattr_inception, rmdir_inception,
-    setrlimit_inception, setxattr_inception, symlink_inception, symlinkat_inception,
-    truncate_inception, unlink_inception, unlinkat_inception, utimensat_inception,
-    utimes_inception,
+    removexattr_inception, rmdir_inception, setrlimit_inception, setxattr_inception,
+    symlink_inception, symlinkat_inception, truncate_inception, unlink_inception,
+    unlinkat_inception, utimensat_inception, utimes_inception,
 };
 
 #[cfg(target_os = "macos")]

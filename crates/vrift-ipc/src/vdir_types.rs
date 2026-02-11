@@ -9,8 +9,9 @@ pub const VDIR_MAGIC: u32 = 0x56524654;
 /// VDir format version. Bump on incompatible changes.
 pub const VDIR_VERSION: u32 = 3; // v3: Added path string pool for readdir support
 
-/// Default hash table capacity (slots)
-pub const VDIR_DEFAULT_CAPACITY: usize = 65536;
+/// Default hash table capacity (slots) — Prime number for better distribution
+pub const VDIR_DEFAULT_CAPACITY: usize = 131101;
+// pub const VDIR_DEFAULT_CAPACITY: usize = 65536;
 
 /// Default string pool capacity (8MB — sufficient for ~100K paths averaging 80 chars)
 pub const VDIR_STRING_POOL_CAPACITY: usize = 8 * 1024 * 1024;

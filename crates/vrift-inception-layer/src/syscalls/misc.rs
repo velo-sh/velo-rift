@@ -486,10 +486,12 @@ pub unsafe extern "C" fn unlink_inception(path: *const c_char) -> c_int {
     let res = crate::syscalls::macos_raw::raw_unlink(path);
 
     // If physical unlink failed with ENOENT, check if it exists in VFS
-    if res == -1 && crate::get_errno() == libc::ENOENT
-        && vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some() {
-            return 0;
-        }
+    if res == -1
+        && crate::get_errno() == libc::ENOENT
+        && vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some()
+    {
+        return 0;
+    }
 
     res
 }
@@ -621,11 +623,13 @@ pub unsafe extern "C" fn unlinkat_inception(
     #[cfg(target_os = "linux")]
     let res = crate::syscalls::linux_raw::raw_unlinkat(dirfd, path, flags);
 
-    if res == -1 && crate::get_errno() == libc::ENOENT
-        && vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some() {
-            DIRTY_TRACKER.mark_dirty(&vpath.manifest_key);
-            return 0;
-        }
+    if res == -1
+        && crate::get_errno() == libc::ENOENT
+        && vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some()
+    {
+        DIRTY_TRACKER.mark_dirty(&vpath.manifest_key);
+        return 0;
+    }
 
     if res == 0 {
         DIRTY_TRACKER.mark_dirty(&vpath.manifest_key);
@@ -756,10 +760,12 @@ pub unsafe extern "C" fn rmdir_inception(path: *const c_char) -> c_int {
 
     let res = crate::syscalls::macos_raw::raw_rmdir(path);
 
-    if res == -1 && crate::get_errno() == libc::ENOENT
-        && vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some() {
-            return 0;
-        }
+    if res == -1
+        && crate::get_errno() == libc::ENOENT
+        && vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some()
+    {
+        return 0;
+    }
 
     res
 }
