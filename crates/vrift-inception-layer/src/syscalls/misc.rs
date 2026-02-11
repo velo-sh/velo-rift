@@ -388,7 +388,15 @@ pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) 
         return err;
     }
     // Non-VFS or intra-VFS local files: passthrough to raw link
-    crate::syscalls::macos_raw::raw_link(old, new)
+    let rc = crate::syscalls::macos_raw::raw_link(old, new);
+    if rc == -1 && crate::get_errno() == libc::EPERM {
+        // Destination may be a CAS-materialized file with uchg flag.
+        // Clear flags, unlink, and retry.
+        crate::syscalls::macos_raw::raw_chflags(new, 0);
+        crate::syscalls::macos_raw::raw_unlink(new);
+        return crate::syscalls::macos_raw::raw_link(old, new);
+    }
+    rc
 }
 
 #[no_mangle]
@@ -469,6 +477,49 @@ pub unsafe extern "C" fn unlink_inception(path: *const c_char) -> c_int {
     // non-existent files. Blocking virtual-only files (in manifest but not
     // on disk) with EEXIST breaks Cargo's build flow.
     crate::syscalls::macos_raw::raw_unlink(path)
+}
+
+/// BUG-016: Intercept fclonefileat to fix uchg/perms on CAS-cloned build artifacts.
+/// Cargo's fs::hard_link on macOS uses fclonefileat (CoW clone) instead of linkat.
+/// The cloned file inherits CAS blob's uchg flag and 0o444 mode, causing "Permission
+/// denied" when Cargo tries to execute build scripts.
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn fclonefileat_inception(
+    srcfd: libc::c_int,
+    dst_dirfd: libc::c_int,
+    dst: *const c_char,
+    flags: libc::c_int,
+) -> c_int {
+    // Use raw syscall to avoid DYLD_FORCE_FLAT_NAMESPACE recursion
+    let rc = crate::syscalls::macos_raw::raw_fclonefileat(srcfd, dst_dirfd, dst, flags as u32);
+    if rc == 0 && !dst.is_null() {
+        // Clone succeeded — clear uchg and set executable perms on the clone.
+        // This is safe because we only change the NEW clone, not the CAS blob.
+        crate::syscalls::macos_raw::raw_chflags(dst, 0);
+        crate::syscalls::macos_raw::raw_chmod(dst, 0o755);
+    }
+    rc
+}
+
+/// BUG-016: Intercept clonefileat to fix uchg/perms on CAS-cloned build artifacts.
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub unsafe extern "C" fn clonefileat_inception(
+    src_dirfd: libc::c_int,
+    src: *const c_char,
+    dst_dirfd: libc::c_int,
+    dst: *const c_char,
+    flags: libc::c_int,
+) -> c_int {
+    // Use raw syscall to avoid DYLD_FORCE_FLAT_NAMESPACE recursion
+    let rc =
+        crate::syscalls::macos_raw::raw_clonefileat(src_dirfd, src, dst_dirfd, dst, flags as u32);
+    if rc == 0 && !dst.is_null() {
+        crate::syscalls::macos_raw::raw_chflags(dst, 0);
+        crate::syscalls::macos_raw::raw_chmod(dst, 0o755);
+    }
+    rc
 }
 
 #[no_mangle]
@@ -1600,6 +1651,20 @@ pub unsafe extern "C" fn posix_spawn_inception(
     argv: *const *const c_char,
     envp: *const *const c_char,
 ) -> c_int {
+    // BUG-016: CAS-cloned build scripts may have uchg flag and 0o444 mode
+    // inherited from the CAS blob. Clear flags and ensure executable perms
+    // right before spawning — this is the last line of defense.
+    if !path.is_null() {
+        let path_bytes = std::ffi::CStr::from_ptr(path).to_bytes();
+        // Only fix VFS paths (avoid touching system binaries)
+        if let Some(state) = crate::state::InceptionLayerState::get() {
+            let path_s = std::str::from_utf8_unchecked(path_bytes);
+            if state.inception_applicable(path_s) {
+                let _cf_rc = crate::syscalls::macos_raw::raw_chflags(path, 0);
+                let _cm_rc = crate::syscalls::macos_raw::raw_chmod(path, 0o755);
+            }
+        }
+    }
     libc::posix_spawn(
         pid,
         path,
@@ -1620,6 +1685,17 @@ pub unsafe extern "C" fn posix_spawnp_inception(
     argv: *const *const c_char,
     envp: *const *const c_char,
 ) -> c_int {
+    // BUG-016: Same as posix_spawn_inception — ensure executable perms
+    if !file.is_null() {
+        let path_bytes = std::ffi::CStr::from_ptr(file).to_bytes();
+        if let Some(state) = crate::state::InceptionLayerState::get() {
+            let path_s = std::str::from_utf8_unchecked(path_bytes);
+            if state.inception_applicable(path_s) {
+                crate::syscalls::macos_raw::raw_chflags(file, 0);
+                crate::syscalls::macos_raw::raw_chmod(file, 0o755);
+            }
+        }
+    }
     libc::posix_spawnp(
         pid,
         file,

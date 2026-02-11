@@ -35,9 +35,10 @@ extern "C" {
 }
 #[cfg(target_os = "macos")]
 use crate::syscalls::misc::{
-    chflags_inception, chmod_inception, chown_inception, exchangedata_inception, execve_inception,
-    faccessat_inception, fchflags_inception, fchmod_inception, fchmodat_inception,
-    fchown_inception, fchownat_inception, flock_inception, futimens_inception, futimes_inception,
+    chflags_inception, chmod_inception, chown_inception, clonefileat_inception,
+    exchangedata_inception, execve_inception, faccessat_inception, fchflags_inception,
+    fchmod_inception, fchmodat_inception, fchown_inception, fchownat_inception,
+    fclonefileat_inception, flock_inception, futimens_inception, futimes_inception,
     lchown_inception, link_inception, linkat_inception, mkdir_inception, mkdirat_inception,
     posix_spawn_inception, posix_spawnp_inception, readlinkat_inception, removexattr_inception,
     rmdir_inception, setrlimit_inception, setxattr_inception, symlink_inception,
@@ -155,6 +156,17 @@ extern "C" {
     fn real_symlink(p1: *const c_char, p2: *const c_char) -> c_int;
     #[link_name = "flock"]
     fn real_flock(fd: c_int, op: c_int) -> c_int;
+    #[link_name = "fclonefileat"]
+    fn real_fclonefileat(srcfd: c_int, dst_dirfd: c_int, dst: *const c_char, flags: c_int)
+        -> c_int;
+    #[link_name = "clonefileat"]
+    fn real_clonefileat(
+        src_dirfd: c_int,
+        src: *const c_char,
+        dst_dirfd: c_int,
+        dst: *const c_char,
+        flags: c_int,
+    ) -> c_int;
     #[link_name = "mkdir"]
     fn real_mkdir(path: *const c_char, mode: mode_t) -> c_int;
     #[link_name = "mmap"]
@@ -447,21 +459,21 @@ pub static IT_CLOSE: Interpose = Interpose {
     old_func: real_close as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_OPENDIR: Interpose = Interpose {
     new_func: opendir_inception as _,
     old_func: real_opendir as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_READDIR: Interpose = Interpose {
     new_func: readdir_inception as _,
     old_func: real_readdir as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_CLOSEDIR: Interpose = Interpose {
     new_func: closedir_inception as _,
@@ -554,6 +566,20 @@ pub static IT_LINKAT: Interpose = Interpose {
     old_func: real_linkat as _,
 };
 #[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_FCLONEFILEAT: Interpose = Interpose {
+    new_func: fclonefileat_inception as _,
+    old_func: real_fclonefileat as _,
+};
+#[cfg(target_os = "macos")]
+#[link_section = "__DATA,__interpose"]
+#[used]
+pub static IT_CLONEFILEAT: Interpose = Interpose {
+    new_func: clonefileat_inception as _,
+    old_func: real_clonefileat as _,
+};
+#[cfg(target_os = "macos")]
 #[link_section = "__DATA,__nointerpose"]
 #[used]
 pub static IT_EXECVE: Interpose = Interpose {
@@ -561,14 +587,14 @@ pub static IT_EXECVE: Interpose = Interpose {
     old_func: real_execve as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_POSIX_SPAWN: Interpose = Interpose {
     new_func: posix_spawn_inception as _,
     old_func: real_posix_spawn as _,
 };
 #[cfg(target_os = "macos")]
-#[link_section = "__DATA,__nointerpose"]
+#[link_section = "__DATA,__interpose"]
 #[used]
 pub static IT_POSIX_SPAWNP: Interpose = Interpose {
     new_func: posix_spawnp_inception as _,

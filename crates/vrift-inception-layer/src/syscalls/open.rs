@@ -60,6 +60,62 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
                 let blob_path =
                     format_blob_path_fixed(&state.cas_root, &vdir_entry.cas_hash, vdir_entry.size);
 
+                // BUG-016: Cross-process Dirty Detection Heuristic (Open path).
+                // Similar to stat_impl_common, we check if a physical file exists and is newer.
+                let mut phys_buf: libc::stat = unsafe { std::mem::zeroed() };
+                let abs_path_cstr = match std::ffi::CString::new(vpath.absolute.as_str()) {
+                    Ok(c) => c,
+                    Err(_) => return None,
+                };
+                #[cfg(target_os = "macos")]
+                let phys_rc =
+                    crate::syscalls::macos_raw::raw_stat(abs_path_cstr.as_ptr(), &mut phys_buf);
+                #[cfg(target_os = "linux")]
+                let phys_rc =
+                    crate::syscalls::linux_raw::raw_stat(abs_path_cstr.as_ptr(), &mut phys_buf);
+
+                let phys_mtime_sec = phys_buf.st_mtime as u64;
+                let phys_mtime_nsec = phys_buf.st_mtime_nsec as u64;
+
+                inception_log!(
+                    "DEBUG mtime '{}': phys={}.{:09}, vdir={}.0",
+                    vpath.manifest_key,
+                    phys_mtime_sec,
+                    phys_mtime_nsec,
+                    vdir_entry.mtime_sec
+                );
+
+                // BUG-016: Cross-process Dirty Detection (Nanosecond-aware).
+                let is_phys_newer = (phys_mtime_sec > (vdir_entry.mtime_sec as u64))
+                    || (phys_mtime_sec == (vdir_entry.mtime_sec as u64) && phys_mtime_nsec > 0);
+
+                if phys_rc == 0 && is_phys_newer {
+                    inception_log!(
+                        "physical file newer than VDir entry, bypassing VDir for '{}' (phys={}.{:09}, vdir={}.0)",
+                        vpath.manifest_key,
+                        phys_mtime_sec,
+                        phys_mtime_nsec,
+                        vdir_entry.mtime_sec
+                    );
+                    profile_count!(vdir_misses);
+
+                    // FALLBACK: Open the physical file using its absolute path.
+                    // This is critical because the process CWD might be virtual.
+                    let fd =
+                        crate::syscalls::macos_raw::raw_open(abs_path_cstr.as_ptr(), flags, mode);
+                    if fd >= 0 {
+                        crate::syscalls::io::track_fd(
+                            fd,
+                            &vpath.manifest_key,
+                            false,
+                            None,
+                            vpath.manifest_key_hash,
+                        );
+                        return Some(fd);
+                    }
+                    return None; // Fallback to raw open on original path if absolute open fails
+                }
+
                 if is_write {
                     return open_cow_write(state, &vpath, blob_path.as_str(), flags, mode);
                 } else {
@@ -197,7 +253,11 @@ pub(crate) unsafe fn materialize_from_cas_entry(
     if rc != 0 {
         let clone_errno = crate::get_errno();
         if clone_errno == libc::EEXIST {
-            // Already materialized (e.g. by concurrent stat) — success
+            // Already materialized — but still ensure flags/perms are correct
+            // (previous materialization may have left uchg from CAS blob)
+            crate::syscalls::macos_raw::raw_chflags(dst_cpath.as_ptr(), 0);
+            // Use 0o755: VDir mode may be corrupted (0o444 from CAS blob)
+            crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o755);
             return true;
         }
         // clonefile failed (e.g. non-APFS, cross-device) — try hardlink fallback
@@ -205,6 +265,8 @@ pub(crate) unsafe fn materialize_from_cas_entry(
         if rc2 != 0 {
             let link_errno = crate::get_errno();
             if link_errno == libc::EEXIST {
+                crate::syscalls::macos_raw::raw_chflags(dst_cpath.as_ptr(), 0);
+                crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o755);
                 return true; // Already materialized
             }
             inception_log!(
@@ -222,18 +284,22 @@ pub(crate) unsafe fn materialize_from_cas_entry(
     // normal working file that Cargo needs to link/unlink/rename freely.
     // clonefile creates a separate inode, so clearing flags here doesn't affect CAS.
     crate::syscalls::macos_raw::raw_chflags(dst_cpath.as_ptr(), 0);
-    // Also make the file writable (CAS blobs are 444, but Cargo may need to overwrite)
-    crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o644);
+    // Use 0o755: VDir mode may be corrupted (e.g. 0o444 from CAS blob).
+    // 0o755 is safe for all build artifacts — ensures build scripts are executable.
+    crate::syscalls::macos_raw::raw_chmod(dst_cpath.as_ptr(), 0o755);
 
-    // Step 5: Restore mtime so cargo fingerprints match
+    // Step 5: Set mtime to NOW — materialization = fake compilation
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     let times = [
         libc::timeval {
-            tv_sec: entry.mtime_sec,
-            tv_usec: (entry.mtime_nsec / 1000) as i32,
+            tv_sec: now.as_secs() as _,
+            tv_usec: 0, // BUG-016: Clear usec to allow detection of real writes (which have usec > 0)
         },
         libc::timeval {
-            tv_sec: entry.mtime_sec,
-            tv_usec: (entry.mtime_nsec / 1000) as i32,
+            tv_sec: now.as_secs() as _,
+            tv_usec: 0,
         },
     ];
     crate::syscalls::macos_raw::raw_utimes(dst_cpath.as_ptr(), times.as_ptr());

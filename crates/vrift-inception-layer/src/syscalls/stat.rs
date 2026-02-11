@@ -54,10 +54,11 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     // physical path exists as a directory. If so, skip VDir entirely and let kernel stat
     // handle it. This prevents hash collisions from returning file metadata for directories,
     // which breaks create_dir_all (sees EEXIST + !is_dir → error).
-    let phys_exists: bool;
+    let mut phys_buf: libc_stat = unsafe { std::mem::zeroed() };
+    let mut phys_exists = false;
     {
-        let mut phys_buf: libc_stat = std::mem::zeroed();
-        let path_cstr = match std::ffi::CString::new(path_str) {
+        // Use the resolved absolute physical path for the physical check
+        let path_cstr = match std::ffi::CString::new(vpath.absolute.as_str()) {
             Ok(c) => c,
             Err(_) => return None,
         };
@@ -72,8 +73,6 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
                 return None;
             }
             phys_exists = true;
-        } else {
-            phys_exists = false;
         }
     }
 
@@ -107,6 +106,43 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     } else {
         // Try Hot Stat Cache — Phase 1.3: seqlock-protected VDir lookup
         if let Some(entry) = vdir_lookup(state.mmap_ptr, state.mmap_size, manifest_path) {
+            // BUG-016: Cross-process Dirty Detection Heuristic.
+            // If physical file exists and its mtime is newer than VDir entry, it was
+            // likely updated by a sibling process (e.g. rustc) during the current session.
+            // Since DIRTY_TRACKER is per-process, we use this mtime check as a fallback.
+            let phys_mtime_sec = phys_buf.st_mtime as u64;
+            let phys_mtime_nsec = phys_buf.st_mtime_nsec as u64;
+
+            inception_log!(
+                "DEBUG mtime '{}': phys={}.{:09}, vdir={}.0",
+                manifest_path,
+                phys_mtime_sec,
+                phys_mtime_nsec,
+                entry.mtime_sec
+            );
+
+            // BUG-016: Cross-process Dirty Detection (Nanosecond-aware).
+            // Materialized files have nanoseconds set to 0 (see materialize_from_cas_entry).
+            // Newly written files by rustc have high-precision nanoseconds > 0.
+            let is_phys_newer = (phys_mtime_sec > (entry.mtime_sec as u64))
+                || (phys_mtime_sec == (entry.mtime_sec as u64) && phys_mtime_nsec > 0);
+
+            if phys_exists && is_phys_newer {
+                inception_log!(
+                    "physical file newer than VDir entry, bypassing VDir for '{}' (phys={}.{:09}, vdir={}.0)",
+                    manifest_path,
+                    phys_mtime_sec,
+                    phys_mtime_nsec,
+                    entry.mtime_sec
+                );
+                profile_count!(vdir_misses);
+                // Return the physical stat results directly by copying into the output buffer
+                unsafe {
+                    std::ptr::copy_nonoverlapping(&phys_buf, buf, 1);
+                }
+                return Some(0);
+            }
+
             // BUG-011: VDir only stores file entries. If the entry mode lacks S_IFREG
             // (0o100000), it's likely a hash collision or corrupted entry — fall through
             // to kernel stat so directories are reported correctly.
@@ -121,6 +157,12 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
             } else {
                 entry.mode
             };
+            // BUG-016: VDir may store CAS blob mode (0o100444) which lacks execute bits.
+            // Cargo checks stat() mode before posix_spawn — if no execute bit, it returns
+            // EACCES ("Permission denied") without ever attempting to run the binary.
+            // Override permission bits to 0o755 (rwxr-xr-x) for all VDir file entries,
+            // matching what materialize_from_cas_entry sets on the physical file.
+            let mode_with_type = (mode_with_type & 0o170000) | 0o755;
 
             // Solid Mode: materialize from CAS if physical file doesn't exist.
             // VDir says "file exists" → ensure it ACTUALLY exists on disk.
@@ -134,23 +176,63 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
             inception_record!(EventType::StatHit, vpath.manifest_key_hash, 11); // 11 = vdir_hit (seqlock)
             std::ptr::write_bytes(buf, 0, 1);
             (*buf).st_size = entry.size as _;
+            // Materialization = fake compilation → mtime = Now()
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
             #[cfg(target_os = "macos")]
             {
                 (*buf).st_mode = mode_with_type as u16;
-                (*buf).st_mtime = entry.mtime_sec as _;
-                (*buf).st_mtime_nsec = entry.mtime_nsec as _;
+                (*buf).st_mtime = now.as_secs() as _;
+                (*buf).st_mtime_nsec = now.subsec_nanos() as _;
             }
             #[cfg(target_os = "linux")]
             {
                 (*buf).st_mode = mode_with_type as _;
-                (*buf).st_mtime = entry.mtime_sec as _;
-                (*buf).st_mtime_nsec = entry.mtime_nsec as _;
+                (*buf).st_mtime = now.as_secs() as _;
+                (*buf).st_mtime_nsec = now.subsec_nanos() as _;
             }
             (*buf).st_dev = 0x52494654; // "RIFT"
             (*buf).st_nlink = 1;
             (*buf).st_ino = vpath.manifest_key_hash as _;
             // duplicate record removed — line 83 already records the vdir_hit
             return Some(0);
+        }
+
+        // RFC-0051: Synthetic directory stat for VDir-implied directories.
+        // VDir only stores file entries, but directories are implied by file paths.
+        // When stat() is called on a non-existent path that has VDir children
+        // (e.g. target/debug/.fingerprint/slab-HASH/), return synthetic S_IFDIR
+        // metadata so cargo doesn't skip the directory.
+        if !phys_exists {
+            use crate::state::vdir_list_dir;
+            // Use manifest_path which already has the correct VDir-relative format
+            if vdir_list_dir(state.mmap_ptr, state.mmap_size, manifest_path).is_some() {
+                std::ptr::write_bytes(buf, 0, 1);
+                (*buf).st_size = 0;
+                #[cfg(target_os = "macos")]
+                {
+                    (*buf).st_mode = 0o040755_u16; // S_IFDIR | rwxr-xr-x
+                    (*buf).st_mtime = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as _;
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    (*buf).st_mode = 0o040755;
+                    (*buf).st_mtime = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as _;
+                }
+                (*buf).st_dev = 0x52494654; // "RIFT"
+                (*buf).st_nlink = 2;
+                (*buf).st_ino = vpath.manifest_key_hash as _;
+                profile_count!(vdir_hits);
+                inception_record!(EventType::StatHit, vpath.manifest_key_hash, 13); // 13 = synthetic_dir
+                return Some(0);
+            }
         }
     }
 
@@ -162,20 +244,21 @@ unsafe fn stat_impl_common(path_str: &str, buf: *mut libc_stat) -> Option<c_int>
     if let Some(entry) = state.query_manifest(&vpath) {
         std::ptr::write_bytes(buf, 0, 1);
         (*buf).st_size = entry.size as _;
-        // VnodeEntry.mtime is nanoseconds since epoch — decompose for stat
-        let mtime_sec = (entry.mtime / 1_000_000_000) as i64;
-        let mtime_nsec = (entry.mtime % 1_000_000_000) as i64;
+        // Materialization = fake compilation → mtime = Now()
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
         #[cfg(target_os = "macos")]
         {
             (*buf).st_mode = entry.mode as u16;
-            (*buf).st_mtime = mtime_sec as _;
-            (*buf).st_mtime_nsec = mtime_nsec as _;
+            (*buf).st_mtime = now.as_secs() as _;
+            (*buf).st_mtime_nsec = now.subsec_nanos() as _;
         }
         #[cfg(target_os = "linux")]
         {
             (*buf).st_mode = entry.mode as _;
-            (*buf).st_mtime = mtime_sec as _;
-            (*buf).st_mtime_nsec = mtime_nsec as _;
+            (*buf).st_mtime = now.as_secs() as _;
+            (*buf).st_mtime_nsec = now.subsec_nanos() as _;
         }
         (*buf).st_dev = 0x52494654; // "RIFT"
         (*buf).st_nlink = 1;

@@ -1299,12 +1299,12 @@ impl InceptionLayerState {
     #[allow(dead_code)]
     pub(crate) fn query_dir_listing(&self, path: &str) -> Option<Vec<vrift_ipc::DirEntry>> {
         // v3 fast path: try VDir mmap string pool first
-        // VDir stores relative paths (e.g. "target/debug/..."), but opendir passes
-        // absolute paths. Strip project_root prefix to get the VDir key.
+        // VDir stores paths with leading slash (e.g. "/target/debug/..."), but opendir
+        // passes absolute paths. Strip project_root prefix to get the VDir key.
+        // IMPORTANT: Do NOT strip the leading '/' — VDir keys start with '/'.
         let project_root = self.path_resolver.project_root.as_str();
         let rel_path = if !project_root.is_empty() && path.starts_with(project_root) {
-            let rest = &path[project_root.len()..];
-            rest.strip_prefix('/').unwrap_or(rest)
+            &path[project_root.len()..]
         } else {
             path
         };

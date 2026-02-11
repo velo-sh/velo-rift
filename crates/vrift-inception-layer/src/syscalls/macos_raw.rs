@@ -596,20 +596,23 @@ pub unsafe fn raw_fcntl(fd: libc::c_int, cmd: libc::c_int, arg: i64) -> libc::c_
 #[inline(never)]
 pub unsafe fn raw_chmod(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_CHMOD,
         in("x0") path as i64,
         in("x1") mode as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw unlink syscall for macOS ARM64.
@@ -617,19 +620,22 @@ pub unsafe fn raw_chmod(path: *const libc::c_char, mode: libc::mode_t) -> libc::
 #[inline(never)]
 pub unsafe fn raw_unlink(path: *const libc::c_char) -> libc::c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "mov x16, {syscall}",
         "svc #0x80",
+        "cset {err}, cs",
         syscall = in(reg) SYS_UNLINK,
         in("x0") path as i64,
         lateout("x0") ret,
+        err = out(reg) err,
         options(nostack)
     );
-    if ret < 0 {
-        -1
-    } else {
-        ret as libc::c_int
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
     }
+    ret as libc::c_int
 }
 
 /// Raw rmdir syscall for macOS ARM64.
@@ -956,6 +962,40 @@ pub unsafe fn raw_clonefileat(
         in("x2") dst_dirfd as i64,
         in("x3") dst as i64,
         in("x4") flags as i64,
+        lateout("x0") ret,
+        err = out(reg) err,
+        options(nostack)
+    );
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
+        return -1;
+    }
+    ret as libc::c_int
+}
+
+/// Raw fclonefileat syscall for macOS ARM64.
+/// Like clonefileat but takes a source file descriptor instead of path.
+const SYS_FCLONEFILEAT: i64 = 517;
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[inline(never)]
+pub unsafe fn raw_fclonefileat(
+    srcfd: libc::c_int,
+    dst_dirfd: libc::c_int,
+    dst: *const libc::c_char,
+    flags: u32,
+) -> libc::c_int {
+    let ret: i64;
+    let err: i64;
+    asm!(
+        "mov x16, {syscall}",
+        "svc #0x80",
+        "cset {err}, cs",
+        syscall = in(reg) SYS_FCLONEFILEAT,
+        in("x0") srcfd as i64,
+        in("x1") dst_dirfd as i64,
+        in("x2") dst as i64,
+        in("x3") flags as i64,
         lateout("x0") ret,
         err = out(reg) err,
         options(nostack)
@@ -2730,15 +2770,18 @@ pub unsafe fn raw_futimens(fd: c_int, times: *const libc::timespec) -> c_int {
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub unsafe fn raw_flock(fd: c_int, operation: c_int) -> c_int {
     let ret: i64;
+    let err: i64;
     asm!(
         "svc #0x80",
+        "cset {err}, cs",
         in("x16") SYS_FLOCK,
         in("x0") fd as i64,
         in("x1") operation as i64,
         lateout("x0") ret,
+        err = out(reg) err,
     );
-    if ret < 0 {
-        crate::set_errno(-(ret as i32));
+    if err != 0 {
+        crate::set_errno(ret as libc::c_int);
         -1
     } else {
         ret as c_int

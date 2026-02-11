@@ -41,8 +41,53 @@ pub unsafe extern "C" fn opendir_inception(path: *const libc::c_char) -> *mut c_
         return real(path);
     }
 
-    // Query directory listing from daemon
-    if let Some(entries) = state.query_dir_listing(path_str) {
+    // RFC-0051++: Merged Directory Listing
+    // We must return BOTH physical entries AND manifest entries to ensure
+    // that sibling processes see freshly created files.
+    let mut entries = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    // 1. Scan physical directory
+    let phys_dir = real(path);
+    if !phys_dir.is_null() {
+        let readdir_raw = std::mem::transmute::<
+            *const (),
+            unsafe extern "C" fn(*mut c_void) -> *mut libc::dirent,
+        >(crate::interpose::IT_READDIR.old_func);
+        let closedir_raw = std::mem::transmute::<
+            *const (),
+            unsafe extern "C" fn(*mut c_void) -> c_int,
+        >(crate::interpose::IT_CLOSEDIR.old_func);
+
+        loop {
+            let ent = readdir_raw(phys_dir);
+            if ent.is_null() {
+                break;
+            }
+            let name_bytes = std::ffi::CStr::from_ptr((*ent).d_name.as_ptr()).to_bytes();
+            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                if name != "." && name != ".." {
+                    entries.push(vrift_ipc::DirEntry {
+                        name: name.to_string(),
+                        is_dir: (*ent).d_type == libc::DT_DIR,
+                    });
+                    seen_names.insert(name.to_string());
+                }
+            }
+        }
+        closedir_raw(phys_dir);
+    }
+
+    // 2. Scan manifest and merge
+    if let Some(manifest_entries) = state.query_dir_listing(path_str) {
+        for ent in manifest_entries {
+            if !seen_names.contains(&ent.name) {
+                entries.push(ent);
+            }
+        }
+    }
+
+    if !entries.is_empty() {
         // Create synthetic directory
         let mut fs_vpath = crate::state::FixedString::<1024>::new();
         fs_vpath.set(path_str);

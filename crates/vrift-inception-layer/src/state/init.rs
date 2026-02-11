@@ -520,28 +520,7 @@ fn open_vdir_mmap(project_root: &str) -> (*const u8, usize) {
 
     let mmap_path_ptr = path_buf.as_ptr() as *const libc::c_char;
 
-    // Debug log the derived path (read directly from path_buf now that writer is dropped)
-    {
-        let path_str = unsafe { CStr::from_ptr(mmap_path_ptr) };
-        let mut dbg_buf = [0u8; 512];
-        let mut dw = crate::macros::StackWriter::new(&mut dbg_buf);
-        let _ = writeln!(
-            dw,
-            "[vrift-inception] VDir mmap path: {}",
-            path_str.to_str().unwrap_or("?")
-        );
-        let dbg_msg = dw.as_str();
-        unsafe {
-            #[cfg(target_os = "macos")]
-            crate::syscalls::macos_raw::raw_write(
-                2,
-                dbg_msg.as_ptr() as *const libc::c_void,
-                dbg_msg.len(),
-            );
-            #[cfg(target_os = "linux")]
-            libc::write(2, dbg_msg.as_ptr() as *const libc::c_void, dbg_msg.len());
-        }
-    }
+    // VDir mmap opening.
 
     // Step 3: Open and mmap the VDir file
     #[cfg(target_os = "macos")]
@@ -753,29 +732,7 @@ pub(crate) fn open_manifest_mmap() -> (*const u8, usize) {
             PathBuf::from(format!("{}/.vrift/manifest.mmap", canon_root_string))
         });
 
-        // BUG-009: Debug log the derived VDir path for diagnosis
-        {
-            let mut dbg_buf = [0u8; 512];
-            let mut dw = crate::macros::StackWriter::new(&mut dbg_buf);
-            let _ = writeln!(
-                dw,
-                "[vrift-inception] VDir mmap path: {} (root: {})",
-                mmap_path.display(),
-                canon_root_string
-            );
-            let dbg_msg = dw.as_str();
-            unsafe {
-                #[cfg(target_os = "macos")]
-                crate::syscalls::macos_raw::raw_write(
-                    2,
-                    dbg_msg.as_ptr() as *const libc::c_void,
-                    dbg_msg.len(),
-                );
-                #[cfg(target_os = "linux")]
-                libc::write(2, dbg_msg.as_ptr() as *const libc::c_void, dbg_msg.len());
-            }
-        }
-
+        // VDir mmap path derivation.
         let _ = write!(writer, "{}\0", mmap_path.display());
     }
 
