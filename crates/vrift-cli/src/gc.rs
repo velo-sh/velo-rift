@@ -49,7 +49,6 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
     // Collect all referenced blob hashes
     let keep_set: HashSet<_> = if let Some(ref manifest_path) = args.manifest {
         println!();
-<<<<<<< HEAD
         println!("  [Direct Mode] Using single manifest: {:?}", manifest_path);
         // RFC-0039: Manifest is an LMDB directory
         let manifest = LmdbManifest::open(manifest_path).context("Failed to open LMDB manifest")?;
@@ -58,29 +57,6 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
             .into_iter()
             .map(|(_, m_entry)| m_entry.vnode.content_hash)
             .collect()
-=======
-        println!("  [Legacy Mode] Using single manifest: {:?}", manifest_path);
-
-        let hashes = if manifest_path.is_dir() || manifest_path.to_string_lossy().ends_with(".lmdb")
-        {
-            // Try LMDB first
-            if let Ok(m) = vrift_manifest::LmdbManifest::open(manifest_path) {
-                m.iter()
-                    .context("Failed to iterate LMDB manifest")?
-                    .into_iter()
-                    .map(|(_, entry)| entry.vnode.content_hash)
-                    .collect()
-            } else {
-                // Fallback to flat
-                let m = Manifest::load(manifest_path).context("Failed to parse manifest")?;
-                m.iter().map(|(_, entry)| entry.content_hash).collect()
-            }
-        } else {
-            let m = Manifest::load(manifest_path).context("Failed to parse manifest")?;
-            m.iter().map(|(_, entry)| entry.content_hash).collect()
-        };
-        hashes
->>>>>>> 93a219a3 (feat: stabilize inception layer, unify hashing (FNV1a), fix path translation, and standardize CAS extensions)
     } else {
         println!();
         println!("  Registry Status:");
@@ -206,7 +182,7 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
 }
 
 /// Format bytes in human-readable form
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;

@@ -5,7 +5,15 @@ use std::process::Command;
 /// Helper to run vrift command
 fn vrift(args: &[&str]) -> std::process::Output {
     Command::new("cargo")
-        .args(["run", "--package", "vrift-cli", "--quiet", "--"])
+        .args([
+            "run",
+            "--package",
+            "vrift-cli",
+            "--bin",
+            "vrift",
+            "--quiet",
+            "--",
+        ])
         .args(args)
         .output()
         .expect("Failed to execute vrift")
@@ -75,7 +83,7 @@ fn test_config_show_contains_default_patterns() {
 fn test_config_init_creates_local_config() {
     let temp = tempfile::tempdir().unwrap();
     let output = Command::new("cargo")
-        .args(["run", "--package", "vrift-cli", "--"])
+        .args(["run", "--package", "vrift-cli", "--bin", "vrift", "--"])
         .args(["config", "init"])
         .current_dir(temp.path())
         .output()
@@ -97,7 +105,7 @@ fn test_config_init_fails_if_exists() {
     std::fs::write(config_dir.join("config.toml"), "# existing").unwrap();
 
     let output = Command::new("cargo")
-        .args(["run", "--package", "vrift-cli", "--"])
+        .args(["run", "--package", "vrift-cli", "--bin", "vrift", "--"])
         .args(["config", "init"])
         .current_dir(temp.path())
         .output()
@@ -116,7 +124,7 @@ fn test_config_init_force_overwrites() {
     std::fs::write(config_dir.join("config.toml"), "# old content").unwrap();
 
     let output = Command::new("cargo")
-        .args(["run", "--package", "vrift-cli", "--"])
+        .args(["run", "--package", "vrift-cli", "--bin", "vrift", "--"])
         .args(["config", "init", "--force"])
         .current_dir(temp.path())
         .output()

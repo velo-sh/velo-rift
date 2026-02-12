@@ -54,6 +54,7 @@ async fn test_daemon_lifecycle_handshake() {
         staging_base: temp.path().join("staging"),
         cas_path: temp.path().join("the_source"),
         manifest_path: temp.path().join("test.lmdb"),
+        vfs_prefix: "/vrift".to_string(),
     };
 
     // Create required directories
@@ -107,6 +108,7 @@ async fn test_daemon_manifest_operations_over_socket() {
         staging_base: temp.path().join("staging"),
         cas_path: temp.path().join("the_source"),
         manifest_path: temp.path().join("test.lmdb"),
+        vfs_prefix: "/vrift".to_string(),
     };
 
     std::fs::create_dir_all(&config.staging_base).unwrap();
@@ -180,6 +182,7 @@ async fn test_daemon_multiple_clients() {
         staging_base: temp.path().join("staging"),
         cas_path: temp.path().join("the_source"),
         manifest_path: temp.path().join("test.lmdb"),
+        vfs_prefix: "/vrift".to_string(),
     };
 
     std::fs::create_dir_all(&config.staging_base).unwrap();

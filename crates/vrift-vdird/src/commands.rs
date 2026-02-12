@@ -488,7 +488,7 @@ impl CommandHandler {
         use walkdir::WalkDir;
 
         let source_path = PathBuf::from(path);
-        let start = Instant::now();
+        let _start = Instant::now();
         info!(
             path = %path,
             manifest = %manifest_path,
@@ -562,7 +562,7 @@ impl CommandHandler {
         {
             let canon_root = source_path.canonicalize().unwrap_or(source_path.clone());
             let prefix_str = prefix.unwrap_or("");
-            let mut vdir = vdir_arc.lock().unwrap();
+            let _vdir = vdir_arc.lock().unwrap();
             let mut vdir = vdir_arc.lock().unwrap();
             let asset_tier = if tier1 {
                 vrift_manifest::AssetTier::Tier1Immutable

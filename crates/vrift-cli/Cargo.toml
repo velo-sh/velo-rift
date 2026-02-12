@@ -4,6 +4,7 @@ description = "Command-line interface for Velo Rift"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "vrift"
 
 [[bin]]
 name = "vrift"
