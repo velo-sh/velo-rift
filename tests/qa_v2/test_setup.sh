@@ -182,6 +182,18 @@ setup_test_workspace() {
 }
 
 # ============================================================================
+# Workspace Ingest Helper
+# ============================================================================
+# Call AFTER creating test files in $TEST_WORKSPACE/src to populate the manifest.
+# Required for tests that verify mutation blocking (chmod, unlink, link, etc.)
+ingest_test_workspace() {
+    "$VRIFT_CLI" --the-source-root "$VR_THE_SOURCE" init "$TEST_WORKSPACE" > /dev/null 2>&1 || true
+    "$VRIFT_CLI" --the-source-root "$VR_THE_SOURCE" ingest "$TEST_WORKSPACE" \
+        --output "$TEST_WORKSPACE/.vrift/manifest.lmdb" > /dev/null 2>&1
+    export VRIFT_MANIFEST="$TEST_WORKSPACE/.vrift/manifest.lmdb"
+}
+
+# ============================================================================
 # VFS Environment Helper
 # ============================================================================
 # Usage: run_with_shim <command> [args...]
@@ -191,6 +203,7 @@ run_with_shim() {
         VRIFT_VFS_PREFIX="$TEST_WORKSPACE" \
         VRIFT_SOCKET_PATH="$VRIFT_SOCKET_PATH" \
         VR_THE_SOURCE="$VR_THE_SOURCE" \
+        ${VRIFT_MANIFEST:+VRIFT_MANIFEST="$VRIFT_MANIFEST"} \
         VRIFT_DEBUG=1 \
         "$@"
 }

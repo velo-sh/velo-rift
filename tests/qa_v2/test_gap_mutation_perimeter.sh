@@ -26,6 +26,9 @@ TEST_FILE="$TEST_WORKSPACE/src/perimeter_test.txt"
 echo "immutable content" > "$TEST_FILE"
 ORIGINAL_MTIME=$(stat -f "%m" "$TEST_FILE" 2>/dev/null || stat -c "%Y" "$TEST_FILE" 2>/dev/null)
 
+# Ingest workspace so files appear in VDir manifest (required for mutation blocking)
+ingest_test_workspace
+
 # Compile the mutation perimeter probe
 PROBE_SRC="$TEST_WORKSPACE/mutation_probe.c"
 PROBE_BIN="/tmp/vrift_mutation_probe_$$"
@@ -177,8 +180,15 @@ cc -o "$PROBE_BIN" "$PROBE_SRC" -Wall 2>&1 || {
     exit_with_summary
 }
 
-# Run probe under shim
-OUTPUT=$(run_with_shim "$PROBE_BIN" "$TEST_FILE" 2>&1)
+# Run probe under shim (with timeout to prevent UE-state kernel hangs)
+OUTPUT=$(perl -e 'alarm 15; exec @ARGV' -- \
+    env $VFS_ENV_BASE \
+    VRIFT_PROJECT_ROOT="$TEST_WORKSPACE" \
+    VRIFT_VFS_PREFIX="$TEST_WORKSPACE" \
+    VRIFT_SOCKET_PATH="$VRIFT_SOCKET_PATH" \
+    VR_THE_SOURCE="$VR_THE_SOURCE" \
+    VRIFT_DEBUG=1 \
+    "$PROBE_BIN" "$TEST_FILE" 2>&1) || true
 echo "$OUTPUT"
 
 # ============================================================================

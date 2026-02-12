@@ -29,6 +29,9 @@ echo "charlie" > "$TEST_WORKSPACE/src/subdir/charlie.txt"
 OUTSIDE_DIR="/tmp/vrift_shell_mut_test_$$"
 mkdir -p "$OUTSIDE_DIR"
 
+# Ingest workspace so files appear in VDir manifest (required for mutation blocking)
+ingest_test_workspace
+
 # Build a C probe for mutation ops that SIP-protected binaries bypass
 MUTATION_PROBE="/tmp/vrift_shell_mutation_probe_$$"
 cat > /tmp/vrift_shell_mutation_probe_$$.c <<'PROBEC'

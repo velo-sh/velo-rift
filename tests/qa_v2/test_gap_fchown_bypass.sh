@@ -15,7 +15,8 @@ check_prerequisites || exit 1
 
 log_section "Gap: fchown/fchownat Bypass Detection"
 
-start_daemon || exit 1
+# NOTE: No daemon needed here — mutation blocking uses the shim's
+# VFS prefix check (quick_block_vfs_mutation), not the daemon's VDir mmap.
 
 # Create a test file inside VFS workspace
 TEST_FILE="$TEST_WORKSPACE/src/owned_file.txt"

@@ -335,8 +335,8 @@ pub unsafe extern "C" fn fchflags_inception(fd: c_int, flags: libc::c_uint) -> c
 }
 
 /// RFC-0047: Link (hardlink) implementation with VFS boundary enforcement
-/// Cross-boundary hardlinks are forbidden (EXDEV). Intra-VFS hard links are allowed
-/// since they operate on the real filesystem and don't compromise CAS integrity.
+/// Cross-boundary hardlinks are forbidden (EXDEV). Intra-VFS hard links on
+/// manifest entries are also blocked (EXDEV) to preserve CAS integrity.
 unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
     if old.is_null() || new.is_null() {
         return None;
@@ -357,8 +357,17 @@ unsafe fn link_impl(old: *const c_char, new: *const c_char) -> Option<c_int> {
         return Some(-1);
     }
 
-    // Intra-VFS or non-VFS: passthrough to raw link()
-    None
+    // Block intra-VFS hardlinks on manifest entries (CAS integrity)
+    if old_in_vfs && new_in_vfs {
+        if let Some(vpath) = state.resolve_path(old_str) {
+            if vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some() {
+                crate::set_errno(libc::EXDEV);
+                return Some(-1);
+            }
+        }
+    }
+
+    None // Non-VFS or local files: passthrough
 }
 
 #[no_mangle]
@@ -385,6 +394,10 @@ pub unsafe extern "C" fn link_inception(old: *const c_char, new: *const c_char) 
     }
     // Post-init: use link_impl for manifest-aware checks
     if let Some(err) = link_impl(old, new) {
+        return err;
+    }
+    // Block intra-VFS links via block_vfs_mutation fallback
+    if let Some(err) = block_vfs_mutation(old).or_else(|| block_vfs_mutation(new)) {
         return err;
     }
     // Non-VFS or intra-VFS local files: passthrough to raw link
@@ -472,28 +485,21 @@ pub unsafe extern "C" fn linkat_inception(
 #[no_mangle]
 #[cfg(target_os = "macos")]
 pub unsafe extern "C" fn unlink_inception(path: *const c_char) -> c_int {
-    let path_str = CStr::from_ptr(path).to_string_lossy();
-    let state = match InceptionLayerState::get() {
-        Some(s) => s,
-        None => return crate::syscalls::macos_raw::raw_unlink(path),
-    };
-
-    let vpath = match state.resolve_path(&path_str) {
-        Some(v) => v,
-        None => return crate::syscalls::macos_raw::raw_unlink(path),
-    };
-
-    let res = crate::syscalls::macos_raw::raw_unlink(path);
-
-    // If physical unlink failed with ENOENT, check if it exists in VFS
-    if res == -1
-        && crate::get_errno() == libc::ENOENT
-        && vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some()
+    // Early-init guard: passthrough during bootstrap
+    let init_state = INITIALIZING.load(Ordering::Relaxed);
+    if init_state != 0
+        || crate::state::INCEPTION_LAYER_STATE
+            .load(Ordering::Acquire)
+            .is_null()
     {
-        return 0;
+        if let Some(err) = quick_block_vfs_mutation(path) {
+            return err;
+        }
+        return crate::syscalls::macos_raw::raw_unlink(path);
     }
 
-    res
+    // Block unlink on manifest-tracked files (Tier-1 immutable)
+    block_vfs_mutation(path).unwrap_or_else(|| crate::syscalls::macos_raw::raw_unlink(path))
 }
 
 #[no_mangle]
@@ -580,15 +586,14 @@ pub unsafe extern "C" fn unlink_inception(path: *const c_char) -> c_int {
         None => return crate::syscalls::linux_raw::raw_unlink(path),
     };
 
-    let res = crate::syscalls::linux_raw::raw_unlink(path);
-
-    if res == -1 && crate::get_errno() == libc::ENOENT {
-        if vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some() {
-            return 0;
-        }
+    // Block unlink on manifest-tracked files (Tier-1 immutable)
+    if vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some() {
+        crate::set_errno(libc::EPERM);
+        return -1;
     }
 
-    res
+    // Non-manifest file: passthrough to real unlink
+    crate::syscalls::linux_raw::raw_unlink(path)
 }
 
 #[no_mangle]
@@ -947,25 +952,50 @@ pub unsafe extern "C" fn setattrlist_inception(
 
 /// Helper: Check if path is in VFS and return EPERM if so
 ///
-/// BUG-012: DISABLED for build cache use case.
-/// RFC-0039 §5.1.2 Tier-2 mutable assets (build artifacts) require Break-Before-Write.
-/// Blanket mutation blocking prevents Cargo from performing normal build operations
-/// (unlink, chmod, rename, etc.). CAS integrity is preserved by:
-///   - open_cow_write() staging area + re-ingest on close
-///   - Tier-1 kernel protections: chmod 444 + chattr +i / chflags uchg
-pub(crate) unsafe fn block_vfs_mutation(_path: *const c_char) -> Option<c_int> {
+/// Manifest-aware VFS mutation blocking (replaces BUG-012 no-op).
+///
+/// Only blocks mutations on files that exist in the VDir manifest (Tier-1 CAS
+/// immutable files). Local/COW build artifacts (not in manifest) pass through,
+/// preserving Cargo build compatibility.
+pub(crate) unsafe fn block_vfs_mutation(path: *const c_char) -> Option<c_int> {
+    if path.is_null() {
+        return None;
+    }
+    let _guard = InceptionLayerGuard::enter()?;
+    let state = InceptionLayerState::get()?;
+    let path_str = CStr::from_ptr(path).to_str().ok()?;
+    if !state.inception_applicable(path_str) {
+        return None;
+    }
+
+    // If mmap is available, use manifest-aware blocking (Tier-1 only)
+    if !state.mmap_ptr.is_null() && state.mmap_size > 0 {
+        let vpath = state.resolve_path(path_str)?;
+        // Only block if file exists in manifest (Tier-1 immutable)
+        if vdir_lookup(state.mmap_ptr, state.mmap_size, &vpath.manifest_key).is_some() {
+            crate::set_errno(libc::EPERM);
+            return Some(-1);
+        }
+        return None;
+    }
+
+    // No mmap available: fall back to VFS prefix check.
+    // When the daemon hasn't populated the VDir mmap yet, we conservatively
+    // block all mutations on paths under the VFS prefix. This is safe because
+    // Cargo builds don't start until the daemon is fully initialized (mmap populated).
+    if quick_is_in_vfs(path) {
+        crate::set_errno(libc::EPERM);
+        return Some(-1);
+    }
     None
 }
 
 /// Helper for CREATION ops (mkdir, symlink): Only block if path EXISTS in manifest
-///
-/// BUG-012: DISABLED for build cache use case.
-/// Same rationale as block_vfs_mutation — Tier-2 build artifacts need free mutation.
 pub(crate) unsafe fn block_existing_vfs_entry_at(
     _dirfd: c_int,
-    _path: *const c_char,
+    path: *const c_char,
 ) -> Option<c_int> {
-    None
+    block_vfs_mutation(path)
 }
 
 pub(crate) unsafe fn block_existing_vfs_entry(path: *const c_char) -> Option<c_int> {
@@ -986,20 +1016,41 @@ pub(crate) unsafe fn quick_is_in_vfs(path: *const c_char) -> bool {
     let vfs_prefix_ptr = libc::getenv(env_name.as_ptr() as *const c_char);
     if !vfs_prefix_ptr.is_null() {
         if let Ok(vfs_prefix) = CStr::from_ptr(vfs_prefix_ptr).to_str() {
-            return path_str.starts_with(vfs_prefix);
+            if path_str.starts_with(vfs_prefix) {
+                return true;
+            }
+            // macOS: F_GETPATH returns resolved paths (e.g. /private/tmp/...)
+            // but VRIFT_VFS_PREFIX may use /tmp/... (symlink)
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(suffix) = path_str.strip_prefix("/private") {
+                    if suffix.starts_with(vfs_prefix) {
+                        return true;
+                    }
+                }
+                // Also handle reverse: prefix is /private/tmp but path is /tmp
+                if let Some(suffix) = vfs_prefix.strip_prefix("/private") {
+                    if path_str.starts_with(suffix) {
+                        return true;
+                    }
+                }
+            }
         }
     }
     false
 }
 
-/// Lightweight VFS check for raw syscall path - avoids TLS/InceptionLayerGuard
-///
-/// BUG-012: DISABLED for build cache use case.
-/// Same rationale as block_vfs_mutation — CAS paths are outside VFS prefix,
-/// so this guard never protects CAS. It only blocks project-directory mutations
-/// which Cargo needs for build artifact operations (link, copy, rename).
+/// Lightweight VFS prefix check for raw syscall path during early init.
+/// Uses VRIFT_VFS_PREFIX env var only (no InceptionLayerState needed).
 #[inline]
-pub(crate) unsafe fn quick_block_vfs_mutation(_path: *const c_char) -> Option<c_int> {
+pub(crate) unsafe fn quick_block_vfs_mutation(path: *const c_char) -> Option<c_int> {
+    if path.is_null() {
+        return None;
+    }
+    if quick_is_in_vfs(path) {
+        crate::set_errno(libc::EPERM);
+        return Some(-1);
+    }
     None
 }
 
@@ -1170,6 +1221,16 @@ pub unsafe extern "C" fn fchown_inception(
 ) -> c_int {
     #[cfg(target_os = "macos")]
     {
+        // VFS check via fd path resolution — must use raw_fcntl to avoid
+        // triggering fcntl_inception (which causes recursive syscall chain crash)
+        let mut path_buf = [0i8; 1024];
+        if crate::syscalls::macos_raw::raw_fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr() as i64)
+            == 0
+            && quick_is_in_vfs(path_buf.as_ptr()) {
+                crate::set_errno(libc::EPERM);
+                return -1;
+            }
+
         let init_state = INITIALIZING.load(Ordering::Relaxed);
         if init_state != 0
             || crate::state::INCEPTION_LAYER_STATE
@@ -1184,21 +1245,6 @@ pub unsafe extern "C" fn fchown_inception(
             Some(g) => g,
             None => return crate::syscalls::macos_raw::raw_fchown(fd, owner, group),
         };
-
-        // VFS logic: if FD points to a VFS file, block mutation
-        // Strategy: Try to get path from FD via F_GETPATH
-        let mut path_buf = [0i8; 1024];
-        if libc::fcntl(fd, libc::F_GETPATH, path_buf.as_mut_ptr()) == 0 {
-            let path_cstr = CStr::from_ptr(path_buf.as_ptr());
-            if let Ok(path_str) = path_cstr.to_str() {
-                if let Some(state) = InceptionLayerState::get() {
-                    if state.inception_applicable(path_str) {
-                        crate::set_errno(libc::EPERM);
-                        return -1;
-                    }
-                }
-            }
-        }
 
         // Fallback to FD table if F_GETPATH failed
         use crate::syscalls::io::get_fd_entry;

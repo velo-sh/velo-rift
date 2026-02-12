@@ -20,7 +20,7 @@ check_prerequisites || exit 1
 
 log_section "Hardlink Count / EINVAL Regression"
 
-start_daemon || exit 1
+# NOTE: No daemon needed — mutation blocking uses shim's VFS prefix check.
 
 # Create test files
 VFS_FILE="$TEST_WORKSPACE/src/hardlink_source.txt"
@@ -140,7 +140,7 @@ check_link_result() {
     local name="$1"
     local testid="$2"
     local desc="$3"
-    local expected_errno="$4"  # Expected errno (18=EXDEV, 1=EPERM)
+    local expected_errno="$4"  # Expected errno (18=EXDEV, 1=EPERM, or "18,1" for multiple)
 
     log_test "$testid" "$desc"
     local line
@@ -156,7 +156,16 @@ check_link_result() {
     local actual_ret
     actual_ret=$(echo "$line" | sed 's/.*ret=\(-*[0-9]*\).*/\1/')
 
-    if [ "$actual_ret" = "-1" ] && [ "$actual_errno" = "$expected_errno" ]; then
+    # Support comma-separated expected errnos
+    local errno_match=0
+    for exp in $(echo "$expected_errno" | tr ',' ' '); do
+        if [ "$actual_errno" = "$exp" ]; then
+            errno_match=1
+            break
+        fi
+    done
+
+    if [ "$actual_ret" = "-1" ] && [ "$errno_match" = "1" ]; then
         log_pass "$name → errno=$actual_errno (expected)"
     elif [ "$actual_ret" = "-1" ] && [ "$actual_errno" = "22" ]; then
         log_fail "$name → EINVAL (errno=22) — REGRESSION: should be EXDEV(18) or EPERM(1), not EINVAL"
@@ -169,13 +178,13 @@ check_link_result() {
     fi
 }
 
-# VFS→VFS link should be blocked (EXDEV)
-check_link_result "link_vfs_to_vfs"       "HLINK.1" "link(VFS→VFS) returns EXDEV"     "18"
+# VFS→VFS link should be blocked (EXDEV or EPERM)
+check_link_result "link_vfs_to_vfs"       "HLINK.1" "link(VFS→VFS) returns EXDEV/EPERM" "18,1"
 # Cross-boundary should be blocked (EXDEV)
 check_link_result "link_vfs_to_outside"   "HLINK.2" "link(VFS→outside) returns EXDEV"  "18"
 check_link_result "link_outside_to_vfs"   "HLINK.3" "link(outside→VFS) returns EXDEV"  "18"
-# linkat within VFS should be blocked (EXDEV)
-check_link_result "linkat_vfs_to_vfs"     "HLINK.4" "linkat(VFS→VFS) returns EXDEV"    "18"
+# linkat within VFS should be blocked (EXDEV or EPERM)
+check_link_result "linkat_vfs_to_vfs"     "HLINK.4" "linkat(VFS→VFS) returns EXDEV/EPERM" "18,1"
 check_link_result "linkat_vfs_to_outside" "HLINK.5" "linkat(VFS→outside) returns EXDEV" "18"
 # Outside-only link should pass through
 check_link_result "link_outside_only"     "HLINK.6" "link(outside→outside) passes through" "0"
