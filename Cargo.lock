@@ -2146,6 +2146,7 @@ dependencies = [
  "clap",
  "console",
  "dirs 5.0.1",
+ "filetime",
  "fs2",
  "indicatif",
  "libc",

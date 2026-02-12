@@ -668,3 +668,401 @@ fn format_number(n: u64) -> String {
     }
     result.chars().rev().collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    // ========================================================================
+    // parse_duration tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_duration_hours() {
+        assert_eq!(parse_duration("24h").unwrap(), Duration::from_secs(86400));
+        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+        assert_eq!(
+            parse_duration("0h").err().unwrap(),
+            "Duration must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_days() {
+        assert_eq!(
+            parse_duration("7d").unwrap(),
+            Duration::from_secs(7 * 86400)
+        );
+        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
+        assert_eq!(
+            parse_duration("30d").unwrap(),
+            Duration::from_secs(30 * 86400)
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_minutes() {
+        assert_eq!(parse_duration("30m").unwrap(), Duration::from_secs(1800));
+        assert_eq!(parse_duration("90m").unwrap(), Duration::from_secs(5400));
+    }
+
+    #[test]
+    fn test_parse_duration_seconds() {
+        assert_eq!(parse_duration("3600s").unwrap(), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_parse_duration_compound() {
+        // 1h30m = 5400s
+        assert_eq!(parse_duration("1h30m").unwrap(), Duration::from_secs(5400));
+        // 1d12h = 36h = 129600s
+        assert_eq!(
+            parse_duration("1d12h").unwrap(),
+            Duration::from_secs(129600)
+        );
+        // 2h30m15s = 9015s
+        assert_eq!(
+            parse_duration("2h30m15s").unwrap(),
+            Duration::from_secs(9015)
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_bare_number_defaults_to_hours() {
+        // Bare number defaults to hours
+        assert_eq!(parse_duration("24").unwrap(), Duration::from_secs(86400));
+        assert_eq!(parse_duration("1").unwrap(), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_parse_duration_whitespace() {
+        assert_eq!(
+            parse_duration("  24h  ").unwrap(),
+            Duration::from_secs(86400)
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_zero_rejected() {
+        assert!(parse_duration("0h").is_err());
+        assert!(parse_duration("0d").is_err());
+        assert!(parse_duration("0").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_invalid_unit() {
+        assert!(parse_duration("24x").is_err());
+        assert!(parse_duration("5w").is_err()); // weeks not supported
+    }
+
+    #[test]
+    fn test_parse_duration_empty() {
+        assert!(parse_duration("").is_err());
+    }
+
+    // ========================================================================
+    // extract_hash_from_cas_filename tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_hash_valid() {
+        // Standard CAS filename: HASH_SIZE.bin
+        let path = PathBuf::from(
+            "/cas/blake3/ab/cd/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789_1024.bin",
+        );
+        let hash = extract_hash_from_cas_filename(&path).unwrap();
+        assert_eq!(hash[0], 0xab);
+        assert_eq!(hash[1], 0xcd);
+        assert_eq!(hash[2], 0xef);
+        assert_eq!(hash[31], 0x89);
+    }
+
+    #[test]
+    fn test_extract_hash_all_zeros() {
+        let path = PathBuf::from(
+            "/cas/blake3/00/00/0000000000000000000000000000000000000000000000000000000000000000_42.bin",
+        );
+        let hash = extract_hash_from_cas_filename(&path).unwrap();
+        assert_eq!(hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_extract_hash_all_ff() {
+        let path = PathBuf::from(
+            "/cas/blake3/ff/ff/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff_99.bin",
+        );
+        let hash = extract_hash_from_cas_filename(&path).unwrap();
+        assert_eq!(hash, [0xff; 32]);
+    }
+
+    #[test]
+    fn test_extract_hash_short_hash_rejected() {
+        // Hash too short (only 62 hex chars)
+        let path = PathBuf::from("/cas/blake3/ab/cd/abcdef01234567890123456789012345678901234567890123456789012345_1024.bin");
+        assert!(extract_hash_from_cas_filename(&path).is_none());
+    }
+
+    #[test]
+    fn test_extract_hash_no_underscore() {
+        let path = PathBuf::from("/cas/blake3/ab/cd/abcdef.bin");
+        assert!(extract_hash_from_cas_filename(&path).is_none());
+    }
+
+    #[test]
+    fn test_extract_hash_no_extension() {
+        // file_stem() returns None for files with only extension
+        let path = PathBuf::from("/cas/blake3/ab/cd/.hidden");
+        assert!(extract_hash_from_cas_filename(&path).is_none());
+    }
+
+    #[test]
+    fn test_extract_hash_invalid_hex() {
+        // 'gg' is not valid hex
+        let path = PathBuf::from(
+            "/cas/blake3/ab/cd/ggcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789_1024.bin",
+        );
+        assert!(extract_hash_from_cas_filename(&path).is_none());
+    }
+
+    // ========================================================================
+    // format_bytes tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_bytes_bytes() {
+        assert_eq!(format_bytes(0), "0 bytes");
+        assert_eq!(format_bytes(512), "512 bytes");
+        assert_eq!(format_bytes(1023), "1023 bytes");
+    }
+
+    #[test]
+    fn test_format_bytes_kb() {
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1536), "1.50 KB");
+    }
+
+    #[test]
+    fn test_format_bytes_mb() {
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
+        assert_eq!(format_bytes(5 * 1024 * 1024), "5.00 MB");
+    }
+
+    #[test]
+    fn test_format_bytes_gb() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
+        assert_eq!(
+            format_bytes(141 * 1024 * 1024 * 1024 + 737 * 1024 * 1024),
+            "141.72 GB"
+        );
+    }
+
+    // ========================================================================
+    // format_number tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_number_small() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(1), "1");
+        assert_eq!(format_number(999), "999");
+    }
+
+    #[test]
+    fn test_format_number_thousands() {
+        assert_eq!(format_number(1000), "1,000");
+        assert_eq!(format_number(19806), "19,806");
+        assert_eq!(format_number(315853), "315,853");
+    }
+
+    #[test]
+    fn test_format_number_millions() {
+        assert_eq!(format_number(1000000), "1,000,000");
+        assert_eq!(format_number(1234567), "1,234,567");
+    }
+
+    // ========================================================================
+    // Time-based GC filesystem tests
+    // ========================================================================
+
+    /// Helper: create a fake CAS directory structure with blobs at specific ages
+    fn create_test_cas(dir: &Path, entries: &[(&str, u64, Duration)]) {
+        // entries: (hash_hex, size_bytes, age)
+        for (hash_hex, size, age) in entries {
+            let prefix1 = &hash_hex[..2];
+            let prefix2 = &hash_hex[2..4];
+            let blob_dir = dir.join("blake3").join(prefix1).join(prefix2);
+            std::fs::create_dir_all(&blob_dir).unwrap();
+
+            let filename = format!("{}_{}.bin", hash_hex, size);
+            let blob_path = blob_dir.join(&filename);
+            let content = vec![0u8; *size as usize];
+            std::fs::write(&blob_path, &content).unwrap();
+
+            // Set BOTH atime and mtime to `age` ago.
+            // If we only set mtime, macOS may update atime to "now" when
+            // the file is read during scan, making max(atime, mtime) = now.
+            let ft = filetime::FileTime::from_system_time(SystemTime::now() - *age);
+            filetime::set_file_times(&blob_path, ft, ft).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_scan_separates_stale_and_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas_root = tmp.path();
+
+        // Create blobs: 2 old (48h), 1 fresh (1h)
+        create_test_cas(
+            cas_root,
+            &[
+                (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    100,
+                    Duration::from_secs(48 * 3600),
+                ),
+                (
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    200,
+                    Duration::from_secs(48 * 3600),
+                ),
+                (
+                    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    300,
+                    Duration::from_secs(3600),
+                ),
+            ],
+        );
+
+        // Scan with 24h cutoff
+        let cutoff = SystemTime::now() - Duration::from_secs(24 * 3600);
+        let blake3_dir = cas_root.join("blake3");
+
+        let mut stale_count = 0u64;
+        let mut stale_bytes = 0u64;
+        let mut fresh_count = 0u64;
+
+        let l1_entries = std::fs::read_dir(&blake3_dir).unwrap();
+        for l1 in l1_entries.flatten() {
+            if !l1.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            for l2 in std::fs::read_dir(l1.path()).unwrap().flatten() {
+                if !l2.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                for l3 in std::fs::read_dir(l2.path()).unwrap().flatten() {
+                    let meta = std::fs::metadata(l3.path()).unwrap();
+                    if !meta.is_file() {
+                        continue;
+                    }
+                    let mtime = meta.modified().unwrap();
+                    let atime = meta.accessed().unwrap_or(mtime);
+                    let last_used = std::cmp::max(atime, mtime);
+                    if last_used < cutoff {
+                        stale_count += 1;
+                        stale_bytes += meta.len();
+                    } else {
+                        fresh_count += 1;
+                    }
+                }
+            }
+        }
+
+        assert_eq!(stale_count, 2, "Expected 2 stale blobs");
+        assert_eq!(stale_bytes, 300, "Expected 300 bytes stale (100 + 200)");
+        assert_eq!(fresh_count, 1, "Expected 1 fresh blob");
+    }
+
+    #[test]
+    fn test_scan_all_fresh_nothing_to_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas_root = tmp.path();
+
+        // All files are fresh (created 1h ago)
+        create_test_cas(
+            cas_root,
+            &[
+                (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    100,
+                    Duration::from_secs(3600),
+                ),
+                (
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    200,
+                    Duration::from_secs(1800),
+                ),
+            ],
+        );
+
+        let cutoff = SystemTime::now() - Duration::from_secs(24 * 3600);
+        let blake3_dir = cas_root.join("blake3");
+        let mut stale_count = 0u64;
+
+        for l1 in std::fs::read_dir(&blake3_dir).unwrap().flatten() {
+            if !l1.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            for l2 in std::fs::read_dir(l1.path()).unwrap().flatten() {
+                if !l2.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                for l3 in std::fs::read_dir(l2.path()).unwrap().flatten() {
+                    let meta = std::fs::metadata(l3.path()).unwrap();
+                    if !meta.is_file() {
+                        continue;
+                    }
+                    let mtime = meta.modified().unwrap();
+                    if mtime < cutoff {
+                        stale_count += 1;
+                    }
+                }
+            }
+        }
+
+        assert_eq!(stale_count, 0, "All files should be fresh");
+    }
+
+    #[test]
+    fn test_cleanup_empty_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blake3_dir = tmp.path().join("blake3");
+        let nested = blake3_dir.join("aa").join("bb");
+        std::fs::create_dir_all(&nested).unwrap();
+        // Write a file in a different bucket
+        let other = blake3_dir.join("cc").join("dd");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("file.bin"), b"data").unwrap();
+
+        // Empty dir aa/bb should be removed, cc/dd should remain
+        cleanup_empty_dirs(&blake3_dir);
+
+        assert!(
+            !blake3_dir.join("aa").exists(),
+            "Empty L1 dir should be removed"
+        );
+        assert!(
+            blake3_dir.join("cc").join("dd").exists(),
+            "Non-empty dir should remain"
+        );
+        assert!(
+            blake3_dir.join("cc").join("dd").join("file.bin").exists(),
+            "File should remain"
+        );
+    }
+
+    #[test]
+    fn test_extract_and_delete_roundtrip() {
+        // Verify extract_hash_from_cas_filename produces correct hash that
+        // can be matched against manifest entries
+        let hash_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let path = PathBuf::from(format!("/cas/blake3/01/23/{}_{}.bin", hash_hex, 1024));
+        let extracted = extract_hash_from_cas_filename(&path).unwrap();
+
+        // Verify roundtrip: hex -> bytes -> hex
+        let roundtrip: String = extracted.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(roundtrip, hash_hex);
+    }
+}

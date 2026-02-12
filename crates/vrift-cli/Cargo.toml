@@ -48,4 +48,5 @@ fuse = ["vrift-fuse/fuse"]
 [dev-dependencies]
 tempfile = "3.14"
 toml = "0.8"
+filetime = "0.2"
 vrift-config = { path = "../vrift-config" }
