@@ -79,7 +79,12 @@ VRIFT_CLI="$REPO_ROOT/target/release/vrift"
 VRIFTD="$REPO_ROOT/target/release/vriftd"
 
 VR_THE_SOURCE="${VR_THE_SOURCE:-$HOME/.vrift/the_source}"
-VRIFT_SOCKET_PATH="${VRIFT_SOCKET_PATH:-$PROJECT_DIR/.vrift/vrift.sock}"
+# Default socket: /tmp/vrift.sock on macOS, /run/vrift/daemon.sock on Linux
+if [ "$(uname -s)" = "Darwin" ]; then
+    VRIFT_SOCKET_PATH="${VRIFT_SOCKET_PATH:-/tmp/vrift.sock}"
+else
+    VRIFT_SOCKET_PATH="${VRIFT_SOCKET_PATH:-/run/vrift/daemon.sock}"
+fi
 
 PASSED=0
 FAILED=0
@@ -160,6 +165,14 @@ for bin in "$SHIM_LIB" "$VRIFT_CLI" "$VRIFTD"; do
     [ -f "$bin" ] || { echo "❌ Missing: $bin"; exit 1; }
 done
 
+# Verify daemon socket exists (skip if we're about to start it)
+if [ "$SKIP_INGEST" = true ] && [ ! -S "$VRIFT_SOCKET_PATH" ]; then
+    echo "  ⚠️  Socket not found: $VRIFT_SOCKET_PATH"
+    echo "  Start daemon first: vriftd start"
+    echo "  Or run without --skip-ingest to auto-start"
+fi
+echo "  Socket:    $VRIFT_SOCKET_PATH"
+
 RS_COUNT=$(find "$PROJECT_DIR" -name '*.rs' -not -path '*/target/*' 2>/dev/null | wc -l | tr -d ' ')
 echo "  Rust files:  $RS_COUNT"
 
@@ -205,25 +218,27 @@ else
     DAEMON_PID=""
 fi
 
-# Find VDir — try override, project-local, then global
+# Find VDir — try override, project-local, then global (newest by mtime)
 VDIR_MMAP_PATH=""
 if [ -n "$VDIR_PATH_OVERRIDE" ]; then
     VDIR_MMAP_PATH="$VDIR_PATH_OVERRIDE"
 elif [ -d "$PROJECT_DIR/.vrift/vdir" ]; then
-    VDIR_MMAP_PATH=$(find "$PROJECT_DIR/.vrift/vdir" -name '*.vdir' -type f 2>/dev/null | head -1)
+    # Project-local VDir: pick newest by mtime
+    VDIR_MMAP_PATH=$(ls -t "$PROJECT_DIR/.vrift/vdir/"*.vdir 2>/dev/null | head -1)
 fi
 if [ -z "$VDIR_MMAP_PATH" ] && [ -d "$HOME/.vrift/vdir" ]; then
-    VDIR_MMAP_PATH=$(find "$HOME/.vrift/vdir" -name '*.vdir' -type f 2>/dev/null | sort -t/ -k$(echo "$HOME/.vrift/vdir" | tr -cd '/' | wc -c | tr -d ' ')  2>/dev/null | tail -1)
-    # Simple fallback: just pick the newest by mtime
-    [ -z "$VDIR_MMAP_PATH" ] && VDIR_MMAP_PATH=$(find "$HOME/.vrift/vdir" -name '*.vdir' 2>/dev/null | head -1)
+    # Global VDir: pick newest by modification time
+    VDIR_MMAP_PATH=$(ls -t "$HOME/.vrift/vdir/"*.vdir 2>/dev/null | head -1)
 fi
 
 if [ -n "$VDIR_MMAP_PATH" ]; then
-    echo "  VDir: $(basename "$VDIR_MMAP_PATH") ($(stat -f%z "$VDIR_MMAP_PATH" 2>/dev/null || stat -c%s "$VDIR_MMAP_PATH" 2>/dev/null) bytes)"
+    VDIR_SIZE=$(stat -f%z "$VDIR_MMAP_PATH" 2>/dev/null || stat -c%s "$VDIR_MMAP_PATH" 2>/dev/null)
+    echo "  VDir: $(basename "$VDIR_MMAP_PATH") ($VDIR_SIZE bytes)"
+    echo "  Hint: Use --vdir <path> to specify an exact VDir file"
     pass "VDir found"
 else
     fail "VDir not found"
-    echo "  Run without --skip-ingest first"
+    echo "  Run without --skip-ingest first, or specify --vdir <path>"
     exit 1
 fi
 
