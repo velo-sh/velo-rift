@@ -1,7 +1,7 @@
 //! # Garbage Collection (RFC-0041)
 //!
 //! Multi-manifest garbage collection with registry integration and Bloom-assisted daemon sweep.
-//! Supports time-based cleanup via `--max-age` for removing stale CAS blobs directly.
+//! Supports time-based cleanup via `--unused-for` for removing stale CAS blobs directly.
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -38,12 +38,12 @@ pub struct GcArgs {
     /// Handles macOS immutable flags (uchg) automatically.
     ///
     /// ⚠️  This is a DESTRUCTIVE operation:
-    ///   - CAS blobs older than max-age are permanently deleted
+    ///   - CAS blobs unused for the specified duration are permanently deleted
     ///   - Manifest entries referencing deleted blobs are removed
     ///   - Affected projects will need re-ingest (`vrift ingest`) to restore
     ///   - VDir entries pointing to deleted blobs will miss (graceful fallback)
     #[arg(long, value_parser = parse_duration)]
-    max_age: Option<Duration>,
+    unused_for: Option<Duration>,
 }
 
 /// Parse a human-readable duration string like "24h", "7d", "30m", "1h30m"
@@ -84,9 +84,9 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 }
 
 pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
-    // If --max-age is specified, use the time-based direct cleanup path
-    if let Some(max_age) = args.max_age {
-        return run_max_age_gc(cas_root, max_age, args.delete, args.yes).await;
+    // If --unused-for is specified, use the time-based direct cleanup path
+    if let Some(unused_for) = args.unused_for {
+        return run_unused_for_gc(cas_root, unused_for, args.delete, args.yes).await;
     }
 
     println!();
@@ -237,7 +237,7 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
     Ok(())
 }
 
-/// Time-based GC: delete CAS blob files not used within `max_age`.
+/// Time-based GC: delete CAS blob files not used within `unused_for` duration.
 ///
 /// Safe cleanup flow:
 ///   1. Scan CAS for stale files by max(atime, mtime)
@@ -246,7 +246,12 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
 ///   4. Commit manifest changes
 ///   5. Delete CAS files (handles macOS immutable flags)
 ///   6. Clean empty directories
-async fn run_max_age_gc(cas_root: &Path, max_age: Duration, delete: bool, yes: bool) -> Result<()> {
+async fn run_unused_for_gc(
+    cas_root: &Path,
+    max_age: Duration,
+    delete: bool,
+    yes: bool,
+) -> Result<()> {
     let hours = max_age.as_secs() / 3600;
     let mins = (max_age.as_secs() % 3600) / 60;
     let age_str = if mins > 0 {
@@ -358,7 +363,7 @@ async fn run_max_age_gc(cas_root: &Path, max_age: Duration, delete: bool, yes: b
     if !delete {
         println!();
         println!(
-            "     👉 Run with --delete --max-age {} to remove unused blobs.",
+            "     👉 Run with --delete --unused-for {} to remove unused blobs.",
             age_str
         );
         return Ok(());
