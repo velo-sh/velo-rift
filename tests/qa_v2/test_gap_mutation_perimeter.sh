@@ -19,15 +19,12 @@ check_prerequisites || exit 1
 
 log_section "Gap: Mutation Perimeter Coverage"
 
-start_daemon || exit 1
+# NOTE: No daemon needed — mutation blocking uses shim's VFS prefix check.
 
 # Create test file inside VFS workspace
 TEST_FILE="$TEST_WORKSPACE/src/perimeter_test.txt"
 echo "immutable content" > "$TEST_FILE"
 ORIGINAL_MTIME=$(stat -f "%m" "$TEST_FILE" 2>/dev/null || stat -c "%Y" "$TEST_FILE" 2>/dev/null)
-
-# Ingest workspace so files appear in VDir manifest (required for mutation blocking)
-ingest_test_workspace
 
 # Compile the mutation perimeter probe
 PROBE_SRC="$TEST_WORKSPACE/mutation_probe.c"
