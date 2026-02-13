@@ -268,7 +268,7 @@ echo "  Inception stat-all: $((T1 - T0))ms"
 
 # Baseline: cat all source files (read content)
 T0=$(ms)
-find "$PROJECT_DIR" -name '*.rs' -not -path '*/target/*' -not -path '*/.git/*' -exec cat {} + >/dev/null 2>&1
+find "$PROJECT_DIR" -name '*.rs' -not -path '*/target/*' -not -path '*/.git/*' -exec cat {} + >/dev/null 2>&1 || true
 T1=$(ms)
 echo "  Baseline read-all: $((T1 - T0))ms"
 
