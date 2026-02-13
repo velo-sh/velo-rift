@@ -795,13 +795,13 @@ pub unsafe extern "C" fn rmdir_inception(path: *const c_char) -> c_int {
 
     let res = crate::syscalls::linux_raw::raw_rmdir(path);
 
-    if res == -1 && crate::get_errno() == libc::ENOENT {
-        if vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key)
+    if res == -1
+        && crate::get_errno() == libc::ENOENT
+        && vdir_list_dir(state.mmap_ptr, state.mmap_size, &vpath.manifest_key)
             .map(|v| !v.is_empty())
             .unwrap_or(false)
-        {
-            return 0;
-        }
+    {
+        return 0;
     }
 
     res

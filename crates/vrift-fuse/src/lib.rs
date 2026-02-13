@@ -18,6 +18,7 @@ mod imp {
         FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
     };
     use libc::{c_int, ENOENT};
+    use vrift_cas::Blake3Hash;
     use vrift_cas::CasStore;
     use vrift_manifest::{LmdbManifest, VnodeEntry};
 
@@ -25,7 +26,7 @@ mod imp {
     const BLOCK_SIZE: u64 = 4096;
 
     struct InodeEntry {
-        path_hash: vrift_manifest::PathHash,
+        content_hash: Blake3Hash,
         attr: FileAttr,
         children: Vec<(String, u64)>, // Name -> Inode
     }
@@ -70,7 +71,7 @@ mod imp {
             self.inodes.insert(
                 1,
                 InodeEntry {
-                    path_hash: [0; 32], // Dummy
+                    content_hash: [0u8; 32],
                     attr: Self::default_dir_attr(1),
                     children: Vec::new(),
                 },
@@ -96,7 +97,7 @@ mod imp {
                 self.inodes.insert(
                     inode,
                     InodeEntry {
-                        path_hash: entry.vnode.content_hash,
+                        content_hash: entry.vnode.content_hash,
                         attr,
                         children: Vec::new(),
                     },
@@ -154,7 +155,7 @@ mod imp {
             self.inodes.insert(
                 inode,
                 InodeEntry {
-                    path_hash: [0; 32],
+                    content_hash: [0u8; 32],
                     attr,
                     children: Vec::new(),
                 },
@@ -263,7 +264,7 @@ mod imp {
                 }
             };
 
-            match self.cas.get(&entry.path_hash) {
+            match self.cas.get(&entry.content_hash) {
                 Ok(data) => {
                     let offset = offset as usize;
                     let size = size as usize;
