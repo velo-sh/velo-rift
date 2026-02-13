@@ -937,6 +937,8 @@ pub(crate) struct VDirDirEntry {
 /// Scan VDir mmap for all entries whose path starts with `dir_prefix/`.
 /// Returns immediate children only (files and first-level subdirectories).
 /// Uses seqlock for safe concurrent reading.
+/// Returns None ONLY when VDir mmap is unavailable/invalid.
+/// Returns Some(vec![]) for empty directories (no IPC fallback needed).
 #[inline(never)]
 pub(crate) fn vdir_list_dir(
     mmap_ptr: *const u8,
@@ -987,11 +989,9 @@ pub(crate) fn vdir_list_dir(
 
         let g2 = gen_ptr.load(Ordering::Acquire);
         if g1 == g2 {
-            return if result.is_empty() {
-                None
-            } else {
-                Some(result)
-            };
+            // RFC-0053: Return Some(result) even if empty — VDir mmap is valid,
+            // empty just means no files in this directory. None means VDir unavailable.
+            return Some(result);
         }
     }
 
@@ -1005,11 +1005,7 @@ pub(crate) fn vdir_list_dir(
         string_pool_size,
         &prefix,
     );
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
+    Some(result)
 }
 
 /// Extracted scan logic for vdir_list_dir to allow retries.
@@ -1174,6 +1170,19 @@ impl InceptionLayerState {
             Some(p) => {
                 INCEPTION_LAYER_STATE.store(p, Ordering::Release);
                 unsafe { INITIALIZING.store(InceptionState::Ready as u8, Ordering::SeqCst) };
+                // RFC-0053: Publish VFS prefix to C layer for fast path bypass
+                let state = unsafe { &*p };
+                let prefix = state.vfs_prefix.as_str();
+                if !prefix.is_empty() {
+                    extern "C" {
+                        fn set_vfs_prefix(prefix: *const libc::c_char);
+                    }
+                    let mut buf = [0u8; 256];
+                    let len = prefix.len().min(255);
+                    buf[..len].copy_from_slice(&prefix.as_bytes()[..len]);
+                    buf[len] = 0;
+                    unsafe { set_vfs_prefix(buf.as_ptr() as *const libc::c_char) };
+                }
                 let init_elapsed = crate::profile::now_ns().wrapping_sub(init_start);
                 crate::profile::PROFILE
                     .init_ns
