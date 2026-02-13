@@ -13,7 +13,7 @@ use console::style;
 /// VDIR_MAGIC must match vrift-vdird/src/vdir.rs
 const VDIR_MAGIC: u32 = 0x56524654; // "VRFT"
 /// VDIR_VERSION must match vrift-vdird/src/vdir.rs
-const VDIR_VERSION: u32 = 2;
+const VDIR_VERSION: u32 = 4; // Must match vrift-ipc/src/vdir_types.rs
 
 /// Result of preflight checks
 #[derive(Debug)]
@@ -66,12 +66,22 @@ pub fn run_preflight(project_dir: &Path) -> PreflightResult {
         return result;
     }
 
-    // Check 2: VDir file exists
-    let vdir_path = vrift_dir.join("vdir.mmap");
+    // Check 2: VDir file exists (global path: ~/.vrift/vdir/<project_hash>.vdir)
+    let project_id = vrift_config::path::compute_project_id(&project_root);
+    let vdir_path = match vrift_config::path::get_vdir_mmap_path(&project_id) {
+        Some(p) => p,
+        None => {
+            result
+                .errors
+                .push("Cannot determine VDir path from config".to_string());
+            return result;
+        }
+    };
     if !vdir_path.exists() {
         result.errors.push(format!(
-            "VDir not found. Daemon may not be running. Run: {}",
-            style("vrift daemon start").cyan()
+            "VDir not found at {}. Run: {} first",
+            vdir_path.display(),
+            style("vrift ingest <project>").cyan()
         ));
         return result;
     }
