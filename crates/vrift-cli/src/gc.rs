@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
-use vrift_cas::CasStore;
+use vrift_cas::{physical_size, CasStore};
 use vrift_manifest::LmdbManifest;
 
 use crate::registry::ManifestRegistry;
@@ -210,7 +210,7 @@ pub async fn run(cas_root: &Path, args: GcArgs) -> Result<()> {
                     orphan_count += 1;
                     if let Some(p) = cas.blob_path_for_hash(&hash) {
                         if let Ok(meta) = std::fs::metadata(p) {
-                            orphan_bytes += meta.len();
+                            orphan_bytes += physical_size(&meta);
                         }
                     }
                 }
@@ -321,7 +321,7 @@ async fn run_unused_for_gc(
                 let last_used = std::cmp::max(atime, mtime);
                 if last_used < cutoff {
                     stale_count += 1;
-                    stale_bytes += meta.len();
+                    stale_bytes += physical_size(&meta);
                     if delete {
                         // Extract blake3 hash from filename: "HASH_SIZE.bin" -> HASH
                         if let Some(hash) = extract_hash_from_cas_filename(&path) {
@@ -331,7 +331,7 @@ async fn run_unused_for_gc(
                     }
                 } else {
                     kept_count += 1;
-                    kept_bytes += meta.len();
+                    kept_bytes += physical_size(&meta);
                 }
             }
         }
@@ -446,7 +446,9 @@ async fn run_unused_for_gc(
             io::stdout().flush().ok();
         }
 
-        let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let file_size = std::fs::metadata(path)
+            .map(|m| physical_size(&m))
+            .unwrap_or(0);
 
         // Try direct delete first
         match std::fs::remove_file(path) {
@@ -962,7 +964,7 @@ mod tests {
                     let last_used = std::cmp::max(atime, mtime);
                     if last_used < cutoff {
                         stale_count += 1;
-                        stale_bytes += meta.len();
+                        stale_bytes += physical_size(&meta);
                     } else {
                         fresh_count += 1;
                     }
@@ -971,7 +973,9 @@ mod tests {
         }
 
         assert_eq!(stale_count, 2, "Expected 2 stale blobs");
-        assert_eq!(stale_bytes, 300, "Expected 300 bytes stale (100 + 200)");
+        // physical_size returns block-aligned values (st_blocks * 512),
+        // so exact byte totals won't match — just verify it's > 0
+        assert!(stale_bytes > 0, "Expected non-zero stale bytes");
         assert_eq!(fresh_count, 1, "Expected 1 fresh blob");
     }
 

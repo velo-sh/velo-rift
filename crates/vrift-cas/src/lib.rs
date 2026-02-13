@@ -53,6 +53,26 @@ pub use zero_copy_ingest::{
     IngestResult,
 };
 
+/// Returns the physical disk space allocated for a file.
+///
+/// On Unix, uses `st_blocks * 512` which accounts for APFS CoW/clone sharing,
+/// sparse files, and filesystem block alignment. This gives the actual disk
+/// usage rather than the logical file size.
+///
+/// Falls back to logical size on non-Unix platforms.
+#[cfg(unix)]
+pub fn physical_size(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks() * 512
+}
+
+/// Returns the physical disk space allocated for a file.
+/// Non-Unix fallback: returns logical file size.
+#[cfg(not(unix))]
+pub fn physical_size(meta: &std::fs::Metadata) -> u64 {
+    meta.len()
+}
+
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -409,7 +429,8 @@ impl CasStore {
                         if blob.path().extension().is_some_and(|ext| ext == "tmp") {
                             continue;
                         }
-                        let size = blob.metadata()?.len();
+                        let meta = blob.metadata()?;
+                        let size = physical_size(&meta);
                         blob_count += 1;
                         total_bytes += size;
 
@@ -505,7 +526,7 @@ impl CasStore {
                 // Potential orphan (not in Bloom Filter)
                 if let Some(path) = self.find_blob_path(&hash) {
                     if let Ok(meta) = fs::metadata(&path) {
-                        let size = meta.len();
+                        let size = physical_size(&meta);
                         // Delete the blob (handles immutable flags internally)
                         if self.delete(&hash).is_ok() {
                             deleted_count += 1;
@@ -1181,6 +1202,59 @@ mod tests {
         assert_eq!(
             found_hashes, expected,
             "Iterator should find all stored hashes"
+        );
+    }
+
+    // ========================================================================
+    // physical_size tests
+    // ========================================================================
+
+    #[test]
+    fn test_physical_size_reports_blocks() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.bin");
+        // Write 100 bytes
+        std::fs::write(&path, vec![0u8; 100]).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+
+        let logical = meta.len();
+        let physical = physical_size(&meta);
+
+        // Logical must be exactly 100
+        assert_eq!(logical, 100);
+        // Physical must be > 0 (at least 1 block = 4096 on APFS)
+        assert!(physical > 0, "physical size must be > 0");
+        // Physical should be >= logical for a regular (non-cloned) file
+        assert!(
+            physical >= logical,
+            "physical ({}) should be >= logical ({}) for non-cloned file",
+            physical,
+            logical
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_physical_size_block_aligned() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("odd.bin");
+
+        // Write an odd number of bytes (not a multiple of 512)
+        std::fs::write(&path, vec![0u8; 1000]).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+
+        let logical = meta.len();
+        let physical = physical_size(&meta);
+
+        // Logical is exactly 1000
+        assert_eq!(logical, 1000);
+        // Physical must be a multiple of 512 (block-aligned)
+        assert_eq!(physical % 512, 0, "physical size must be block-aligned");
+        // Physical != logical (1000 is not a multiple of 512)
+        assert_ne!(
+            physical, logical,
+            "physical ({}) should differ from non-aligned logical ({})",
+            physical, logical
         );
     }
 }
