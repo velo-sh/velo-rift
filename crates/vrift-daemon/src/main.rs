@@ -1042,19 +1042,55 @@ async fn handle_request(
                         let prefix_str = prefix.as_deref().unwrap_or("");
                         let mut vdir_count = 0u64;
 
+                        let mut added_dirs = std::collections::HashSet::new();
                         for r in results.iter().flatten() {
                             let canon_src = r
                                 .source_path
                                 .canonicalize()
                                 .unwrap_or_else(|_| r.source_path.clone());
                             let rel = canon_src.strip_prefix(&canon_root).unwrap_or(&canon_src);
-                            // Prepend / to match manifest key convention:
-                            // inception layer strips project_root → "/debug/..." (with leading /)
                             let key = if prefix_str.is_empty() || prefix_str == "/" {
                                 format!("/{}", rel.display())
                             } else {
                                 format!("/{}/{}", prefix_str.trim_end_matches('/'), rel.display())
                             };
+
+                            // RFC-0051++: Recursive Directory Backfill
+                            // Ensure every parent directory exists in VDir so the V4 linked-list
+                            // index can correctly track children.
+                            let mut current_key = key.as_str();
+                            while let Some(slash_pos) = current_key.rfind('/') {
+                                let parent = if slash_pos == 0 {
+                                    "/"
+                                } else {
+                                    &current_key[..slash_pos]
+                                };
+                                if !added_dirs.insert(parent.to_string()) {
+                                    break; // Already backfilled this and its parents
+                                }
+
+                                let dir_entry = VDirEntry {
+                                    path_hash: fnv1a_hash(parent),
+                                    cas_hash: [0; 32],
+                                    size: 0,
+                                    mtime_sec: 0,
+                                    mtime_nsec: 0,
+                                    mode: 0o755 | 0x4000, // S_IFDIR
+                                    path_offset: 0,
+                                    flags: vrift_ipc::vdir_types::FLAG_DIR,
+                                    path_len: 0,
+                                    parent_hash: 0, // Parent will be set by vdird if possible
+                                    first_child_idx: u32::MAX,
+                                    next_sibling_idx: u32::MAX,
+                                };
+                                let _ = vdir.upsert_with_path(dir_entry, parent);
+                                vdir_count += 1;
+
+                                if parent == "/" {
+                                    break;
+                                }
+                                current_key = parent;
+                            }
 
                             let (mtime_sec, mtime_nsec, mode) =
                                 match std::fs::metadata(&r.source_path) {
@@ -1075,6 +1111,9 @@ async fn handle_request(
                                 path_offset: 0,
                                 flags: 0,
                                 path_len: 0,
+                                parent_hash: 0,
+                                first_child_idx: u32::MAX,
+                                next_sibling_idx: u32::MAX,
                             };
 
                             if vdir.upsert_with_path(entry, &key).is_ok() {

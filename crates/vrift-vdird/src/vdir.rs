@@ -23,7 +23,9 @@ impl VDir {
         let capacity = VDIR_DEFAULT_CAPACITY;
         let table_size = capacity * VDIR_ENTRY_SIZE;
         let string_pool_offset = VDIR_HEADER_SIZE + table_size;
-        let file_size = string_pool_offset + VDIR_STRING_POOL_CAPACITY;
+        let bloom_filter_offset = string_pool_offset + VDIR_STRING_POOL_CAPACITY;
+        let bloom_filter_size = 64 * 1024; // 64KB Bloom Filter
+        let file_size = bloom_filter_offset + bloom_filter_size;
 
         let file = OpenOptions::new()
             .read(true)
@@ -75,7 +77,9 @@ impl VDir {
                 string_pool_offset: string_pool_offset as u32,
                 string_pool_size: 0,
                 string_pool_capacity: VDIR_STRING_POOL_CAPACITY as u32,
-                _pad: [0; 20],
+                bloom_offset: bloom_filter_offset as u32,
+                bloom_size: bloom_filter_size as u32,
+                _pad: [0; 12],
             };
             header.crc32 = Self::compute_header_crc(header);
             mmap.flush()?;
@@ -268,6 +272,7 @@ impl VDir {
         let is_new = existing.is_empty();
 
         self.begin_write();
+        self.update_bloom_filter(entry.path_hash);
         self.entries_mut()[slot] = entry;
 
         if is_new {
@@ -436,6 +441,23 @@ impl VDir {
         Ok(())
     }
 
+    /// Helper to get parent path for V4 directory index
+    fn get_parent_path(path: &str) -> Option<&str> {
+        if path == "/" || path.is_empty() {
+            return None;
+        }
+        let trimmed = path.trim_end_matches('/');
+        if let Some(idx) = trimmed.rfind('/') {
+            if idx == 0 {
+                Some("/")
+            } else {
+                Some(&trimmed[..idx])
+            }
+        } else {
+            None
+        }
+    }
+
     // -----------------------------------------------------------------------
     // String Pool — bump allocator for path strings
     // -----------------------------------------------------------------------
@@ -526,10 +548,42 @@ impl VDir {
         }
 
         let slot = self.find_slot(entry.path_hash).context("VDir full")?;
-
         let is_new = self.entries()[slot].is_empty();
 
+        if is_new {
+            entry.first_child_idx = u32::MAX;
+            entry.next_sibling_idx = u32::MAX;
+
+            if let Some(parent_path) = Self::get_parent_path(path) {
+                let parent_hash = fnv1a_hash(parent_path);
+                entry.parent_hash = parent_hash;
+
+                // Note: We'll link to parent under the write lock below
+            }
+        } else {
+            // Preserve existing V4 links on update
+            let existing = &self.entries()[slot];
+            entry.parent_hash = existing.parent_hash;
+            entry.first_child_idx = existing.first_child_idx;
+            entry.next_sibling_idx = existing.next_sibling_idx;
+        }
+
         self.begin_write();
+
+        // V4: Update Bloom Filter for fast O(1) miss detection
+        self.update_bloom_filter(entry.path_hash);
+
+        // V4: If new entry, link into parent's children list
+        if is_new && entry.parent_hash != 0 {
+            if let Some(parent_slot) = self.find_slot(entry.parent_hash) {
+                let parent_exists = !self.entries()[parent_slot].is_empty();
+                if parent_exists {
+                    entry.next_sibling_idx = self.entries()[parent_slot].first_child_idx;
+                    self.entries_mut()[parent_slot].first_child_idx = slot as u32;
+                }
+            }
+        }
+
         self.entries_mut()[slot] = entry;
 
         if is_new {
@@ -553,36 +607,71 @@ impl VDir {
             format!("{}/", dir_prefix)
         };
 
-        let entries = self.entries();
-        for entry in entries.iter().take(self.capacity) {
-            if entry.is_empty() || entry.is_deleted() {
-                continue;
-            }
+        // VDIR V4: Try O(1) readdir via linked list
+        if self.header().version >= 4 {
+            let normalized_dir = if dir_prefix == "/" {
+                "/"
+            } else {
+                dir_prefix.trim_end_matches('/')
+            };
+            let dir_hash = fnv1a_hash(normalized_dir);
 
-            if let Some(path) = self.get_path(entry) {
-                if let Some(rest) = path.strip_prefix(&prefix) {
-                    // Immediate child: no more '/' in rest, or the first component
-                    let child_name = if let Some(slash_pos) = rest.find('/') {
-                        // This is a grandchild — extract the first component as a dir
-                        &rest[..slash_pos]
-                    } else {
-                        rest
-                    };
+            if let Some(dir_slot) = self.find_slot(dir_hash) {
+                let dir_entry = &self.entries()[dir_slot];
+                if !dir_entry.is_empty() && dir_entry.is_dir() {
+                    let mut current_idx = dir_entry.first_child_idx;
+                    while current_idx != u32::MAX && (current_idx as usize) < self.capacity {
+                        let child_entry = &self.entries()[current_idx as usize];
+                        if !child_entry.is_empty() && !child_entry.is_deleted() {
+                            if let Some(path) = self.get_path(child_entry) {
+                                if let Some(rest) = path.strip_prefix(&prefix) {
+                                    let child_name = if let Some(slash_pos) = rest.find('/') {
+                                        &rest[..slash_pos]
+                                    } else {
+                                        rest
+                                    };
 
-                    if !child_name.is_empty() {
-                        // Deduplicate: check if we already have this child name
-                        let already = results
-                            .iter()
-                            .any(|(n, _): &(String, VDirEntry)| n == child_name);
-                        if !already {
-                            let is_subdir = rest.contains('/');
-                            let mut child_entry = *entry;
-                            if is_subdir {
-                                // Mark as directory for readdir
-                                child_entry.flags |= FLAG_DIR;
-                                child_entry.size = 0;
+                                    if !child_name.is_empty()
+                                        && !results.iter().any(|(n, _)| n == child_name)
+                                    {
+                                        results.push((child_name.to_string(), *child_entry));
+                                    }
+                                }
                             }
-                            results.push((child_name.to_string(), child_entry));
+                        }
+                        current_idx = child_entry.next_sibling_idx;
+                    }
+                }
+            }
+        }
+
+        // FALLBACK: Full scan if V4 index is missing or empty
+        if results.is_empty() {
+            let entries = self.entries();
+            for entry in entries.iter().take(self.capacity) {
+                if entry.is_empty() || entry.is_deleted() {
+                    continue;
+                }
+
+                if let Some(path) = self.get_path(entry) {
+                    if let Some(rest) = path.strip_prefix(&prefix) {
+                        let child_name = if let Some(slash_pos) = rest.find('/') {
+                            &rest[..slash_pos]
+                        } else {
+                            rest
+                        };
+
+                        if !child_name.is_empty() {
+                            let already = results.iter().any(|(n, _)| n == child_name);
+                            if !already {
+                                let is_subdir = rest.contains('/');
+                                let mut child_entry = *entry;
+                                if is_subdir {
+                                    child_entry.flags |= FLAG_DIR;
+                                    child_entry.size = 0;
+                                }
+                                results.push((child_name.to_string(), child_entry));
+                            }
                         }
                     }
                 }
@@ -590,6 +679,29 @@ impl VDir {
         }
 
         results
+    }
+
+    fn update_bloom_filter(&mut self, path_hash: u64) {
+        let (offset, size) = {
+            let h = self.header();
+            (h.bloom_offset as usize, h.bloom_size as usize)
+        };
+        if size == 0 || offset == 0 {
+            return;
+        }
+
+        let bits = (size * 8) as u64;
+        let h1 = path_hash;
+        let h2 = path_hash.rotate_right(21);
+        let h3 = path_hash.rotate_right(42);
+
+        let idx1 = (h1 % bits) as usize;
+        let idx2 = (h2 % bits) as usize;
+        let idx3 = (h3 % bits) as usize;
+
+        self.mmap[offset + (idx1 / 8)] |= 1 << (idx1 % 8);
+        self.mmap[offset + (idx2 / 8)] |= 1 << (idx2 % 8);
+        self.mmap[offset + (idx3 / 8)] |= 1 << (idx3 % 8);
     }
 }
 
@@ -645,6 +757,9 @@ mod tests {
             flags: 0,
             path_offset: 0,
             path_len: 0,
+            parent_hash: 0,
+            first_child_idx: u32::MAX,
+            next_sibling_idx: u32::MAX,
         };
         vdir.upsert(entry).unwrap();
 

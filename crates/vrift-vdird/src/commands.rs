@@ -187,6 +187,7 @@ impl CommandHandler {
             flags: entry.flags,
             path_offset: 0,
             path_len: 0,
+            ..Default::default()
         };
 
         match self.vdir.lock().unwrap().upsert_with_path(vdir_entry, path) {
@@ -239,6 +240,7 @@ impl CommandHandler {
                 flags: lmdb_entry.vnode.flags,
                 path_offset: 0,
                 path_len: 0,
+                ..Default::default()
             })
         } else {
             None
@@ -309,6 +311,7 @@ impl CommandHandler {
                 flags: lmdb_entry.vnode.flags,
                 path_offset: 0,
                 path_len: 0,
+                ..Default::default()
             })
         } else {
             None
@@ -449,6 +452,7 @@ impl CommandHandler {
             flags: 0,
             path_offset: 0,
             path_len: 0,
+            ..Default::default()
         };
 
         if let Err(e) = self.vdir.lock().unwrap().upsert_with_path(entry, vpath) {
@@ -609,6 +613,7 @@ impl CommandHandler {
                     path_offset: 0,
                     flags: 0,
                     path_len: 0,
+                    ..Default::default()
                 };
                 let _ = vdir.upsert_with_path(entry, &key);
             }

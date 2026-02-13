@@ -246,6 +246,7 @@ impl IngestHandler {
                                 flags: 0,
                                 path_offset: 0,
                                 path_len: 0,
+                                ..Default::default()
                             };
                             if let Ok(mut vdir) = vdir_lock.lock() {
                                 if let Err(e) = vdir.upsert_with_path(vdir_entry, &rel_path) {

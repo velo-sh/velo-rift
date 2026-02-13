@@ -7,7 +7,7 @@
 pub const VDIR_MAGIC: u32 = 0x56524654;
 
 /// VDir format version. Bump on incompatible changes.
-pub const VDIR_VERSION: u32 = 3; // v3: Added path string pool for readdir support
+pub const VDIR_VERSION: u32 = 4; // v4: Added Directory Index (parent/sibling/child) for O(1) readdir
 
 /// Default hash table capacity (slots) — Prime number for better distribution
 pub const VDIR_DEFAULT_CAPACITY: usize = 131101;
@@ -70,7 +70,9 @@ pub struct VDirHeader {
     pub string_pool_offset: u32,   // v3: byte offset from start of mmap to string pool
     pub string_pool_size: u32,     // v3: current used bytes in string pool
     pub string_pool_capacity: u32, // v3: total allocated bytes for string pool
-    pub _pad: [u8; 20],            // Pad to 64 bytes
+    pub bloom_offset: u32,         // v4: byte offset to Bloom Filter
+    pub bloom_size: u32,           // v4: size of Bloom Filter in bytes
+    pub _pad: [u8; 12],            // Pad to 64 bytes
 }
 
 // Compile-time assertion: VDirHeader must be exactly 64 bytes
@@ -105,13 +107,16 @@ pub struct VDirEntry {
     pub mtime_sec: i64,
     pub mtime_nsec: u32,
     pub mode: u32,
-    pub path_offset: u32, // v3: offset into string pool (0 = no path stored)
-    pub flags: u16,       // FLAG_DIRTY | FLAG_DELETED | FLAG_SYMLINK | FLAG_DIR
-    pub path_len: u16,    // v3: length of path string (max 65535)
+    pub path_offset: u32,     // v3: offset into string pool (0 = no path stored)
+    pub flags: u16,           // FLAG_DIRTY | FLAG_DELETED | FLAG_SYMLINK | FLAG_DIR
+    pub path_len: u16,        // v3: length of path string (max 65535)
+    pub parent_hash: u64,     // v4: hash of parent directory path
+    pub first_child_idx: u32, // v4: index of first child entry (u32::MAX = none)
+    pub next_sibling_idx: u32, // v4: index of next sibling entry (u32::MAX = none)
 }
 
-// Compile-time assertion: VDirEntry must be exactly 72 bytes
-const _: () = assert!(std::mem::size_of::<VDirEntry>() == 72);
+// Compile-time assertion: VDirEntry must be exactly 88 bytes in v4
+const _: () = assert!(std::mem::size_of::<VDirEntry>() == 88);
 
 impl VDirEntry {
     /// True if slot is empty (never written)
