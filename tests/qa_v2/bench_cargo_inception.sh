@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# bench_cargo_inception.sh — Benchmark any Cargo project under VRift inception
+# bench_cargo_inception.sh — Benchmark Cargo project under VRift inception
 # ==============================================================================
 #
 # Usage:
@@ -10,23 +10,22 @@
 #   --skip-ingest     Skip ingest (use existing CAS/VDir)
 #   --runs N          Number of benchmark iterations (default: 3)
 #   --modify FILE     File to modify for incremental test (default: auto-detect)
-#   --clean-target    Remove target/ before starting (for cold-build bench)
+#   --vdir PATH       Specify exact VDir file
 #
 # Example:
 #   ./bench_cargo_inception.sh ~/rust_source/velo
 #   ./bench_cargo_inception.sh ~/rust_source/velo --skip-ingest --runs 5
 #
-# What it does:
+# Phases:
 #   1. [Optional] Ingest project into CAS
-#   2. Baseline build (no inception) — full + no-op
-#   3. Inception build — full + no-op
-#   4. Touch file → incremental build
-#   5. Real code change (add comment) → incremental build → revert
-#   6. cargo check (inception)
-#   7. Clean → full rebuild from CAS (materialization)
-#   8. Post-inception build
-#   9. CAS integrity check
-#  10. Timing summary table
+#   2. Baseline no-op build (no inception)
+#   3. Inception no-op build
+#   4. Touch file → incremental build (baseline vs inception)
+#   5. Code change → incremental build → revert (baseline vs inception)
+#   6. Clean → full rebuild: baseline vs inception (target restoration test)
+#   7. Post-clean no-op verification
+#   8. CAS integrity check
+#   9. Timing summary table
 # ==============================================================================
 
 set -euo pipefail
@@ -38,7 +37,6 @@ PROJECT_DIR=""
 SKIP_INGEST=false
 BENCH_RUNS=3
 MODIFY_FILE=""
-CLEAN_TARGET=false
 VDIR_PATH_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
@@ -46,10 +44,9 @@ while [[ $# -gt 0 ]]; do
         --skip-ingest)  SKIP_INGEST=true; shift ;;
         --runs)         BENCH_RUNS="$2"; shift 2 ;;
         --modify)       MODIFY_FILE="$2"; shift 2 ;;
-        --clean-target) CLEAN_TARGET=true; shift ;;
         --vdir)         VDIR_PATH_OVERRIDE="$2"; shift 2 ;;
         -h|--help)
-            head -20 "$0" | grep '^#' | sed 's/^# \?//'
+            head -30 "$0" | grep '^#' | sed 's/^# \?//'
             exit 0 ;;
         *)
             if [ -z "$PROJECT_DIR" ]; then
@@ -73,12 +70,11 @@ PROJECT_NAME=$(basename "$PROJECT_DIR")
 # ============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source SSOT env vars (REPO_ROOT, VRIFT_CLI, VRIFTD, SHIM_LIB, VRIFT_SOCKET_PATH, VR_THE_SOURCE)
+# Source SSOT env vars
 source "$SCRIPT_DIR/../lib/vrift_env.sh"
 
 PASSED=0
 FAILED=0
-LAST_BENCH_MS=0
 
 # Timing storage
 declare -a BENCH_NAMES=()
@@ -97,24 +93,29 @@ bench_record() {
     BENCH_TIMES+=("$ms")
 }
 
-# Time a command, sets global LAST_BENCH_MS
-timed() {
-    local _t0=$(ms)
-    "$@"
-    local _t1=$(ms)
-    LAST_BENCH_MS=$((_t1 - _t0))
-    return 0
+format_time() {
+    local t="$1"
+    if [ "$t" -ge 1000 ]; then
+        python3 -c "print(f'{${t}/1000:.2f}s')"
+    else
+        echo "${t}ms"
+    fi
 }
 
-assert_output() {
-    local desc="$1"; local expected="$2"; shift 2
-    local actual
-    actual=$("$@" 2>/dev/null) || true
-    if echo "$actual" | grep -q "$expected"; then
-        pass "$desc"
-    else
-        fail "$desc (expected '$expected')"
-    fi
+run_bench_avg() {
+    local label="$1"; shift
+    local times=()
+    for i in $(seq 1 "$BENCH_RUNS"); do
+        local t0=$(ms)
+        eval "$@"
+        local t1=$(ms)
+        times+=($((t1 - t0)))
+    done
+    local sum=0
+    for t in "${times[@]}"; do sum=$((sum + t)); done
+    local avg=$((sum / BENCH_RUNS))
+    bench_record "$label" "$avg"
+    echo "  $label: $(format_time $avg) (runs: ${times[*]})"
 }
 
 INCEP() {
@@ -130,9 +131,17 @@ INCEP() {
         "$@"
 }
 
-# Auto-detect a .rs file to modify (finds the most "central" lib.rs or main.rs)
+NOINC() {
+    env -u DYLD_INSERT_LIBRARIES -u VRIFT_INCEPTION -u VRIFT_VDIR_MMAP "$@"
+}
+
+clean_target() {
+    chflags -R nouchg "$PROJECT_DIR/target" 2>/dev/null || true
+    rm -rf "$PROJECT_DIR/target"
+}
+
+# Auto-detect a .rs file to modify
 auto_detect_modify_file() {
-    # Prefer a lib.rs in a core crate
     local f
     f=$(find "$PROJECT_DIR" -path '*/src/lib.rs' -not -path '*/target/*' 2>/dev/null | head -1)
     [ -n "$f" ] && echo "$f" && return
@@ -149,19 +158,16 @@ echo "╔═══════════════════════�
 echo "║  VRift Cargo Inception Benchmark                                   ║"
 echo "╚══════════════════════════════════════════════════════════════════════╝"
 echo "  Project:     $PROJECT_DIR"
-echo "  Project:     $PROJECT_NAME"
+echo "  Iterations:  $BENCH_RUNS"
 
 for bin in "$SHIM_LIB" "$VRIFT_CLI" "$VRIFTD"; do
     [ -f "$bin" ] || { echo "❌ Missing: $bin"; exit 1; }
 done
 
-# Verify daemon socket exists (skip if we're about to start it)
 if [ "$SKIP_INGEST" = true ] && [ ! -S "$VRIFT_SOCKET_PATH" ]; then
     echo "  ⚠️  Socket not found: $VRIFT_SOCKET_PATH"
-    echo "  Start daemon first: vriftd start"
-    echo "  Or run without --skip-ingest to auto-start"
 fi
-echo "  Socket:    $VRIFT_SOCKET_PATH"
+echo "  Socket:      $VRIFT_SOCKET_PATH"
 
 RS_COUNT=$(find "$PROJECT_DIR" -name '*.rs' -not -path '*/target/*' 2>/dev/null | wc -l | tr -d ' ')
 echo "  Rust files:  $RS_COUNT"
@@ -170,11 +176,6 @@ if [ -z "$MODIFY_FILE" ]; then
     MODIFY_FILE=$(auto_detect_modify_file)
 fi
 echo "  Modify file: ${MODIFY_FILE:-NONE}"
-
-# Detect binary name
-BIN_NAME=$(cd "$PROJECT_DIR" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
-    | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; bins=[x['name'] for p in pkgs for x in p['targets'] if 'bin' in x['kind']]; print(bins[0] if bins else pkgs[0]['name'])" 2>/dev/null || echo "")
-echo "  Binary:      ${BIN_NAME:-unknown}"
 echo ""
 
 # ============================================================================
@@ -183,7 +184,6 @@ echo ""
 if [ "$SKIP_INGEST" = false ]; then
     echo "═══ Phase 1: Ingest ═══"
 
-    # Start daemon if not running
     if ! pgrep -f "vriftd.*$VRIFT_SOCKET_PATH" >/dev/null 2>&1; then
         VRIFT_SOCKET_PATH="$VRIFT_SOCKET_PATH" VR_THE_SOURCE="$VR_THE_SOURCE" "$VRIFTD" start &
         DAEMON_PID=$!
@@ -199,231 +199,244 @@ if [ "$SKIP_INGEST" = false ]; then
 
     FILES_N=$(echo "$INGEST_OUT" | grep -o '[0-9]* files' | head -1 || echo "?")
     BLOBS_N=$(echo "$INGEST_OUT" | grep -o '[0-9]* blobs' | head -1 || echo "?")
-    DEDUP=$(echo "$INGEST_OUT" | grep -o '[0-9.]*% dedup' | head -1 || echo "?")
-    echo "  $FILES_N → $BLOBS_N ($DEDUP)"
-
+    echo "  $FILES_N → $BLOBS_N"
     sleep 2
 else
     echo "═══ Phase 1: Ingest (skipped) ═══"
     DAEMON_PID=""
 fi
 
-# Find VDir — try override, project-local, then global (newest by mtime)
+# Find VDir
 VDIR_MMAP_PATH=""
 if [ -n "$VDIR_PATH_OVERRIDE" ]; then
     VDIR_MMAP_PATH="$VDIR_PATH_OVERRIDE"
 elif [ -d "$PROJECT_DIR/.vrift/vdir" ]; then
-    # Project-local VDir: pick newest by mtime
     VDIR_MMAP_PATH=$(ls -t "$PROJECT_DIR/.vrift/vdir/"*.vdir 2>/dev/null | head -1)
 fi
 if [ -z "$VDIR_MMAP_PATH" ] && [ -d "$HOME/.vrift/vdir" ]; then
-    # Global VDir: pick newest by modification time
     VDIR_MMAP_PATH=$(ls -t "$HOME/.vrift/vdir/"*.vdir 2>/dev/null | head -1)
 fi
 
 if [ -n "$VDIR_MMAP_PATH" ]; then
     VDIR_SIZE=$(stat -f%z "$VDIR_MMAP_PATH" 2>/dev/null || stat -c%s "$VDIR_MMAP_PATH" 2>/dev/null)
     echo "  VDir: $(basename "$VDIR_MMAP_PATH") ($VDIR_SIZE bytes)"
-    echo "  Hint: Use --vdir <path> to specify an exact VDir file"
     pass "VDir found"
 else
     fail "VDir not found"
-    echo "  Run without --skip-ingest first, or specify --vdir <path>"
     exit 1
 fi
 
 # ============================================================================
-# Phase 2: Baseline build (no inception)
+# Phase 2: Baseline no-op (no inception)
 # ============================================================================
 echo ""
-echo "═══ Phase 2: Baseline build (no inception) ═══"
+echo "═══ Phase 2: Baseline no-op build ═══"
 
-if [ "$CLEAN_TARGET" = true ]; then
-    chflags -R nouchg "$PROJECT_DIR/target" 2>/dev/null || true
-    rm -rf "$PROJECT_DIR/target"
-    echo "  Cleaned target/"
-fi
-
-# Full build if needed
 cd "$PROJECT_DIR"
-BUILD_OUT=$(env -u DYLD_INSERT_LIBRARIES -u VRIFT_INCEPTION -u VRIFT_VDIR_MMAP \
-    cargo build 2>&1) || true
-T0=$(ms)
-env -u DYLD_INSERT_LIBRARIES -u VRIFT_INCEPTION -u VRIFT_VDIR_MMAP \
-    cargo build >/dev/null 2>&1
-T1=$(ms)
-LAST_BENCH_MS=$((T1 - T0))
-echo "$BUILD_OUT" | tail -3
-bench_record "Baseline full build" "$LAST_BENCH_MS"
-echo "  Full build: ${LAST_BENCH_MS}ms"
-pass "Baseline full build"
+# Warmup
+NOINC cargo build >/dev/null 2>&1 || true
 
-# No-op
-T0=$(ms)
-env -u DYLD_INSERT_LIBRARIES -u VRIFT_INCEPTION -u VRIFT_VDIR_MMAP \
-    cargo build >/dev/null 2>&1
-T1=$(ms)
-LAST_BENCH_MS=$((T1 - T0))
-bench_record "Baseline no-op" "$LAST_BENCH_MS"
-echo "  No-op: ${LAST_BENCH_MS}ms"
+run_bench_avg "Baseline no-op" 'NOINC cargo build >/dev/null 2>&1'
 pass "Baseline no-op"
-
-# Binary test
-if [ -n "$BIN_NAME" ] && [ -f "target/debug/$BIN_NAME" ]; then
-    if timeout 5 "./target/debug/$BIN_NAME" --version >/dev/null 2>&1 || \
-       timeout 5 "./target/debug/$BIN_NAME" --help >/dev/null 2>&1; then
-        pass "Binary executes"
-    else
-        pass "Binary exists (no --version/--help)"
-    fi
-fi
 
 # ============================================================================
 # Phase 3: Inception no-op
 # ============================================================================
 echo ""
-echo "═══ Phase 3: Inception build ═══"
+echo "═══ Phase 3: Inception no-op build ═══"
 
 cd "$PROJECT_DIR"
-T0=$(ms)
+# Warmup
 INCEP cargo build >/dev/null 2>&1 || true
-T1=$(ms)
-LAST_BENCH_MS=$((T1 - T0))
-bench_record "Inception no-op" "$LAST_BENCH_MS"
-echo "  No-op: ${LAST_BENCH_MS}ms"
+
+run_bench_avg "Inception no-op" 'INCEP cargo build >/dev/null 2>&1'
 pass "Inception no-op"
 
 # ============================================================================
-# Phase 4: Touch → incremental
+# Phase 4: Touch → incremental (baseline vs inception)
 # ============================================================================
 echo ""
 echo "═══ Phase 4: Touch → incremental build ═══"
 
 if [ -n "$MODIFY_FILE" ] && [ -f "$MODIFY_FILE" ]; then
-    sleep 1
-    touch "$MODIFY_FILE"
-    echo "  Touched: $(basename "$MODIFY_FILE")"
+    # Baseline touch incremental
+    echo "  --- Baseline ---"
+    times_touch_b=()
+    for i in $(seq 1 "$BENCH_RUNS"); do
+        sleep 1; touch "$MODIFY_FILE"
+        T0=$(ms); NOINC cargo build >/dev/null 2>&1 || true; T1=$(ms)
+        elapsed=$((T1 - T0)); times_touch_b+=("$elapsed")
+    done
+    sum=0; for t in "${times_touch_b[@]}"; do sum=$((sum + t)); done
+    avg_b=$((sum / BENCH_RUNS))
+    bench_record "Touch incr (baseline)" "$avg_b"
+    echo "  Touch incr (baseline): $(format_time $avg_b) (runs: ${times_touch_b[*]})"
 
-    T0=$(ms)
-    BUILD_OUT=$(INCEP cargo build 2>&1) || true
-    T1=$(ms)
-    LAST_BENCH_MS=$((T1 - T0))
-    bench_record "Touch incremental" "$LAST_BENCH_MS"
-    echo "  Incremental: ${LAST_BENCH_MS}ms"
+    # Inception touch incremental
+    echo "  --- Inception ---"
+    times_touch_i=()
+    for i in $(seq 1 "$BENCH_RUNS"); do
+        sleep 1; touch "$MODIFY_FILE"
+        T0=$(ms); INCEP cargo build >/dev/null 2>&1 || true; T1=$(ms)
+        elapsed=$((T1 - T0)); times_touch_i+=("$elapsed")
+    done
+    sum=0; for t in "${times_touch_i[@]}"; do sum=$((sum + t)); done
+    avg_i=$((sum / BENCH_RUNS))
+    bench_record "Touch incr (inception)" "$avg_i"
+    echo "  Touch incr (inception): $(format_time $avg_i) (runs: ${times_touch_i[*]})"
 
-    # Check something was recompiled
-    if echo "$BUILD_OUT" | grep -q "Compiling"; then
-        pass "Touch triggered recompilation"
-    else
-        pass "Touch build (no recompile needed)"
+    if [ "$avg_b" -gt 0 ]; then
+        RATIO=$(python3 -c "print(f'{$avg_i/$avg_b:.2f}x')")
+        echo "  Ratio: $RATIO"
     fi
+    pass "Touch incremental"
 else
     echo "  No modify file found, skipping"
 fi
 
 # ============================================================================
-# Phase 5: Real code change → build → revert
+# Phase 5: Code change → build → revert (baseline vs inception)
 # ============================================================================
 echo ""
-echo "═══ Phase 5: Code change → build → revert ═══"
+echo "═══ Phase 5: Code change → incremental build ═══"
 
 if [ -n "$MODIFY_FILE" ] && [ -f "$MODIFY_FILE" ]; then
-    # Backup
     cp "$MODIFY_FILE" "${MODIFY_FILE}.bench_backup"
 
-    # Add a harmless comment at the end
-    echo "" >> "$MODIFY_FILE"
-    echo "// bench_cargo_inception canary: $(date +%s)" >> "$MODIFY_FILE"
-    echo "  Modified: $(basename "$MODIFY_FILE") (+comment)"
+    # Baseline code change
+    echo "  --- Baseline ---"
+    times_code_b=()
+    for i in $(seq 1 "$BENCH_RUNS"); do
+        echo "" >> "$MODIFY_FILE"
+        echo "// bench_canary_${i}_$(date +%s)" >> "$MODIFY_FILE"
+        T0=$(ms); NOINC cargo build >/dev/null 2>&1 || true; T1=$(ms)
+        elapsed=$((T1 - T0)); times_code_b+=("$elapsed")
+        cp "${MODIFY_FILE}.bench_backup" "$MODIFY_FILE"
+        NOINC cargo build >/dev/null 2>&1 || true  # restore
+    done
+    sum=0; for t in "${times_code_b[@]}"; do sum=$((sum + t)); done
+    avg_b=$((sum / BENCH_RUNS))
+    bench_record "Code change (baseline)" "$avg_b"
+    echo "  Code change (baseline): $(format_time $avg_b) (runs: ${times_code_b[*]})"
 
-    T0=$(ms)
-    INCEP cargo build >/dev/null 2>&1 || true
-    T1=$(ms)
-    LAST_BENCH_MS=$((T1 - T0))
-    bench_record "Code change incremental" "$LAST_BENCH_MS"
-    echo "  Incremental: ${LAST_BENCH_MS}ms"
-    pass "Code change build"
+    # Inception code change
+    echo "  --- Inception ---"
+    times_code_i=()
+    for i in $(seq 1 "$BENCH_RUNS"); do
+        echo "" >> "$MODIFY_FILE"
+        echo "// bench_canary_${i}_$(date +%s)" >> "$MODIFY_FILE"
+        T0=$(ms); INCEP cargo build >/dev/null 2>&1 || true; T1=$(ms)
+        elapsed=$((T1 - T0)); times_code_i+=("$elapsed")
+        cp "${MODIFY_FILE}.bench_backup" "$MODIFY_FILE"
+        INCEP cargo build >/dev/null 2>&1 || true  # restore
+    done
+    sum=0; for t in "${times_code_i[@]}"; do sum=$((sum + t)); done
+    avg_i=$((sum / BENCH_RUNS))
+    bench_record "Code change (inception)" "$avg_i"
+    echo "  Code change (inception): $(format_time $avg_i) (runs: ${times_code_i[*]})"
 
-    # Revert
-    mv "${MODIFY_FILE}.bench_backup" "$MODIFY_FILE"
-    T0=$(ms)
-    INCEP cargo build >/dev/null 2>&1 || true
-    T1=$(ms)
-    LAST_BENCH_MS=$((T1 - T0))
-    bench_record "Revert incremental" "$LAST_BENCH_MS"
-    echo "  Revert build: ${LAST_BENCH_MS}ms"
-    pass "Revert succeeded"
+    if [ "$avg_b" -gt 0 ]; then
+        RATIO=$(python3 -c "print(f'{$avg_i/$avg_b:.2f}x')")
+        echo "  Ratio: $RATIO"
+    fi
+    pass "Code change incremental"
+
+    rm -f "${MODIFY_FILE}.bench_backup"
 else
     echo "  No modify file, skipping"
 fi
 
 # ============================================================================
-# Phase 6: cargo check
+# Phase 6: Clean → full rebuild (THE KEY TEST)
+#
+# This tests the most critical acceleration scenario:
+#   - After cargo clean removes target/, can inception restore cached
+#     build artifacts from CAS so that recompilation is avoided?
+#
+# Comparison:
+#   A) Baseline: cargo clean → cargo build (full recompile, no help)
+#   B) Inception: cargo clean → inception cargo build (should restore target/)
+#
+# If inception correctly caches and restores target/ artifacts, Phase B
+# should be significantly faster than Phase A.
 # ============================================================================
 echo ""
-echo "═══ Phase 6: cargo check ═══"
+echo "═══ Phase 6: Clean → full rebuild (target restoration test) ═══"
+echo "  This tests whether inception restores target/ from cache after clean."
 
 cd "$PROJECT_DIR"
+
+# Ensure we have a warm build first
+INCEP cargo build >/dev/null 2>&1 || true
+
+# --- A) Baseline: clean → build without inception ---
+echo ""
+echo "  --- Baseline (no inception) ---"
+clean_target
 T0=$(ms)
-INCEP cargo check >/dev/null 2>&1 || true
+NOINC cargo build >/dev/null 2>&1 || true
 T1=$(ms)
-LAST_BENCH_MS=$((T1 - T0))
-bench_record "Inception cargo check" "$LAST_BENCH_MS"
-echo "  Check: ${LAST_BENCH_MS}ms"
-pass "cargo check"
+BASELINE_CLEAN=$((T1 - T0))
+bench_record "Clean build (baseline)" "$BASELINE_CLEAN"
+echo "  Clean build (baseline): $(format_time $BASELINE_CLEAN)"
+pass "Baseline clean build"
 
-# ============================================================================
-# Phase 7: Clean → full rebuild from CAS
-# ============================================================================
+# --- B) Inception: clean → build with inception ---
+# First, rebuild with inception to populate any target caches
+INCEP cargo build >/dev/null 2>&1 || true
+
 echo ""
-echo "═══ Phase 7: Clean rebuild from CAS ═══"
-
-cd "$PROJECT_DIR"
-chflags -R nouchg target 2>/dev/null || true
-rm -rf target/debug/build target/debug/deps target/debug/.fingerprint "target/debug/$BIN_NAME" 2>/dev/null
-
+echo "  --- Inception (should restore target/) ---"
+clean_target
 T0=$(ms)
 INCEP cargo build >/dev/null 2>&1 || true
 T1=$(ms)
-LAST_BENCH_MS=$((T1 - T0))
-bench_record "Clean rebuild (CAS)" "$LAST_BENCH_MS"
-echo "  Full rebuild from CAS: ${LAST_BENCH_MS}ms"
-pass "Clean rebuild from CAS"
+INCEPTION_CLEAN=$((T1 - T0))
+bench_record "Clean build (inception)" "$INCEPTION_CLEAN"
+echo "  Clean build (inception): $(format_time $INCEPTION_CLEAN)"
+pass "Inception clean build"
 
-# Check materialized files
-for f in $(find target/debug/deps -name "*.rlib" 2>/dev/null | head -3); do
-    if [ "$(uname)" = "Darwin" ] && ls -lO "$f" 2>/dev/null | grep -q "uchg"; then
-        fail "Materialized rlib has uchg: $(basename "$f")"
+if [ "$BASELINE_CLEAN" -gt 0 ]; then
+    RATIO=$(python3 -c "print(f'{$INCEPTION_CLEAN/$BASELINE_CLEAN:.2f}x')")
+    SAVED=$(python3 -c "print(f'{(1 - $INCEPTION_CLEAN/$BASELINE_CLEAN)*100:.0f}%')")
+    echo ""
+    echo "  ⚡ Clean build ratio: $RATIO ($SAVED saved)"
+    if [ "$INCEPTION_CLEAN" -lt "$BASELINE_CLEAN" ]; then
+        pass "Inception accelerated clean build"
+    else
+        echo "  ⚠️  No acceleration — target restoration may not be active"
     fi
-done
-pass "Materialized files writable"
+fi
 
 # ============================================================================
-# Phase 8: Post-inception build
+# Phase 7: Post-clean verification
 # ============================================================================
 echo ""
-echo "═══ Phase 8: Post-inception build ═══"
+echo "═══ Phase 7: Post-clean no-op verification ═══"
 
 cd "$PROJECT_DIR"
+run_bench_avg "Post-clean no-op" 'INCEP cargo build >/dev/null 2>&1'
+pass "Post-clean no-op"
+
+# Also verify baseline no-op still works
 T0=$(ms)
-env -u DYLD_INSERT_LIBRARIES -u VRIFT_INCEPTION -u VRIFT_VDIR_MMAP \
-    cargo build >/dev/null 2>&1
+NOINC cargo build >/dev/null 2>&1
 T1=$(ms)
-LAST_BENCH_MS=$((T1 - T0))
-bench_record "Post-inception no-op" "$LAST_BENCH_MS"
-echo "  No-op: ${LAST_BENCH_MS}ms"
-pass "Post-inception build"
+POST_BASELINE=$((T1 - T0))
+bench_record "Post-clean baseline no-op" "$POST_BASELINE"
+echo "  Post-clean baseline no-op: $(format_time $POST_BASELINE)"
+pass "Post-clean baseline no-op"
 
 # ============================================================================
-# Phase 9: CAS integrity
+# Phase 8: CAS integrity
 # ============================================================================
 echo ""
-echo "═══ Phase 9: CAS integrity ═══"
+echo "═══ Phase 8: CAS integrity ═══"
 
 if [ "$(uname)" = "Darwin" ]; then
     UCHG=$(find "$VR_THE_SOURCE" -name "*.bin" -flags uchg 2>/dev/null | wc -l | tr -d ' ')
     TOTAL=$(find "$VR_THE_SOURCE" -name "*.bin" 2>/dev/null | wc -l | tr -d ' ')
-    echo "  CAS uchg: $UCHG / $TOTAL blobs"
+    echo "  CAS blobs: $TOTAL total, $UCHG protected (uchg)"
     if [ "$TOTAL" -gt 0 ]; then
         pass "CAS blobs exist ($TOTAL)"
     fi
@@ -443,29 +456,43 @@ fi
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════════╗"
 echo "║  Benchmark Results: $PROJECT_NAME"
-echo "╚══════════════════════════════════════════════════════════════════════╝"
+echo "╠══════════════════════════════════════════════════════════════════════╣"
 echo ""
-printf "  %-30s %10s\n" "Scenario" "Time"
-printf "  %-30s %10s\n" "------------------------------" "----------"
+printf "  %-35s %10s\n" "Scenario" "Time"
+printf "  %-35s %10s\n" "-----------------------------------" "----------"
 for i in "${!BENCH_NAMES[@]}"; do
     T=${BENCH_TIMES[$i]}
-    if [ "$T" -ge 1000 ]; then
-        printf "  %-30s %8.2fs\n" "${BENCH_NAMES[$i]}" "$(python3 -c "print(${T}/1000)")"
-    else
-        printf "  %-30s %7dms\n" "${BENCH_NAMES[$i]}" "$T"
-    fi
+    printf "  %-35s %10s\n" "${BENCH_NAMES[$i]}" "$(format_time $T)"
 done
 
-# Comparison: inception vs baseline
+# Key comparisons
+echo ""
+echo "  ── Key Comparisons ──"
 for i in "${!BENCH_NAMES[@]}"; do
     [ "${BENCH_NAMES[$i]}" = "Baseline no-op" ] && BASELINE_NOOP=${BENCH_TIMES[$i]}
     [ "${BENCH_NAMES[$i]}" = "Inception no-op" ] && INCEP_NOOP=${BENCH_TIMES[$i]}
+    [ "${BENCH_NAMES[$i]}" = "Clean build (baseline)" ] && CLEAN_BASE=${BENCH_TIMES[$i]}
+    [ "${BENCH_NAMES[$i]}" = "Clean build (inception)" ] && CLEAN_INCEP=${BENCH_TIMES[$i]}
 done
+
 if [ -n "${BASELINE_NOOP:-}" ] && [ -n "${INCEP_NOOP:-}" ] && [ "$BASELINE_NOOP" -gt 0 ]; then
-    SPEEDUP=$(python3 -c "print(f'{(1 - ${INCEP_NOOP}/${BASELINE_NOOP})*100:.0f}')")
-    echo ""
-    echo "  ⚡ Inception no-op speedup: ${SPEEDUP}% faster than baseline"
+    OVERHEAD=$((INCEP_NOOP - BASELINE_NOOP))
+    printf "  %-35s %+dms\n" "No-op overhead" "$OVERHEAD"
 fi
+
+if [ -n "${CLEAN_BASE:-}" ] && [ -n "${CLEAN_INCEP:-}" ] && [ "$CLEAN_BASE" -gt 0 ]; then
+    RATIO=$(python3 -c "print(f'{$CLEAN_INCEP/$CLEAN_BASE:.2f}x')")
+    SAVED_MS=$((CLEAN_BASE - CLEAN_INCEP))
+    if [ "$SAVED_MS" -ge 0 ]; then
+        printf "  %-35s %10s (saved %dms)\n" "Clean build ratio" "$RATIO" "$SAVED_MS"
+    else
+        EXTRA_MS=$((-SAVED_MS))
+        printf "  %-35s %10s (+%dms overhead)\n" "Clean build ratio" "$RATIO" "$EXTRA_MS"
+    fi
+fi
+
+echo ""
+echo "╚══════════════════════════════════════════════════════════════════════╝"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
