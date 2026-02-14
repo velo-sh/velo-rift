@@ -1051,6 +1051,8 @@ async fn handle_request(
                             let rel = canon_src.strip_prefix(&canon_root).unwrap_or(&canon_src);
                             let key = if prefix_str.is_empty() || prefix_str == "/" {
                                 format!("/{}", rel.display())
+                            } else if prefix_str.starts_with('/') {
+                                format!("{}/{}", prefix_str.trim_end_matches('/'), rel.display())
                             } else {
                                 format!("/{}/{}", prefix_str.trim_end_matches('/'), rel.display())
                             };

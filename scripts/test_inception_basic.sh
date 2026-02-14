@@ -50,17 +50,27 @@ echo "Ingesting source..."
 export VR_THE_SOURCE="$TEST_DIR/cas"
 # Use --prefix "/vrift" to match the shim's VFS prefix
 # Standardize: ingest to .vrift/manifest.lmdb instead of custom file
-mkdir -p "$TEST_DIR/source/.vrift"
-"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "/vrift" > "$TEST_DIR/ingest.log" 2>&1
-echo "Manifest Content:"
-"$VELO_BIN" status --manifest "$TEST_DIR/source/.vrift/manifest.lmdb"
+# Ensure no stale daemon is running
+pkill -f vriftd || true
+rm -f /tmp/vrift.sock
 
-# 3. Start daemon
+# 3. Start daemon first
 echo "Starting daemon..."
 export VR_THE_SOURCE="$TEST_DIR/cas"
 export RUST_LOG=info
 "$VRIFTD_BIN" start > "$TEST_DIR/daemon.log" 2>&1 &
+VRIFTD_PID=$!
 sleep 2
+
+# 2. Ingest source (connects to the already running daemon)
+echo "Ingesting source..."
+export VRIFT_SOCKET_PATH="/tmp/vrift.sock"
+"$VELO_BIN" ingest "$TEST_DIR/source" --prefix "/vrift" > "$TEST_DIR/ingest.log" 2>&1
+"$VELO_BIN" status --manifest "$TEST_DIR/source/.vrift/manifest.lmdb"
+echo "CAS Physical Content:"
+find "$TEST_DIR/cas" -type f
+echo "VDir Physical Content (mmap Check):"
+ls -lh "$HOME/.vrift/vdir" || true
 
 # 4. Compile C test
 cat > "$TEST_DIR/test.c" << 'CEOF'

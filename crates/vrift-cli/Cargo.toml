@@ -40,6 +40,7 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 indicatif = { version = "0.17", features = ["rayon"] }
 console = "0.15"
+filetime = "0.2"
 
 [features]
 default = []
@@ -48,5 +49,4 @@ fuse = ["vrift-fuse/fuse"]
 [dev-dependencies]
 tempfile = "3.14"
 toml = "0.8"
-filetime = "0.2"
 vrift-config = { path = "../vrift-config" }

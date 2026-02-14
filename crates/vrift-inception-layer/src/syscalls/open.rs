@@ -69,6 +69,24 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
                 let blob_path =
                     format_blob_path_fixed(&state.cas_root, &vdir_entry.cas_hash, vdir_entry.size);
 
+                inception_log!(
+                    "open VFS hit: vpath='{}' blob='{}' cas_root='{}'",
+                    vpath.manifest_key,
+                    blob_path.as_str(),
+                    state.cas_root.as_str()
+                );
+
+                unsafe {
+                    let msg = "INCEPTION DEBUG [open_impl]: state.cas_root is: ";
+                    libc::write(2, msg.as_ptr() as *const _, msg.len());
+                    libc::write(
+                        2,
+                        state.cas_root.as_str().as_ptr() as *const _,
+                        state.cas_root.len(),
+                    );
+                    libc::write(2, "\n".as_ptr() as *const _, 1);
+                }
+
                 // BUG-016: Fast Dirty Check (Stat on hit)
                 // We check if a physical file exists and is newer than the VDir entry.
                 let mut is_stale = false;
@@ -135,6 +153,7 @@ pub(crate) unsafe fn open_impl(path: *const c_char, flags: c_int, mode: mode_t) 
     // VDir miss path: try raw_open first, IPC only if file doesn't exist
     // =========================================================================
     profile_count!(vdir_misses);
+    inception_log!("open VDir MISS: manifest_key='{}'", vpath.manifest_key);
 
     // Fast path: if the file exists physically, open it directly — no IPC needed.
     // Track it as a VFS file for consistency (dirty tracking, fd management).
@@ -449,6 +468,12 @@ unsafe fn open_cas_read(
     file_mode: u32,
     mtime: u64,
 ) -> Option<c_int> {
+    unsafe {
+        let msg1 = "INCEPTION DEBUG: Opening blob path: ";
+        libc::write(2, msg1.as_ptr() as *const _, msg1.len());
+        libc::write(2, blob_path.as_ptr() as *const _, blob_path.len());
+        libc::write(2, "\n".as_ptr() as *const _, 1);
+    }
     let blob_cpath = std::ffi::CString::new(blob_path).ok()?;
     let fd = unsafe { libc::open(blob_cpath.as_ptr(), flags, mode as libc::c_uint) };
     if fd >= 0 {

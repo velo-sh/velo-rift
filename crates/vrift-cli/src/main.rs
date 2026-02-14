@@ -26,6 +26,7 @@ mod preflight;
 pub mod registry;
 #[allow(dead_code)]
 mod security_filter;
+mod target_cache;
 
 use vrift_cas::CasStore;
 use vrift_manifest::lmdb::LmdbManifest;
@@ -251,6 +252,27 @@ enum Commands {
         #[command(subcommand)]
         command: DebugCommands,
     },
+
+    /// Snapshot target/ artifacts into CAS for instant restore
+    ///
+    /// After a successful `cargo build`, run this to cache all fingerprints
+    /// and compiled artifacts. Next time, use `restore-target` to skip building.
+    SnapshotTarget {
+        /// Project directory (default: current directory)
+        #[arg(value_name = "DIR")]
+        directory: Option<PathBuf>,
+    },
+
+    /// Restore target/ artifacts from CAS (instant build)
+    ///
+    /// If the source tree hasn't changed since the last snapshot,
+    /// restores all fingerprints and artifacts via zero-copy hard links.
+    /// Cargo will see matching fingerprints and skip all compilation.
+    RestoreTarget {
+        /// Project directory (default: current directory)
+        #[arg(value_name = "DIR")]
+        directory: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -372,7 +394,7 @@ fn main() -> Result<()> {
         .map(|p| vrift_manifest::normalize_path(&p.to_string_lossy()));
     let cas_root = cli_cas_root_override
         .clone()
-        .unwrap_or_else(|| vrift_manifest::normalize_path(vrift_config::DEFAULT_CAS_ROOT));
+        .unwrap_or_else(|| vrift_config::config().cas_root().to_path_buf());
 
     // Isolation check MUST happen before Tokio runtime starts (single-threaded requirement)
     if let Some(Commands::Run {
@@ -588,6 +610,69 @@ async fn async_main(
         Commands::Debug { command } => match command {
             DebugCommands::Vdir { file, directory } => cmd_debug_vdir(file, directory),
         },
+        Commands::SnapshotTarget { directory } => {
+            let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
+            let dir = dir.canonicalize().unwrap_or(dir);
+            let cas = CasStore::new(&cas_root)
+                .map_err(|e| anyhow::anyhow!("Failed to open CAS: {}", e))?;
+
+            eprintln!();
+            eprintln!("╔════════════════════════════════════════╗");
+            eprintln!("║  📸 Snapshot Target                    ║");
+            eprintln!("╚════════════════════════════════════════╝");
+            eprintln!();
+
+            match target_cache::snapshot_target(&dir, &cas) {
+                Ok((count, size, elapsed)) => {
+                    let project_id = vrift_config::path::compute_project_id(&dir);
+                    eprintln!();
+                    eprintln!("  ✅ Snapshot complete!");
+                    eprintln!("  📁 {} crates cached", count);
+                    eprintln!("  💾 {:.1}MB total", size as f64 / 1_048_576.0);
+                    eprintln!("  🆔 Project: {}", project_id);
+                    eprintln!("  ⚡ {:.2}s", elapsed.as_secs_f64());
+                    eprintln!();
+                    eprintln!("  Next: cargo clean && vrift restore-target");
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        }
+        Commands::RestoreTarget { directory } => {
+            let dir = directory.unwrap_or_else(|| std::env::current_dir().unwrap());
+            let dir = dir.canonicalize().unwrap_or(dir);
+            let cas = CasStore::new(&cas_root)
+                .map_err(|e| anyhow::anyhow!("Failed to open CAS: {}", e))?;
+
+            eprintln!();
+            eprintln!("╔════════════════════════════════════════╗");
+            eprintln!("║  ⚡ Restore Target                     ║");
+            eprintln!("╚════════════════════════════════════════╝");
+            eprintln!();
+
+            match target_cache::restore_target(&dir, &cas) {
+                Ok((count, size, elapsed)) => {
+                    let project_id = vrift_config::path::compute_project_id(&dir);
+                    eprintln!();
+                    eprintln!("  ✅ Restore complete!");
+                    eprintln!("  📁 {} crates restored", count);
+                    eprintln!("  💾 {:.1}MB total", size as f64 / 1_048_576.0);
+                    eprintln!("  🆔 Project: {}", project_id);
+                    eprintln!("  ⚡ {:.3}s", elapsed.as_secs_f64());
+                    eprintln!();
+                    eprintln!("  Now run: cargo build  (should be instant!)");
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("  ❌ {}", e);
+                    eprintln!();
+                    eprintln!(
+                        "  Hint: Run 'vrift snapshot-target' after a successful build first."
+                    );
+                    Err(e)
+                }
+            }
+        }
     }
 }
 

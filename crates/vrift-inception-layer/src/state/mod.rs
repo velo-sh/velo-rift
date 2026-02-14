@@ -347,6 +347,7 @@ impl DirtyTracker {
             }
 
             if current == hash {
+                inception_log!("DIRTY DEBUG: Match found for hash in slot {}", slot);
                 return true; // Found - is dirty
             }
 
@@ -854,6 +855,12 @@ pub(crate) fn vdir_lookup(
     let path_hash = vrift_ipc::fnv1a_hash(path);
     let start_slot = (path_hash as usize) % table_capacity;
 
+    inception_log!(
+        "VDIR DEBUG: Looking for hash: {} at start_slot: {}",
+        path_hash,
+        start_slot
+    );
+
     // Seqlock read: try twice then accept stale
     for _ in 0..2 {
         let g1 = gen_ptr.load(Ordering::Acquire);
@@ -904,6 +911,9 @@ fn vdir_probe(
         let entry = unsafe { &*(mmap_ptr.add(entry_offset) as *const VDirEntry) };
 
         if entry.path_hash == 0 {
+            if i == 0 {
+                inception_log!("VDIR DEBUG: Initial slot is empty");
+            }
             break; // Empty slot = not found
         }
 

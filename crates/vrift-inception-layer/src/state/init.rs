@@ -184,6 +184,13 @@ impl InceptionLayerState {
             cas_root.set(&raw_path);
         }
 
+        unsafe {
+            let msg = "INCEPTION DEBUG [init]: cas_root set to: ";
+            libc::write(2, msg.as_ptr() as *const _, msg.len());
+            libc::write(2, cas_root.as_str().as_ptr() as *const _, cas_root.len());
+            libc::write(2, "\n".as_ptr() as *const _, 1);
+        }
+
         let mut vfs_prefix = FixedString::<256>::new();
         let prefix_ptr = unsafe { libc::getenv(c"VRIFT_VFS_PREFIX".as_ptr()) };
         if !prefix_ptr.is_null() {
@@ -578,7 +585,6 @@ fn open_vdir_mmap(project_root: &str) -> (*const u8, usize) {
         return (ptr::null(), 0);
     }
 
-    // Phase 1.3: Validate VDirHeader magic
     use vrift_ipc::vdir_types::{VDIR_HEADER_SIZE, VDIR_MAGIC};
     if size < VDIR_HEADER_SIZE {
         unsafe { libc::munmap(ptr, size) };
